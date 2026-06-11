@@ -1,0 +1,96 @@
+.context-card {
+  --card-color-surface: var(--card-light-color-surface);
+  --card-color-text-primary: var(--card-light-color-text-primary);
+  --card-color-text-secondary: var(--card-light-color-text-secondary);
+  --card-color-border: var(--card-light-color-border);
+  --card-color-brand: var(--card-light-color-brand);
+  --card-color-platform: var(--card-light-color-platform);
+  --card-color-platform-background: var(--card-light-color-platform-background);
+
+  position: relative;
+  width: min(100%, var(--card-export-width));
+  overflow: hidden;
+  color: var(--card-color-text-primary);
+  background: var(--card-color-surface);
+  border: 1px solid var(--card-color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  transition:
+    color var(--duration-slow) ease,
+    background-color var(--duration-slow) ease,
+    border-color var(--duration-slow) ease,
+    box-shadow var(--duration-slow) ease;
+}
+
+.context-card[data-card-theme="dark"] {
+  --card-color-surface: var(--card-dark-color-surface);
+  --card-color-text-primary: var(--card-dark-color-text-primary);
+  --card-color-text-secondary: var(--card-dark-color-text-secondary);
+  --card-color-border: var(--card-dark-color-border);
+  --card-color-brand: var(--card-dark-color-brand);
+  --card-color-platform: var(--card-dark-color-platform);
+  --card-color-platform-background: var(--card-dark-color-platform-background);
+}
+
+.context-card__inner {
+  display: grid;
+  gap: var(--space-8);
+  padding: var(--space-10);
+}
+
+.context-card__source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.context-card__date {
+  color: var(--card-color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  transition: color var(--duration-slow) ease;
+}
+
+.context-card__quote {
+  margin: 0;
+  color: var(--card-color-text-primary);
+  font-family: var(--font-family-serif);
+  font-size: clamp(var(--font-size-xl), 4vw, var(--font-size-2xl));
+  line-height: var(--line-height-normal);
+  transition: color var(--duration-slow) ease;
+}
+
+.context-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--card-color-border);
+  transition: border-color var(--duration-slow) ease;
+}
+
+.context-card__author {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.context-card__author-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+}
+
+.context-card__author-handle {
+  color: var(--card-color-text-secondary);
+  font-size: var(--font-size-sm);
+  transition: color var(--duration-slow) ease;
+}
+
+.context-card__mark {
+  color: var(--card-color-brand);
+  font-family: var(--font-family-serif);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  transition: color var(--duration-slow) ease;
+}

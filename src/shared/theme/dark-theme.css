@@ -1,0 +1,37 @@
+[data-theme="dark"] {
+  --color-background: #1d1916;
+  --color-background-soft: #28211d;
+  --color-surface: #27211d;
+  --color-surface-raised: #302822;
+  --color-surface-muted: #211c18;
+
+  --color-text-primary: #f6f2eb;
+  --color-text-secondary: #c8c0b5;
+  --color-text-muted: #968b7d;
+  --color-text-inverse: #241f1a;
+
+  --color-border: rgb(255 255 255 / 8%);
+  --color-border-strong: rgb(255 255 255 / 16%);
+
+  --color-accent: #d2a082;
+  --color-accent-strong: #e6b89d;
+  --color-accent-soft: #4c3328;
+  --color-success: #80b79d;
+  --color-danger: #df8787;
+
+  --card-light-color-surface: #fffaf2;
+  --card-light-color-text-primary: #241f1a;
+  --card-light-color-text-secondary: #756f66;
+  --card-light-color-border: rgb(36 31 26 / 12%);
+  --card-light-color-brand: #744632;
+  --card-light-color-platform: #fffaf2;
+  --card-light-color-platform-background: #241f1a;
+
+  --card-dark-color-surface: #1f1a16;
+  --card-dark-color-text-primary: #f8f0e5;
+  --card-dark-color-text-secondary: #b9aa9a;
+  --card-dark-color-border: rgb(248 240 229 / 14%);
+  --card-dark-color-brand: #d8a17f;
+  --card-dark-color-platform: #1f1a16;
+  --card-dark-color-platform-background: #f8f0e5;
+}

@@ -1,0 +1,19 @@
+.social-platform-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: var(--card-color-platform);
+  background: var(--card-color-platform-background);
+  border-radius: 50%;
+  transition:
+    color var(--duration-slow) ease,
+    background-color var(--duration-slow) ease;
+}
+
+.social-platform-icon__svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}

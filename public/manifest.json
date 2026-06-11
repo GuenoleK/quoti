@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Quoti",
+  "description": "Transform social posts into elegant, shareable context cards.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Quoti"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
+  "permissions": ["activeTab", "clipboardWrite", "scripting", "tabs"]
+}

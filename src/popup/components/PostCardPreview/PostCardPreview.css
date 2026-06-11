@@ -1,0 +1,25 @@
+.post-card-preview {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.post-card-preview__frame {
+  padding: var(--space-3);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.post-card-preview__card {
+  width: 100%;
+  box-shadow: var(--shadow-sm);
+}
+
+.post-card-preview .context-card__inner {
+  gap: var(--space-6);
+  padding: var(--space-6);
+}
+
+.post-card-preview .context-card__quote {
+  font-size: var(--font-size-xl);
+}

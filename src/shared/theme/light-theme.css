@@ -1,0 +1,37 @@
+:root {
+  --color-background: #f7f2ea;
+  --color-background-soft: #efe4d8;
+  --color-surface: #fffaf2;
+  --color-surface-raised: #fffdf8;
+  --color-surface-muted: #f1e8dc;
+
+  --color-text-primary: #241f1a;
+  --color-text-secondary: #756f66;
+  --color-text-muted: #9b9185;
+  --color-text-inverse: #fffaf2;
+
+  --color-border: rgb(36 31 26 / 12%);
+  --color-border-strong: rgb(36 31 26 / 22%);
+
+  --color-accent: #9d6b53;
+  --color-accent-strong: #744632;
+  --color-accent-soft: #ead6ca;
+  --color-success: #35765b;
+  --color-danger: #9d3f3f;
+
+  --card-light-color-surface: #fffaf2;
+  --card-light-color-text-primary: #241f1a;
+  --card-light-color-text-secondary: #756f66;
+  --card-light-color-border: rgb(36 31 26 / 12%);
+  --card-light-color-brand: #744632;
+  --card-light-color-platform: #fffaf2;
+  --card-light-color-platform-background: #241f1a;
+
+  --card-dark-color-surface: #1f1a16;
+  --card-dark-color-text-primary: #f8f0e5;
+  --card-dark-color-text-secondary: #b9aa9a;
+  --card-dark-color-border: rgb(248 240 229 / 14%);
+  --card-dark-color-brand: #d8a17f;
+  --card-dark-color-platform: #1f1a16;
+  --card-dark-color-platform-background: #f8f0e5;
+}

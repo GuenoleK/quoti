@@ -1,0 +1,62 @@
+.popup {
+  display: grid;
+  width: var(--popup-width);
+  min-height: 520px;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--color-background);
+}
+
+.popup__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.popup__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.popup__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  color: var(--color-text-inverse);
+  background: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-family-serif);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.popup__title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  line-height: var(--line-height-tight);
+}
+
+.popup__subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.popup__content {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.popup__notice {
+  min-height: 20px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}

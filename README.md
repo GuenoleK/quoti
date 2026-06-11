@@ -13,23 +13,3 @@ Instead of posting isolated reactions across platforms, Quoti helps users preser
 Conversations are fragmented across X, Threads, Bluesky, LinkedIn and many other platforms.
 
 Quoti makes conversations portable.
-
-## MVP
-
-- Extract a social media post
-- Generate a beautiful context card
-- Export as PNG
-- Copy content to clipboard
-- Share anywhere
-
-## Tech Stack
-
-- React
-- TypeScript
-- Vite
-- CSS (BEM architecture)
-- Chrome Extensions Manifest V3
-
-## Status
-
-🚧 Early development

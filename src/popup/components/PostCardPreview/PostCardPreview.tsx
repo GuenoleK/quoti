@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CardContentMode, CardTheme, ExtractedPost } from "../../../shared/types/post.types";
 import { formatPublishedDate } from "../../../card-generator/card-generator";
 import { SocialPlatformIcon } from "../../../card-generator/SocialPlatformIcon";
@@ -20,11 +20,20 @@ type ImageSize = {
 type CardLayout = "portrait" | "square" | "wide";
 
 export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: PostCardPreviewProps) {
+  const isMountedRef = useRef(true);
   const [imageSize, setImageSize] = useState<ImageSize | null>(null);
   const image = contentMode === "with-media" ? post.media.find((media) => media.type === "image") : undefined;
   const cardLayout = useMemo(() => resolveCardLayout(post.content, imageSize, Boolean(image)), [image, imageSize, post.content]);
+  const previewImageUrl = useMemo(() => getPreviewImageUrl(image?.url), [image?.url]);
 
   useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
     setImageSize(null);
   }, [image?.url]);
 
@@ -51,10 +60,17 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
                 <img
                   className="context-card__image"
                   crossOrigin="anonymous"
+                  data-export-src={image.url}
+                  decoding="async"
+                  loading="eager"
                   referrerPolicy="no-referrer"
-                  src={image.url}
+                  src={previewImageUrl}
                   alt={image.alt ?? ""}
                   onLoad={(event) => {
+                    if (!isMountedRef.current) {
+                      return;
+                    }
+
                     setImageSize({
                       height: event.currentTarget.naturalHeight,
                       width: event.currentTarget.naturalWidth
@@ -103,4 +119,23 @@ function resolveCardLayout(content: string, imageSize: ImageSize | null, hasImag
   }
 
   return "portrait";
+}
+
+function getPreviewImageUrl(source: string | undefined): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(source);
+
+    if (url.hostname.endsWith("twimg.com") && url.pathname.includes("/media/")) {
+      url.searchParams.set("name", "small");
+      return url.toString();
+    }
+  } catch {
+    return source;
+  }
+
+  return source;
 }

@@ -133,7 +133,7 @@ async function inlineExportImages(node: HTMLElement): Promise<ImageSnapshot[]> {
 
   const snapshots = await Promise.all(
     images.map(async (image) => {
-      const source = image.currentSrc || image.src;
+      const source = image.dataset.exportSrc || image.currentSrc || image.src;
 
       if (!source || source.startsWith("data:") || source.startsWith("blob:")) {
         return null;

@@ -5,6 +5,7 @@
 }
 
 .post-card-preview__frame {
+  contain: layout paint;
   min-width: 0;
   padding: var(--space-3);
   background: var(--color-surface-muted);
@@ -13,6 +14,7 @@
 }
 
 .post-card-preview__card {
+  contain: layout paint;
   width: 100%;
   max-width: 100%;
   box-shadow: var(--shadow-sm);

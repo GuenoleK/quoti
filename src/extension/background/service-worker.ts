@@ -95,19 +95,9 @@ function isExtractedPost(value: unknown): value is ExtractedPost {
 async function openQuotiSurface(): Promise<void> {
   try {
     await chrome.action.openPopup();
-    return;
   } catch {
-    try {
-      await chrome.windows.create({
-        focused: true,
-        height: 760,
-        type: "popup",
-        url: chrome.runtime.getURL("popup.html"),
-        width: 440
-      });
-    } catch {
-      // Chrome can reject programmatic surfaces in some contexts; the post remains stored for the next manual popup open.
-    }
+    // Chrome can reject programmatic popup opening in some contexts.
+    // The post remains stored for the next manual extension open.
   }
 }
 

@@ -23,6 +23,7 @@ const unsupportedPageMessage = "Open x.com or twitter.com, hover a post, then op
 
 export function Popup() {
   const exportRef = useRef<HTMLDivElement>(null);
+  const isMountedRef = useRef(true);
   const [capture, setCapture] = useState<CaptureState>({
     post: null,
     status: "idle",
@@ -33,6 +34,12 @@ export function Popup() {
   const [contentMode, setContentMode] = useState<CardContentMode>("text-only");
   const [cardTheme, setCardTheme] = useState<CardTheme>("light");
   const [notice, setNotice] = useState<string>("");
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!actionFeedback) {
@@ -56,6 +63,10 @@ export function Popup() {
 
     try {
       const pendingPost = await readPendingPost();
+
+      if (!isMountedRef.current) {
+        return;
+      }
 
       if (pendingPost) {
         setCapture({
@@ -81,6 +92,10 @@ export function Popup() {
 
       const tab = await getActiveTab();
 
+      if (!isMountedRef.current) {
+        return;
+      }
+
       if (!tab.id || !isSupportedUrl(tab.url)) {
         setCapture({
           post: null,
@@ -91,6 +106,10 @@ export function Popup() {
       }
 
       const response = await sendTabMessage(tab.id);
+
+      if (!isMountedRef.current) {
+        return;
+      }
 
       if (response.status === "success") {
         setCapture({
@@ -117,6 +136,10 @@ export function Popup() {
         message: "Quoti could not read a post from this page."
       });
     } catch (error) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
       setCapture({
         post: null,
         status: "error",
@@ -136,12 +159,22 @@ export function Popup() {
 
     try {
       await action();
+      if (!isMountedRef.current) {
+        return;
+      }
+
       setActionFeedback({ action: actionName, status: "success" });
     } catch (error) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
       setActionFeedback({ action: actionName, status: "error" });
       setNotice(getActionErrorMessage(actionName, error));
     } finally {
-      setBusyAction(null);
+      if (isMountedRef.current) {
+        setBusyAction(null);
+      }
     }
   };
 

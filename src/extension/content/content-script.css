@@ -1,0 +1,49 @@
+.quoti-inline-button {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: auto !important;
+  max-width: max-content !important;
+  min-height: 20px;
+  margin-left: 6px;
+  padding: 0 7px;
+  flex: 0 0 auto !important;
+  align-self: center;
+  color: rgb(83 73 64);
+  background: rgb(255 250 242);
+  border: 1px solid rgb(83 73 64 / 18%);
+  border-radius: 999px;
+  cursor: pointer;
+  font: 600 11px/1 Inter, system-ui, sans-serif;
+  line-height: 1 !important;
+  opacity: 0;
+  pointer-events: none;
+  vertical-align: middle;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.quoti-inline-button--meta {
+  transform: translateY(-2px);
+}
+
+.quoti-inline-button--views {
+  transform: translateY(-1px);
+}
+
+article:hover .quoti-inline-button,
+.quoti-inline-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.quoti-inline-button:hover {
+  color: rgb(36 31 26);
+  background: rgb(247 242 234);
+  border-color: rgb(83 73 64 / 32%);
+  transform: translateY(-2px);
+}

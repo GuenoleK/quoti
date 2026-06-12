@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
-import type { CardTheme, ExtractedPost } from "../shared/types/post.types";
-import { copyBlobToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
+import type { CardContentMode, CardTheme, ExtractedPost } from "../shared/types/post.types";
+import { latestPostStorageKey } from "../shared/settings/quoti-settings";
+import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
-import { downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngBlob } from "../shared/utils/image-export.util";
+import { dataUrlToBlob, downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
 import { EmptyState } from "./components/EmptyState/EmptyState";
+import { CardContentToggle } from "./components/CardContentToggle/CardContentToggle";
 import { CardThemeToggle } from "./components/CardThemeToggle/CardThemeToggle";
 import { PostCardActions } from "./components/PostCardPreview/PostCardActions/PostCardActions";
 import { PostCardPreview } from "./components/PostCardPreview/PostCardPreview";
@@ -26,8 +29,22 @@ export function Popup() {
     message: "Looking for the visible post."
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ action: string; status: "success" | "error" } | null>(null);
+  const [contentMode, setContentMode] = useState<CardContentMode>("text-only");
   const [cardTheme, setCardTheme] = useState<CardTheme>("light");
   const [notice, setNotice] = useState<string>("");
+
+  useEffect(() => {
+    if (!actionFeedback) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setActionFeedback(null);
+    }, 1800);
+
+    return () => window.clearTimeout(timeout);
+  }, [actionFeedback]);
 
   const capturePost = useCallback(async () => {
     setCapture((current) => ({
@@ -38,12 +55,27 @@ export function Popup() {
     setNotice("");
 
     try {
-      if (!isChromeExtensionRuntime()) {
+      const pendingPost = await readPendingPost();
+
+      if (pendingPost) {
         setCapture({
-          post: createPreviewPost(),
+          post: pendingPost,
+          status: "ready",
+          message: "Post captured."
+        });
+        setContentMode(pendingPost.media.length > 0 ? "with-media" : "text-only");
+        return;
+      }
+
+      if (!isChromeExtensionRuntime()) {
+        const previewPost = createPreviewPost();
+
+        setCapture({
+          post: previewPost,
           status: "ready",
           message: "Preview post loaded."
         });
+        setContentMode(previewPost.media.length > 0 ? "with-media" : "text-only");
         return;
       }
 
@@ -66,6 +98,7 @@ export function Popup() {
           status: "ready",
           message: "Post captured."
         });
+        setContentMode(response.post.media.length > 0 ? "with-media" : "text-only");
         return;
       }
 
@@ -98,12 +131,15 @@ export function Popup() {
 
   const runAction = async (actionName: string, action: () => Promise<void>) => {
     setBusyAction(actionName);
+    setActionFeedback(null);
     setNotice("");
 
     try {
       await action();
+      setActionFeedback({ action: actionName, status: "success" });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The action could not be completed.");
+      setActionFeedback({ action: actionName, status: "error" });
+      setNotice(getActionErrorMessage(actionName, error));
     } finally {
       setBusyAction(null);
     }
@@ -117,7 +153,6 @@ export function Popup() {
     void runAction("download", async () => {
       const dataUrl = await exportNodeToJpegDataUrl(exportRef.current as HTMLElement);
       downloadDataUrl(dataUrl, createPostFilename(capture.post as ExtractedPost, "jpg"));
-      setNotice("JPG downloaded.");
     });
   };
 
@@ -127,9 +162,18 @@ export function Popup() {
     }
 
     void runAction("copy-image", async () => {
-      const blob = await exportNodeToPngBlob(exportRef.current as HTMLElement);
-      await copyBlobToClipboard(blob);
-      setNotice("Image copied.");
+      const dataUrl = await exportNodeToPngDataUrl(exportRef.current as HTMLElement);
+      const blob = await dataUrlToBlob(dataUrl);
+
+      try {
+        await copyBlobToClipboard(blob);
+      } catch {
+        const copied = copyImageHtmlToClipboard(dataUrl, "Quoti card");
+
+        if (!copied) {
+          throw new Error("Chrome refused image clipboard access. Try Download JPG for now.");
+        }
+      }
     });
   };
 
@@ -140,7 +184,6 @@ export function Popup() {
 
     void runAction("copy-text", async () => {
       await copyTextToClipboard(formatPostAsText(capture.post as ExtractedPost));
-      setNotice("Text copied.");
     });
   };
 
@@ -157,6 +200,15 @@ export function Popup() {
     window.open(capture.post.sourceUrl, "_blank", "noopener,noreferrer");
   };
 
+  const handleOpenOptions = () => {
+    if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+      void chrome.runtime.openOptionsPage();
+      return;
+    }
+
+    window.open("/options.html", "_blank", "noopener,noreferrer");
+  };
+
   const isBusy = Boolean(busyAction) || capture.status === "loading";
 
   return (
@@ -169,13 +221,25 @@ export function Popup() {
             <p className="popup__subtitle">Capture the post. Keep the context.</p>
           </div>
         </div>
+        <button className="popup__settings-button" onClick={handleOpenOptions} type="button" title="Open options" aria-label="Open options">
+          <Settings size={17} aria-hidden="true" />
+        </button>
       </header>
 
       {capture.post ? (
         <div className="popup__content">
-          <PostCardPreview post={capture.post} cardTheme={cardTheme} exportRef={exportRef} />
-          <CardThemeToggle value={cardTheme} onChange={setCardTheme} />
+          <PostCardPreview post={capture.post} contentMode={contentMode} cardTheme={cardTheme} exportRef={exportRef} />
+          <div className="popup__toggles">
+            <CardThemeToggle value={cardTheme} onChange={setCardTheme} />
+            <CardContentToggle
+              disabled={capture.post.media.length === 0}
+              value={contentMode}
+              onChange={(mode) => setContentMode(capture.post?.media.length ? mode : "text-only")}
+            />
+          </div>
           <PostCardActions
+            actionFeedback={actionFeedback}
+            busyAction={busyAction}
             canOpenSource={Boolean(capture.post.sourceUrl)}
             isBusy={isBusy}
             onCopyImage={handleCopyImage}
@@ -194,6 +258,24 @@ export function Popup() {
   );
 }
 
+function getActionErrorMessage(actionName: string, error: unknown): string {
+  const detail = error instanceof Error ? error.message : "";
+
+  if (actionName === "copy-image") {
+    return detail || "Quoti could not copy the image. Try Download JPG.";
+  }
+
+  if (actionName === "download") {
+    return detail || "Quoti could not prepare the JPG.";
+  }
+
+  if (actionName === "copy-text") {
+    return detail || "Quoti could not copy the text.";
+  }
+
+  return detail || "The action could not be completed.";
+}
+
 async function getActiveTab(): Promise<chrome.tabs.Tab> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -208,7 +290,24 @@ async function sendTabMessage(tabId: number): Promise<QuotiMessageResponse> {
   try {
     return await chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST" });
   } catch {
-    throw new Error(unsupportedPageMessage);
+    await ensureContentScript(tabId);
+    return chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST" });
+  }
+}
+
+async function ensureContentScript(tabId: number): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "QUOTI_PING" });
+    return;
+  } catch {
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ["assets/content-script.css"]
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content-script.js"]
+    });
   }
 }
 
@@ -224,6 +323,21 @@ function isChromeExtensionRuntime(): boolean {
   return typeof chrome !== "undefined" && Boolean(chrome.tabs?.query);
 }
 
+async function readPendingPost(): Promise<ExtractedPost | null> {
+  if (typeof chrome === "undefined" || !chrome.storage?.session) {
+    return null;
+  }
+
+  const stored = await chrome.storage.session.get(latestPostStorageKey);
+  const post = stored[latestPostStorageKey] as ExtractedPost | undefined;
+
+  if (post) {
+    await chrome.storage.session.remove(latestPostStorageKey);
+  }
+
+  return post ?? null;
+}
+
 function createPreviewPost(): ExtractedPost {
   return {
     id: "preview-post",
@@ -233,6 +347,13 @@ function createPreviewPost(): ExtractedPost {
     content: "Les conversations meritent de voyager avec leur contexte.",
     publishedAt: new Date().toISOString(),
     sourceUrl: "https://x.com/",
+    media: [
+      {
+        type: "image",
+        url: "https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=1200&q=80",
+        alt: "Books on a shelf"
+      }
+    ],
     capturedAt: new Date().toISOString()
   };
 }

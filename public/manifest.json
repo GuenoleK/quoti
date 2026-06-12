@@ -7,6 +7,10 @@
     "default_popup": "popup.html",
     "default_title": "Quoti"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
@@ -15,9 +19,10 @@
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
       "js": ["content-script.js"],
+      "css": ["assets/content-script.css"],
       "run_at": "document_idle"
     }
   ],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
-  "permissions": ["activeTab", "clipboardWrite", "scripting", "tabs"]
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://pbs.twimg.com/*"],
+  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "scripting", "storage", "tabs"]
 }

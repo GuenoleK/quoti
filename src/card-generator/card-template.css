@@ -9,6 +9,7 @@
 
   position: relative;
   width: min(100%, var(--card-export-width));
+  max-width: 100%;
   overflow: hidden;
   color: var(--card-color-text-primary);
   background: var(--card-color-surface);
@@ -32,8 +33,18 @@
   --card-color-platform-background: var(--card-dark-color-platform-background);
 }
 
+.context-card[data-card-layout="square"] {
+  --card-export-width: 820px;
+}
+
+.context-card[data-card-layout="wide"] {
+  --card-export-width: 1080px;
+}
+
 .context-card__inner {
   display: grid;
+  box-sizing: border-box;
+  min-width: 0;
   gap: var(--space-8);
   padding: var(--space-10);
 }
@@ -58,7 +69,39 @@
   font-family: var(--font-family-serif);
   font-size: clamp(var(--font-size-xl), 4vw, var(--font-size-2xl));
   line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+  word-break: normal;
   transition: color var(--duration-slow) ease;
+}
+
+.context-card[data-card-layout="square"] .context-card__quote {
+  font-size: clamp(var(--font-size-lg), 3vw, var(--font-size-xl));
+}
+
+.context-card[data-card-layout="wide"] .context-card__inner {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.92fr);
+  grid-template-areas:
+    "source source"
+    "quote media"
+    "footer footer";
+  align-items: center;
+}
+
+.context-card[data-card-layout="wide"] .context-card__source {
+  grid-area: source;
+}
+
+.context-card[data-card-layout="wide"] .context-card__quote {
+  grid-area: quote;
+  font-size: clamp(var(--font-size-lg), 2vw, var(--font-size-xl));
+}
+
+.context-card[data-card-layout="wide"] .context-card__media {
+  grid-area: media;
+}
+
+.context-card[data-card-layout="wide"] .context-card__footer {
+  grid-area: footer;
 }
 
 .context-card__footer {
@@ -71,8 +114,40 @@
   transition: border-color var(--duration-slow) ease;
 }
 
+.context-card__media {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--card-color-border) 55%, transparent);
+  border: 1px solid var(--card-color-border);
+  border-radius: var(--radius-md);
+  transition:
+    background-color var(--duration-slow) ease,
+    border-color var(--duration-slow) ease;
+}
+
+.context-card__image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.context-card[data-card-layout="square"] .context-card__image {
+  max-height: 430px;
+}
+
+.context-card[data-card-layout="wide"] .context-card__image {
+  max-height: 540px;
+}
+
 .context-card__author {
   display: grid;
+  min-width: 0;
   gap: var(--space-1);
 }
 
@@ -84,6 +159,7 @@
 .context-card__author-handle {
   color: var(--card-color-text-secondary);
   font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
   transition: color var(--duration-slow) ease;
 }
 

@@ -1,6 +1,13 @@
 export type SocialPlatform = "x" | "threads" | "bluesky" | "linkedin";
 
 export type CardTheme = "light" | "dark";
+export type CardContentMode = "text-only" | "with-media";
+
+export type PostMedia = {
+  type: "image";
+  url: string;
+  alt?: string;
+};
 
 export type ExtractedPost = {
   id: string;
@@ -10,6 +17,7 @@ export type ExtractedPost = {
   content: string;
   publishedAt?: string;
   sourceUrl?: string;
+  media: PostMedia[];
   capturedAt: string;
 };
 

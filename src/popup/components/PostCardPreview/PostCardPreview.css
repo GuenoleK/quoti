@@ -1,9 +1,11 @@
 .post-card-preview {
   display: grid;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .post-card-preview__frame {
+  min-width: 0;
   padding: var(--space-3);
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border);
@@ -12,6 +14,7 @@
 
 .post-card-preview__card {
   width: 100%;
+  max-width: 100%;
   box-shadow: var(--shadow-sm);
 }
 
@@ -22,4 +25,13 @@
 
 .post-card-preview .context-card__quote {
   font-size: var(--font-size-xl);
+}
+
+.post-card-preview .context-card[data-card-layout="wide"] .context-card__inner {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "source"
+    "quote"
+    "media"
+    "footer";
 }

@@ -24,10 +24,10 @@ It supports:
 - capturing a post from the right-click menu
 - optionally showing a Quoti button inside supported posts
 - normalizing the post into a shared data model
-- extracting attached post images
+- extracting attached post images and videos
 - rendering an Editorial Craft context card
 - switching the generated card between light and dark themes
-- switching the generated card between text-only and image layouts
+- switching the generated card between text-only and media layouts
 - downloading the card as JPG
 - copying the generated image
 - copying the source text
@@ -67,7 +67,7 @@ npm run build
 8. Hover a post.
 9. Click the Quoti extension icon.
 10. Verify that the popup shows a context card.
-11. Try Copy image, Download JPG, Copy text, Source, Light/Dark, and Text only/With image.
+11. Try Copy image, Download JPG, Copy text, Source, Light/Dark, and Text only/With media.
 12. Right-click a post and choose Create Quoti card.
 13. Open the extension options from the popup settings button to enable or disable hover capture, right-click capture, and the inline Quoti button.
 

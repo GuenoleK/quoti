@@ -1,4 +1,4 @@
-import { Copy, Download, ExternalLink, ImageDown, RefreshCw } from "lucide-react";
+import { Copy, Download, ExternalLink, ImageDown, RefreshCw, Video } from "lucide-react";
 import "./PostCardActions.css";
 
 type PostCardActionsProps = {
@@ -8,6 +8,7 @@ type PostCardActionsProps = {
   } | null;
   busyAction: string | null;
   canOpenSource: boolean;
+  downloadMode: "image" | "video";
   isBusy: boolean;
   onCopyImage: () => void;
   onCopyText: () => void;
@@ -20,6 +21,7 @@ export function PostCardActions({
   actionFeedback,
   busyAction,
   canOpenSource,
+  downloadMode,
   isBusy,
   onCopyImage,
   onCopyText,
@@ -28,31 +30,58 @@ export function PostCardActions({
   onRefresh
 }: PostCardActionsProps) {
   const copyImageLabel = getActionLabel("copy-image", busyAction, actionFeedback, "Copy image");
-  const downloadLabel = getActionLabel("download", busyAction, actionFeedback, "Download JPG");
+  const downloadLabel = getActionLabel("download", busyAction, actionFeedback, downloadMode === "video" ? "Download video" : "Download JPG", downloadMode);
   const copyTextLabel = getActionLabel("copy-text", busyAction, actionFeedback, "Copy text");
+  const isVideoDownload = downloadMode === "video";
 
   return (
     <div className="post-card-actions" aria-label="Context card actions">
-      <button
-        className={`post-card-actions__button post-card-actions__button--primary${getActionClassName("copy-image", actionFeedback)}`}
-        disabled={isBusy}
-        onClick={onCopyImage}
-        type="button"
-        title="Copy image"
-      >
-        <ImageDown size={16} aria-hidden="true" />
-        <span>{copyImageLabel}</span>
-      </button>
+      {isVideoDownload ? (
+        <button
+          className={`post-card-actions__button post-card-actions__button--primary${getActionClassName("download", actionFeedback)}`}
+          disabled={isBusy}
+          onClick={onDownload}
+          type="button"
+          title="Download video"
+        >
+          <Video size={16} aria-hidden="true" />
+          <span>{downloadLabel}</span>
+        </button>
+      ) : (
+        <button
+          className={`post-card-actions__button post-card-actions__button--primary${getActionClassName("copy-image", actionFeedback)}`}
+          disabled={isBusy}
+          onClick={onCopyImage}
+          type="button"
+          title="Copy image"
+        >
+          <ImageDown size={16} aria-hidden="true" />
+          <span>{copyImageLabel}</span>
+        </button>
+      )}
 
-      <button
-        className="post-card-actions__button post-card-actions__button--split"
-        disabled={isBusy}
-        onClick={onDownload}
-        type="button"
-      >
-        <Download size={16} aria-hidden="true" />
-        <span>{downloadLabel}</span>
-      </button>
+      {isVideoDownload ? (
+        <button
+          className={`post-card-actions__button post-card-actions__button--split${getActionClassName("copy-image", actionFeedback)}`}
+          disabled={isBusy}
+          onClick={onCopyImage}
+          type="button"
+          title="Copy image"
+        >
+          <ImageDown size={16} aria-hidden="true" />
+          <span>{copyImageLabel}</span>
+        </button>
+      ) : (
+        <button
+          className="post-card-actions__button post-card-actions__button--split"
+          disabled={isBusy}
+          onClick={onDownload}
+          type="button"
+        >
+          <Download size={16} aria-hidden="true" />
+          <span>{downloadLabel}</span>
+        </button>
+      )}
 
       <button
         className="post-card-actions__button post-card-actions__button--split"
@@ -96,14 +125,15 @@ function getActionLabel(
   action: string,
   busyAction: string | null,
   feedback: PostCardActionsProps["actionFeedback"],
-  fallback: string
+  fallback: string,
+  downloadMode: PostCardActionsProps["downloadMode"] = "image"
 ): string {
   if (busyAction === action) {
     return action === "copy-image" ? "Copying..." : action === "download" ? "Preparing..." : "Copying...";
   }
 
   if (feedback?.action === action && feedback.status === "success") {
-    return action === "copy-image" ? "Image copied" : action === "download" ? "JPG ready" : "Text copied";
+    return action === "copy-image" ? "Image copied" : action === "download" ? (downloadMode === "video" ? "Video ready" : "JPG ready") : "Text copied";
   }
 
   if (feedback?.action === action && feedback.status === "error") {

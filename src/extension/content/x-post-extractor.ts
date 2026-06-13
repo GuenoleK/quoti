@@ -1,4 +1,4 @@
-import type { ExtractedPost, PostExtractionResult } from "../../shared/types/post.types";
+import type { ExtractedPost, ImagePostMedia, PostExtractionResult, PostMedia, VideoPostMedia } from "../../shared/types/post.types";
 
 type ContentScriptSettings = {
   hoverCaptureEnabled: boolean;
@@ -15,6 +15,7 @@ type InlineButtonPlacement = {
 const inlineButtonClassName = "quoti-inline-button";
 const inlineButtonInsertedClassName = "quoti-inline-button-inserted";
 const settingsStorageKey = "quoti-settings";
+const maxLocalObservedVideoUrls = 120;
 const defaultContentScriptSettings: ContentScriptSettings = {
   hoverCaptureEnabled: true,
   contextMenuEnabled: true,
@@ -24,6 +25,7 @@ const defaultContentScriptSettings: ContentScriptSettings = {
 let hoveredArticle: HTMLElement | null = null;
 let contextArticle: HTMLElement | null = null;
 let initialized = false;
+let localObservedVideoUrls: string[] = [];
 let observer: MutationObserver | null = null;
 let pendingInlineInjection = false;
 let settings: ContentScriptSettings = defaultContentScriptSettings;
@@ -68,18 +70,22 @@ export function disposeXPostExtractor(): void {
   removeInlineButtons();
 }
 
-export function extractSelectedXPost(): PostExtractionResult {
-  return extractArticle(getCandidateArticle(), "Open an X post or hover a post before opening Quoti.");
+export function extractSelectedXPost(observedVideoUrls: string[] = []): PostExtractionResult {
+  return extractArticle(getCandidateArticle(), "Open an X post or hover a post before opening Quoti.", observedVideoUrls);
 }
 
-export function extractContextXPost(): PostExtractionResult {
-  return extractArticle(contextArticle?.isConnected ? contextArticle : getCandidateArticle(), "Right-click a post before choosing Create Quoti card.");
+export function extractContextXPost(observedVideoUrls: string[] = []): PostExtractionResult {
+  return extractArticle(
+    contextArticle?.isConnected ? contextArticle : getCandidateArticle(),
+    "Right-click a post before choosing Create Quoti card.",
+    observedVideoUrls
+  );
 }
 
-export function extractInlineXPost(postId: string): PostExtractionResult {
+export function extractInlineXPost(postId: string, observedVideoUrls: string[] = []): PostExtractionResult {
   const article = document.querySelector<HTMLElement>(`article[data-quoti-post-id="${postId}"]`);
 
-  return extractArticle(article, "Quoti could not read this post.");
+  return extractArticle(article, "Quoti could not read this post.", observedVideoUrls);
 }
 
 function handleMouseOver(event: MouseEvent): void {
@@ -128,7 +134,7 @@ function handleDocumentClick(event: MouseEvent): void {
   void captureInlinePost(button.dataset.quotiPostId);
 }
 
-function extractArticle(article: HTMLElement | null, emptyReason: string): PostExtractionResult {
+function extractArticle(article: HTMLElement | null, emptyReason: string, observedVideoUrls: string[]): PostExtractionResult {
   if (!article) {
     return {
       status: "empty",
@@ -136,7 +142,7 @@ function extractArticle(article: HTMLElement | null, emptyReason: string): PostE
     };
   }
 
-  const post = extractPostFromArticle(article);
+  const post = extractPostFromArticle(article, observedVideoUrls);
 
   if (!post.content) {
     return {
@@ -273,7 +279,7 @@ function updateInlineButton(button: HTMLButtonElement, postId: string, placement
 }
 
 async function captureInlinePost(postId: string): Promise<void> {
-  const result = extractInlineXPost(postId);
+  const result = await extractInlineXPostWithVideoRetry(postId);
   const message =
     result.status === "success"
       ? {
@@ -293,6 +299,36 @@ async function captureInlinePost(postId: string): Promise<void> {
       // The post is already stored; the next manual popup open will pick it up.
     }
   }
+}
+
+async function extractInlineXPostWithVideoRetry(postId: string): Promise<PostExtractionResult> {
+  const result = extractInlineXPost(postId, await requestObservedVideoUrls());
+
+  if (result.status !== "success" || !hasMissingVideoUrl(result.post)) {
+    return result;
+  }
+
+  await wait(650);
+
+  return extractInlineXPost(postId, await requestObservedVideoUrls());
+}
+
+function hasMissingVideoUrl(post: ExtractedPost): boolean {
+  return post.media.some((media) => media.type === "video" && !media.url);
+}
+
+async function requestObservedVideoUrls(): Promise<string[]> {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "QUOTI_READ_OBSERVED_VIDEO_URLS" });
+
+    return response?.status === "video-urls" && Array.isArray(response.observedVideoUrls) ? response.observedVideoUrls : [];
+  } catch {
+    return [];
+  }
+}
+
+function wait(duration: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, duration));
 }
 
 function getInlineButtonPlacement(article: HTMLElement): InlineButtonPlacement | null {
@@ -354,11 +390,13 @@ function getCandidateArticle(): HTMLElement | null {
     return selectionArticle;
   }
 
-  if (hoveredArticle?.isConnected) {
-    return hoveredArticle;
+  const mostVisibleArticle = getMostVisibleArticle();
+
+  if (mostVisibleArticle) {
+    return mostVisibleArticle;
   }
 
-  return getMostVisibleArticle();
+  return hoveredArticle?.isConnected ? hoveredArticle : null;
 }
 
 function getSelectionArticle(): HTMLElement | null {
@@ -403,14 +441,14 @@ function pruneDisconnectedArticleReferences(): void {
   }
 }
 
-function extractPostFromArticle(article: HTMLElement): ExtractedPost {
+function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[]): ExtractedPost {
   const authorBlock = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   const authorName = readAuthorName(authorBlock);
   const authorHandle = readAuthorHandle(authorBlock);
   const content = readPostContent(article);
   const time = article.querySelector<HTMLTimeElement>("time");
   const sourceUrl = readSourceUrl(time);
-  const media = readPostImages(article);
+  const media = readPostMedia(article, observedVideoUrls);
 
   return {
     id: sourceUrl ?? `${authorHandle}-${content.slice(0, 32)}`,
@@ -472,11 +510,48 @@ function readSourceUrl(time: HTMLTimeElement | null): string | undefined {
   return new URL(href, window.location.origin).toString();
 }
 
-function readPostImages(article: HTMLElement) {
+function readPostMedia(article: HTMLElement, observedVideoUrls: string[]): PostMedia[] {
+  const videos = readPostVideos(article, observedVideoUrls);
+  const images = readPostImages(article);
+
+  return [...videos, ...images];
+}
+
+function readPostVideos(article: HTMLElement, observedVideoUrls: string[]): VideoPostMedia[] {
+  const videoKeys = new Set<string>();
+  const videos = Array.from(article.querySelectorAll<HTMLVideoElement>("video"));
+  const articleVideoUrls = readArticleAttachedVideoUrls(article);
+
+  return videos
+    .map((video): VideoPostMedia | null => {
+      const posterUrl = normalizeImageUrl(video.poster) ?? findVideoPosterUrl(video);
+      const videoUrls = readVideoUrls(video, posterUrl, observedVideoUrls, articleVideoUrls, videos.length === 1);
+      const url = videoUrls[0];
+      const key = url ?? posterUrl;
+
+      if (!key || videoKeys.has(key)) {
+        return null;
+      }
+
+      videoKeys.add(key);
+
+      return {
+        type: "video" as const,
+        url,
+        posterUrl,
+        variants: videoUrls,
+        alt: readVideoAlt(video),
+        duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined
+      };
+    })
+    .filter((media): media is VideoPostMedia => media !== null);
+}
+
+function readPostImages(article: HTMLElement): ImagePostMedia[] {
   const imageUrls = new Set<string>();
 
   return Array.from(article.querySelectorAll<HTMLImageElement>('img[src*="pbs.twimg.com/media/"]'))
-    .map((image) => {
+    .map((image): ImagePostMedia | null => {
       const normalizedUrl = normalizeImageUrl(image.currentSrc || image.src);
 
       if (!normalizedUrl || imageUrls.has(normalizedUrl)) {
@@ -491,7 +566,224 @@ function readPostImages(article: HTMLElement) {
         alt: normalizeText(image.alt)
       };
     })
-    .filter((media) => media !== null);
+    .filter((media): media is ImagePostMedia => media !== null);
+}
+
+function readVideoUrls(
+  video: HTMLVideoElement,
+  posterUrl: string | undefined,
+  observedVideoUrls: string[],
+  articleVideoUrls: string[],
+  allowArticleFallback: boolean
+): string[] {
+  rememberLocalObservedVideoUrls(observedVideoUrls);
+  rememberLocalObservedVideoUrls(articleVideoUrls);
+
+  const candidates = [
+    video.currentSrc,
+    video.src,
+    ...Array.from(video.querySelectorAll<HTMLSourceElement>("source")).map((source) => source.src),
+    ...readObservedVideoUrls(posterUrl, articleVideoUrls),
+    ...readObservedVideoUrls(posterUrl, observedVideoUrls),
+    ...readObservedVideoUrls(posterUrl, readLocalObservedVideoUrls()),
+    ...(allowArticleFallback ? readScopedFallbackVideoUrls(articleVideoUrls) : [])
+  ];
+
+  return [...new Set(candidates.map(normalizeVideoUrl).filter((url): url is string => Boolean(url)))].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+}
+
+function readArticleAttachedVideoUrls(article: HTMLElement): string[] {
+  const urls = new Set<string>();
+  const seen = new WeakSet<object>();
+  const nodes = [article, ...Array.from(article.querySelectorAll<HTMLElement>("*"))].slice(0, 80);
+
+  nodes.forEach((node) => {
+    Object.keys(node)
+      .filter((key) => key.startsWith("__reactProps$") || key.startsWith("__reactFiber$"))
+      .forEach((key) => collectTwitterVideoUrls((node as unknown as Record<string, unknown>)[key], urls, seen, 0));
+  });
+
+  return [...urls].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+}
+
+function collectTwitterVideoUrls(value: unknown, urls: Set<string>, seen: WeakSet<object>, depth: number): void {
+  if (depth > 10 || urls.size > 40 || value === null || value === undefined) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    extractTwitterVideoUrls(value).forEach((url) => urls.add(url));
+    return;
+  }
+
+  if (typeof value !== "object") {
+    return;
+  }
+
+  if (seen.has(value)) {
+    return;
+  }
+
+  seen.add(value);
+
+  if (value instanceof Node || value instanceof Window) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.slice(0, 60).forEach((item) => collectTwitterVideoUrls(item, urls, seen, depth + 1));
+    return;
+  }
+
+  Object.entries(value as Record<string, unknown>)
+    .slice(0, 120)
+    .forEach(([, item]) => collectTwitterVideoUrls(item, urls, seen, depth + 1));
+}
+
+function extractTwitterVideoUrls(value: string): string[] {
+  const matches = value.match(/https?:\/\/video\.twimg\.com\/[^"'\s\\<>]+/g) ?? [];
+
+  return matches
+    .map((url) => url.replace(/\\u0026/g, "&").replace(/&amp;/g, "&"))
+    .map(normalizeVideoUrl)
+    .filter((url): url is string => Boolean(url))
+    .filter((url) => !isVideoSegmentUrl(url));
+}
+
+function readScopedFallbackVideoUrls(videoUrls: string[]): string[] {
+  const urls = videoUrls
+    .map(normalizeVideoUrl)
+    .filter((url): url is string => Boolean(url))
+    .filter((url) => !isVideoSegmentUrl(url));
+
+  return [...new Set(urls)].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+}
+
+function readObservedVideoUrls(posterUrl: string | undefined, observedVideoUrls: string[]): string[] {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+
+  if (!mediaId) {
+    return [];
+  }
+
+  const urls = observedVideoUrls
+    .map(normalizeVideoUrl)
+    .filter((url): url is string => Boolean(url))
+    .filter((url) => url.includes(`/${mediaId}/`))
+    .filter((url) => !isVideoSegmentUrl(url));
+
+  return [...new Set(urls)].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+}
+
+function readLocalObservedVideoUrls(): string[] {
+  try {
+    rememberLocalObservedVideoUrls(performance.getEntriesByType("resource").map((entry) => entry.name));
+  } catch {
+    // Keep the URLs already seen during previous captures.
+  }
+
+  return localObservedVideoUrls;
+}
+
+function rememberLocalObservedVideoUrls(urls: string[]): void {
+  const nextUrls = [...localObservedVideoUrls];
+
+  urls.forEach((url) => {
+    if (!url || nextUrls.includes(url)) {
+      return;
+    }
+
+    nextUrls.push(url);
+  });
+
+  localObservedVideoUrls = nextUrls.slice(-maxLocalObservedVideoUrls);
+}
+
+function extractTwitterVideoMediaId(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+
+  return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(url.pathname)?.[1];
+}
+
+function isVideoSegmentUrl(value: string): boolean {
+  const pathname = new URL(value).pathname.toLowerCase();
+
+  return pathname.endsWith(".m4s") || pathname.endsWith(".ts") || pathname.includes("/seg/") || isTwitterDashInitUrl(pathname) || isTwitterHlsInitUrl(pathname);
+}
+
+function scoreVideoUrl(value: string): number {
+  const url = new URL(value);
+  const pathname = url.pathname.toLowerCase();
+  const resolution = /\/(\d{2,5})x(\d{2,5})(?:\/|$)/.exec(pathname);
+  const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
+  let score = pixels / 1000;
+
+  if (pathname.endsWith(".m3u8")) {
+    score += 160_000;
+  }
+
+  if (isLikelyPlayableMp4(pathname)) {
+    score += 120_000;
+  }
+
+  return score;
+}
+
+function isTwitterDashInitUrl(pathname: string): boolean {
+  return pathname.endsWith(".mp4") && /\/vid\/avc1\/0\/0\/\d{2,5}x\d{2,5}\//.test(pathname);
+}
+
+function isTwitterHlsInitUrl(pathname: string): boolean {
+  return pathname.endsWith(".mp4") && pathname.includes("/pl/") && /(?:^|\/)(init|map)\.mp4$/.test(pathname);
+}
+
+function isLikelyPlayableMp4(pathname: string): boolean {
+  return pathname.endsWith(".mp4") && !isTwitterDashInitUrl(pathname) && !isTwitterHlsInitUrl(pathname) && !pathname.includes("/pl/");
+}
+
+function normalizeVideoUrl(value: string): string | null {
+  if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
+    return null;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com")) {
+    return null;
+  }
+
+  return url.toString();
+}
+
+function findVideoPosterUrl(video: HTMLVideoElement): string | undefined {
+  const labelledContainer = video.closest<HTMLElement>('[aria-label], [role="group"]');
+  const nearbyImages = Array.from(labelledContainer?.querySelectorAll<HTMLImageElement>("img") ?? []);
+
+  return nearbyImages
+    .map((image) => normalizeImageUrl(image.currentSrc || image.src))
+    .find((url): url is string => Boolean(url));
+}
+
+function readVideoAlt(video: HTMLVideoElement): string | undefined {
+  const label = normalizeText(video.getAttribute("aria-label") ?? video.closest<HTMLElement>("[aria-label]")?.getAttribute("aria-label"));
+
+  return label || undefined;
 }
 
 function normalizeImageUrl(value: string): string | null {
@@ -507,7 +799,11 @@ function normalizeImageUrl(value: string): string | null {
     return null;
   }
 
-  if (!url.hostname.endsWith("twimg.com") || !url.pathname.includes("/media/")) {
+  if (!url.hostname.endsWith("twimg.com")) {
+    return null;
+  }
+
+  if (!url.pathname.includes("/media/") && !url.pathname.includes("_thumb/")) {
     return null;
   }
 

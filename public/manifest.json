@@ -15,6 +15,9 @@
     "service_worker": "service-worker.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://pbs.twimg.com https://images.unsplash.com; media-src 'self' blob: https://video.twimg.com; connect-src 'self' https://video.twimg.com https://pbs.twimg.com https://images.unsplash.com;"
+  },
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
@@ -23,6 +26,6 @@
       "run_at": "document_idle"
     }
   ],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://pbs.twimg.com/*"],
-  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "scripting", "storage", "tabs"]
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://pbs.twimg.com/*", "https://video.twimg.com/*"],
+  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "scripting", "storage", "tabs", "webRequest"]
 }

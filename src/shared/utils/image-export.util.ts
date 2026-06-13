@@ -77,6 +77,7 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
   const exportNode = node.cloneNode(true) as HTMLElement;
   const host = document.createElement("div");
 
+  prepareStaticMediaForExport(node, exportNode);
   exportNode.classList.remove("post-card-preview__card");
   exportNode.style.width = "100%";
   exportNode.style.maxWidth = "none";
@@ -84,7 +85,7 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
   host.style.position = "fixed";
   host.style.left = "-10000px";
   host.style.top = "0";
-  host.style.width = `${getExportWidth(node)}px`;
+  host.style.width = `${getExportWidth(exportNode)}px`;
   host.style.pointerEvents = "none";
   host.append(exportNode);
   document.body.append(host);
@@ -93,6 +94,96 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
     return await callback(exportNode);
   } finally {
     host.remove();
+  }
+}
+
+function prepareStaticMediaForExport(sourceNode: HTMLElement, exportNode: HTMLElement): void {
+  const hasVideo = Boolean(exportNode.querySelector(".context-card__video"));
+
+  if (!hasVideo) {
+    return;
+  }
+
+  replaceExportVideosWithImages(sourceNode, exportNode);
+  exportNode.querySelectorAll(".context-card__video-status, .context-card__video-probe").forEach((element) => element.remove());
+
+  if (exportNode.dataset.cardLayout === "wide") {
+    exportNode.dataset.cardLayout = "portrait";
+  }
+}
+
+function replaceExportVideosWithImages(sourceNode: HTMLElement, exportNode: HTMLElement): void {
+  const sourceVideos = Array.from(sourceNode.querySelectorAll<HTMLVideoElement>("video"));
+  const exportVideos = Array.from(exportNode.querySelectorAll<HTMLVideoElement>("video"));
+
+  exportVideos.forEach((exportVideo, index) => {
+    exportVideo.replaceWith(createVideoSnapshotImage(sourceVideos[index], exportVideo));
+  });
+}
+
+function createVideoSnapshotImage(sourceVideo: HTMLVideoElement | undefined, exportVideo: HTMLVideoElement): HTMLImageElement {
+  const image = document.createElement("img");
+  const source = findVideoPosterSource(sourceVideo, exportVideo) ?? captureVideoFrameAsDataUrl(sourceVideo);
+
+  image.alt = exportVideo.getAttribute("aria-label") ?? "";
+  image.className = "context-card__image context-card__video-snapshot";
+  image.decoding = "async";
+  image.loading = "eager";
+  image.referrerPolicy = "no-referrer";
+  image.style.display = "block";
+  image.style.width = "100%";
+  image.style.height = "100%";
+  image.style.maxHeight = "none";
+  image.style.objectFit = "cover";
+
+  if (source) {
+    image.src = source;
+
+    if (!source.startsWith("data:") && !source.startsWith("blob:")) {
+      image.dataset.exportSrc = source;
+    }
+  }
+
+  return image;
+}
+
+function findVideoPosterSource(sourceVideo: HTMLVideoElement | undefined, exportVideo: HTMLVideoElement): string | undefined {
+  const videoFrame = exportVideo.closest(".context-card__video-frame");
+  const posterProbe = videoFrame?.querySelector<HTMLImageElement>(".context-card__video-probe");
+
+  return (
+    getImageSource(posterProbe?.dataset.exportSrc) ??
+    getImageSource(posterProbe?.currentSrc) ??
+    getImageSource(posterProbe?.src) ??
+    getImageSource(sourceVideo?.getAttribute("poster")) ??
+    getImageSource(exportVideo.getAttribute("poster"))
+  );
+}
+
+function getImageSource(source: string | null | undefined): string | undefined {
+  return source && source.trim() ? source : undefined;
+}
+
+function captureVideoFrameAsDataUrl(video: HTMLVideoElement | undefined): string | undefined {
+  if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
+    return undefined;
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      return undefined;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    return canvas.toDataURL("image/png");
+  } catch {
+    return undefined;
   }
 }
 

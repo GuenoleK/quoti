@@ -26,7 +26,7 @@ export function CardContentToggle({ disabled = false, value, onChange }: CardCon
         onClick={() => onChange("with-media")}
         type="button"
       >
-        With image
+        With media
       </button>
     </div>
   );

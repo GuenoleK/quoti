@@ -19,17 +19,17 @@ if (!window.__quotiContentScriptLoaded) {
     }
 
     if (message.type === "QUOTI_GET_SELECTED_POST") {
-      sendResponse(extractSelectedXPost());
+      sendResponse(extractSelectedXPost(message.observedVideoUrls));
       return false;
     }
 
     if (message.type === "QUOTI_GET_CONTEXT_POST") {
-      sendResponse(extractContextXPost());
+      sendResponse(extractContextXPost(message.observedVideoUrls));
       return false;
     }
 
     if (message.type === "QUOTI_GET_INLINE_POST") {
-      sendResponse(extractInlineXPost(message.postId));
+      sendResponse(extractInlineXPost(message.postId, message.observedVideoUrls));
       return false;
     }
 

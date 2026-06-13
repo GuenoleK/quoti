@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "hls.js": "^1.6.16",
     "html-to-image": "^1.11.11",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",

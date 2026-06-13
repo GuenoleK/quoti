@@ -5,7 +5,8 @@ import type { CardContentMode, CardTheme, ExtractedPost } from "../shared/types/
 import { latestPostStorageKey } from "../shared/settings/quoti-settings";
 import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
-import { dataUrlToBlob, downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
+import { downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
+import { downloadBlob, exportPostVideoToWebmBlob } from "../shared/utils/video-export.util";
 import { EmptyState } from "./components/EmptyState/EmptyState";
 import { CardContentToggle } from "./components/CardContentToggle/CardContentToggle";
 import { CardThemeToggle } from "./components/CardThemeToggle/CardThemeToggle";
@@ -36,6 +37,8 @@ export function Popup() {
   const [notice, setNotice] = useState<string>("");
 
   useEffect(() => {
+    isMountedRef.current = true;
+
     return () => {
       isMountedRef.current = false;
     };
@@ -178,14 +181,34 @@ export function Popup() {
     }
   };
 
-  const handleDownloadJpg = () => {
+  const handleDownload = () => {
     if (!capture.post || !exportRef.current) {
       return;
     }
 
     void runAction("download", async () => {
+      const post = capture.post as ExtractedPost;
+      const videoMedia = getPrimaryVideo(post);
+
+      if (videoMedia) {
+        const video = exportRef.current?.querySelector<HTMLVideoElement>(".context-card__video");
+
+        if (!video) {
+          throw new Error("Quoti could not find the video player.");
+        }
+
+        const blob = await exportPostVideoToWebmBlob({
+          cardTheme,
+          post,
+          video
+        });
+
+        downloadBlob(blob, createPostFilename(post, "webm"));
+        return;
+      }
+
       const dataUrl = await exportNodeToJpegDataUrl(exportRef.current as HTMLElement);
-      downloadDataUrl(dataUrl, createPostFilename(capture.post as ExtractedPost, "jpg"));
+      downloadDataUrl(dataUrl, createPostFilename(post, "jpg"));
     });
   };
 
@@ -195,12 +218,12 @@ export function Popup() {
     }
 
     void runAction("copy-image", async () => {
-      const dataUrl = await exportNodeToPngDataUrl(exportRef.current as HTMLElement);
-      const blob = await dataUrlToBlob(dataUrl);
+      const blob = await exportNodeToPngBlob(exportRef.current as HTMLElement);
 
       try {
         await copyBlobToClipboard(blob);
       } catch {
+        const dataUrl = await exportNodeToPngDataUrl(exportRef.current as HTMLElement);
         const copied = copyImageHtmlToClipboard(dataUrl, "Quoti card");
 
         if (!copied) {
@@ -274,10 +297,11 @@ export function Popup() {
             actionFeedback={actionFeedback}
             busyAction={busyAction}
             canOpenSource={Boolean(capture.post.sourceUrl)}
+            downloadMode={getPrimaryVideo(capture.post) ? "video" : "image"}
             isBusy={isBusy}
             onCopyImage={handleCopyImage}
             onCopyText={handleCopyText}
-            onDownload={handleDownloadJpg}
+            onDownload={handleDownload}
             onOpenSource={handleOpenSource}
             onRefresh={capturePost}
           />
@@ -291,6 +315,10 @@ export function Popup() {
   );
 }
 
+function getPrimaryVideo(post: ExtractedPost) {
+  return post.media.find((media) => media.type === "video");
+}
+
 function getActionErrorMessage(actionName: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : "";
 
@@ -299,7 +327,7 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
   }
 
   if (actionName === "download") {
-    return detail || "Quoti could not prepare the JPG.";
+    return detail || "Quoti could not prepare the download.";
   }
 
   if (actionName === "copy-text") {
@@ -320,12 +348,29 @@ async function getActiveTab(): Promise<chrome.tabs.Tab> {
 }
 
 async function sendTabMessage(tabId: number): Promise<QuotiMessageResponse> {
+  const observedVideoUrls = await readObservedVideoUrls(tabId);
+  const response = await requestSelectedPost(tabId, observedVideoUrls);
+
+  if (response.status !== "success" || !hasMissingVideoUrl(response.post)) {
+    return response;
+  }
+
+  await wait(650);
+
+  return requestSelectedPost(tabId, await readObservedVideoUrls(tabId));
+}
+
+async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): Promise<QuotiMessageResponse> {
   try {
-    return await chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST" });
+    return await chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST", observedVideoUrls });
   } catch {
     await ensureContentScript(tabId);
-    return chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST" });
+    return chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST", observedVideoUrls });
   }
+}
+
+function hasMissingVideoUrl(post: ExtractedPost): boolean {
+  return post.media.some((media) => media.type === "video" && !media.url);
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
@@ -344,6 +389,30 @@ async function ensureContentScript(tabId: number): Promise<void> {
   }
 }
 
+async function readObservedVideoUrls(tabId: number): Promise<string[]> {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "QUOTI_READ_OBSERVED_VIDEO_URLS", tabId });
+
+    if (response?.status === "video-urls" && Array.isArray(response.observedVideoUrls)) {
+      return response.observedVideoUrls.filter((url: unknown): url is string => typeof url === "string");
+    }
+  } catch {
+    // Fall back to reading the page performance entries directly.
+  }
+
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => performance.getEntriesByType("resource").map((entry) => entry.name)
+    });
+
+    return Array.isArray(result?.result) ? result.result.filter((url): url is string => typeof url === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function isSupportedUrl(url: string | undefined): boolean {
   if (!url) {
     return false;
@@ -354,6 +423,10 @@ function isSupportedUrl(url: string | undefined): boolean {
 
 function isChromeExtensionRuntime(): boolean {
   return typeof chrome !== "undefined" && Boolean(chrome.tabs?.query);
+}
+
+function wait(duration: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, duration));
 }
 
 async function readPendingPost(): Promise<ExtractedPost | null> {

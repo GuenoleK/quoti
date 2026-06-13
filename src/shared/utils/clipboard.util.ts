@@ -22,7 +22,7 @@ export function copyImageHtmlToClipboard(dataUrl: string, alt = "Quoti card"): b
   container.style.left = "-10000px";
   container.style.top = "0";
   container.style.opacity = "0";
-  container.innerHTML = `<img src="${dataUrl}" alt="${escapeHtml(alt)}" />`;
+  container.innerHTML = `<img src="${escapeHtml(dataUrl)}" alt="${escapeHtml(alt)}" />`;
 
   document.body.append(container);
 

@@ -482,13 +482,13 @@ function readAuthorHandle(authorBlock: HTMLElement | null): string {
 
 function readPostContent(article: HTMLElement): string {
   const tweetTextBlocks = Array.from(article.querySelectorAll<HTMLElement>('[data-testid="tweetText"]'));
-  const text = tweetTextBlocks.map((block) => normalizeText(block.innerText)).join("\n\n");
+  const text = tweetTextBlocks.map((block) => normalizePostContent(block.innerText)).join("\n\n");
 
   if (text) {
     return text;
   }
 
-  const fallbackText = normalizeText(article.innerText);
+  const fallbackText = normalizePostContent(article.innerText);
   const linesToRemove = new Set(["Reply", "Repost", "Like", "View", "Share"]);
 
   return fallbackText
@@ -814,4 +814,17 @@ function normalizeImageUrl(value: string): string | null {
 
 function normalizeText(value: string | null | undefined): string {
   return value?.replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").replace(/[ \t]+/g, " ").trim() ?? "";
+}
+
+function normalizePostContent(value: string | null | undefined): string {
+  return (
+    value
+      ?.replace(/\r\n?/g, "\n")
+      .replace(/\u00a0/g, " ")
+      .split("\n")
+      .map((line) => line.trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim() ?? ""
+  );
 }

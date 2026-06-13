@@ -10,13 +10,16 @@ The product exists to make conversations portable across platforms without losin
 - Support X first.
 - Generate clean visual cards from extracted post data.
 - Export as PNG before adding advanced workflows.
-- Keep everything browser-local for the MVP.
+- Keep the core extension browser-local by default.
+- For video rendering, prefer a bundled FFmpeg WASM renderer first, then an optional Native Messaging renderer for faster local exports.
 
 ## Agent Operating Principles
 
 - Read AGENT.md before changing code or documentation.
 - Treat docs/product/product-vision.md as the product source of truth.
 - Treat docs/architecture/frontend-architecture.md as the technical source of truth.
+- Treat docs/architecture/service-architecture.md as the service organization source of truth.
+- Treat docs/roadmap/video-rendering-roadmap.md as the video rendering roadmap source of truth.
 - Treat docs/design/editorial-craft.md as the design source of truth.
 - Keep new decisions explicit in docs/decisions.
 - Use agents/skills for recurring workflows.

@@ -11,6 +11,7 @@ type PostCardActionsProps = {
   downloadMode: "image" | "video";
   isBusy: boolean;
   onCopyImage: () => void;
+  onCopySource: () => void;
   onCopyText: () => void;
   onDownload: () => void;
   onOpenSource: () => void;
@@ -24,12 +25,14 @@ export function PostCardActions({
   downloadMode,
   isBusy,
   onCopyImage,
+  onCopySource,
   onCopyText,
   onDownload,
   onOpenSource,
   onRefresh
 }: PostCardActionsProps) {
   const copyImageLabel = getActionLabel("copy-image", busyAction, actionFeedback, "Copy image");
+  const copySourceLabel = getActionLabel("copy-source", busyAction, actionFeedback, "Copy source");
   const downloadLabel = getActionLabel("download", busyAction, actionFeedback, downloadMode === "video" ? "Download video" : "Download JPG", downloadMode);
   const copyTextLabel = getActionLabel("copy-text", busyAction, actionFeedback, "Copy text");
   const isVideoDownload = downloadMode === "video";
@@ -96,14 +99,25 @@ export function PostCardActions({
 
       <div className="post-card-actions__source-row">
         <button
-          className="post-card-actions__button post-card-actions__button--source"
+          className={`post-card-actions__button post-card-actions__button--source${getActionClassName("copy-source", actionFeedback)}`}
+          disabled={isBusy || !canOpenSource}
+          onClick={onCopySource}
+          type="button"
+          title="Copy source link"
+        >
+          <Copy size={16} aria-hidden="true" />
+          <span>{copySourceLabel}</span>
+        </button>
+
+        <button
+          className="post-card-actions__icon-button"
           disabled={isBusy || !canOpenSource}
           onClick={onOpenSource}
           type="button"
           title="Open source"
+          aria-label="Open source"
         >
           <ExternalLink size={16} aria-hidden="true" />
-          <span>Source</span>
         </button>
 
         <button
@@ -129,11 +143,19 @@ function getActionLabel(
   downloadMode: PostCardActionsProps["downloadMode"] = "image"
 ): string {
   if (busyAction === action) {
-    return action === "copy-image" ? "Copying..." : action === "download" ? "Preparing..." : "Copying...";
+    return action === "download" ? "Preparing..." : "Copying...";
   }
 
   if (feedback?.action === action && feedback.status === "success") {
-    return action === "copy-image" ? "Image copied" : action === "download" ? (downloadMode === "video" ? "Video ready" : "JPG ready") : "Text copied";
+    if (action === "copy-image") {
+      return "Image copied";
+    }
+
+    if (action === "copy-source") {
+      return "Source copied";
+    }
+
+    return action === "download" ? (downloadMode === "video" ? "Video ready" : "JPG ready") : "Text copied";
   }
 
   if (feedback?.action === action && feedback.status === "error") {

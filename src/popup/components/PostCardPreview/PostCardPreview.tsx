@@ -287,7 +287,7 @@ function resolveCardLayout(content: string, mediaSize: MediaSize | null, hasMedi
     return "portrait";
   }
 
-  const estimatedLineCount = Math.ceil(content.trim().length / 34);
+  const estimatedLineCount = estimateRenderedLineCount(content);
   const isLongText = estimatedLineCount > 3;
 
   if (!mediaSize) {
@@ -307,6 +307,13 @@ function resolveCardLayout(content: string, mediaSize: MediaSize | null, hasMedi
   }
 
   return "portrait";
+}
+
+function estimateRenderedLineCount(content: string): number {
+  return content
+    .trim()
+    .split("\n")
+    .reduce((lineCount, line) => lineCount + Math.max(1, Math.ceil(line.trim().length / 34)), 0);
 }
 
 function getPrimaryMedia(media: PostMedia[]): PostMedia | undefined {

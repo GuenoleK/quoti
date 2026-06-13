@@ -70,6 +70,7 @@
   font-size: clamp(var(--font-size-xl), 4vw, var(--font-size-2xl));
   line-height: var(--line-height-normal);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
   word-break: normal;
   transition: color var(--duration-slow) ease;
 }

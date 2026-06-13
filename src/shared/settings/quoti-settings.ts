@@ -14,6 +14,10 @@ export const defaultQuotiSettings: QuotiSettings = {
 };
 
 export async function readQuotiSettings(): Promise<QuotiSettings> {
+  if (typeof chrome === "undefined" || !chrome.storage?.sync) {
+    return defaultQuotiSettings;
+  }
+
   const stored = await chrome.storage.sync.get(quotiSettingsStorageKey);
   const settings = stored[quotiSettingsStorageKey] as Partial<QuotiSettings> | undefined;
 
@@ -24,6 +28,10 @@ export async function readQuotiSettings(): Promise<QuotiSettings> {
 }
 
 export async function writeQuotiSettings(settings: QuotiSettings): Promise<void> {
+  if (typeof chrome === "undefined" || !chrome.storage?.sync) {
+    return;
+  }
+
   await chrome.storage.sync.set({
     [quotiSettingsStorageKey]: settings
   });

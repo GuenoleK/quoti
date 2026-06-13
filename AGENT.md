@@ -9,6 +9,15 @@ Before making any modification, read the following documents.
 ## Architecture
 
 - docs/architecture/frontend-architecture.md
+- docs/architecture/service-architecture.md
+
+## Roadmap
+
+- docs/roadmap/video-rendering-roadmap.md
+
+## Development
+
+- docs/development/developer-guide.md
 
 ## Design
 

@@ -37,6 +37,13 @@ Everything runs locally in the browser. There is no backend, database, or social
 
 ## Development
 
+Developer documentation lives separately from user installation notes:
+
+- [Developer guide](docs/development/developer-guide.md)
+- [Frontend architecture](docs/architecture/frontend-architecture.md)
+- [Service architecture](docs/architecture/service-architecture.md)
+- [Video rendering roadmap](docs/roadmap/video-rendering-roadmap.md)
+
 Install dependencies:
 
 ```bash

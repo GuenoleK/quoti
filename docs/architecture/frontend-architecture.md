@@ -11,6 +11,8 @@ The project follows a simple and maintainable architecture based on:
 
 The goal is to keep the codebase easy to navigate, scalable, and pleasant to work with over time.
 
+For controller/service/adapter organization, use `docs/architecture/service-architecture.md`.
+
 ---
 
 # Project Structure

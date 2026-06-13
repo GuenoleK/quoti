@@ -213,7 +213,7 @@ export function Popup() {
   };
 
   const handleCopyImage = () => {
-    if (!exportRef.current) {
+    if (!exportRef.current || !capture.post) {
       return;
     }
 
@@ -240,6 +240,18 @@ export function Popup() {
 
     void runAction("copy-text", async () => {
       await copyTextToClipboard(formatPostAsText(capture.post as ExtractedPost));
+    });
+  };
+
+  const handleCopySource = () => {
+    const sourceUrl = capture.post?.sourceUrl;
+
+    if (!sourceUrl) {
+      return;
+    }
+
+    void runAction("copy-source", async () => {
+      await copyTextToClipboard(sourceUrl);
     });
   };
 
@@ -300,6 +312,7 @@ export function Popup() {
             downloadMode={getPrimaryVideo(capture.post) ? "video" : "image"}
             isBusy={isBusy}
             onCopyImage={handleCopyImage}
+            onCopySource={handleCopySource}
             onCopyText={handleCopyText}
             onDownload={handleDownload}
             onOpenSource={handleOpenSource}
@@ -332,6 +345,10 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
 
   if (actionName === "copy-text") {
     return detail || "Quoti could not copy the text.";
+  }
+
+  if (actionName === "copy-source") {
+    return detail || "Quoti could not copy the source link.";
   }
 
   return detail || "The action could not be completed.";

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
-import type { CardContentMode, CardTheme, ExtractedPost, PostMedia } from "../shared/types/post.types";
+import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, VideoPostMedia } from "../shared/types/post.types";
 import { latestPostStorageKey } from "../shared/settings/quoti-settings";
 import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
 import { downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
 import { downloadBlob } from "../shared/utils/video-export.util";
-import { getVideoRenderProgressLabel, renderPostVideo } from "../rendering/video/video-render.controller";
 import type { VideoRenderProgress } from "../rendering/video/video-render.types";
 import { EmptyState } from "./components/EmptyState/EmptyState";
 import { CardContentToggle } from "./components/CardContentToggle/CardContentToggle";
@@ -22,12 +21,19 @@ type CaptureState = {
   message: string;
 };
 
+type VideoWarmupStatus = "idle" | "loading" | "ready" | "error";
+type MediaRecoveryStatus = "idle" | "loading";
+type VideoRenderController = typeof import("../rendering/video/video-render.controller");
+
 const unsupportedPageMessage = "Open x.com or twitter.com, hover a post, then open Quoti again.";
+let videoRenderControllerPromise: Promise<VideoRenderController> | null = null;
 
 export function Popup() {
   const exportRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
+  const mediaRecoveryPostKeyRef = useRef<string | null>(null);
   const postMediaCacheRef = useRef<Map<string, PostMedia[]>>(new Map());
+  const videoWarmupPromiseRef = useRef<Promise<void> | null>(null);
   const [capture, setCapture] = useState<CaptureState>({
     post: null,
     status: "idle",
@@ -38,6 +44,8 @@ export function Popup() {
   const [contentMode, setContentMode] = useState<CardContentMode>("text-only");
   const [cardTheme, setCardTheme] = useState<CardTheme>("light");
   const [notice, setNotice] = useState<string>("");
+  const [mediaRecoveryStatus, setMediaRecoveryStatus] = useState<MediaRecoveryStatus>("idle");
+  const [videoWarmupStatus, setVideoWarmupStatus] = useState<VideoWarmupStatus>("idle");
   const [videoRenderProgress, setVideoRenderProgress] = useState<VideoRenderProgress | null>(null);
 
   useEffect(() => {
@@ -60,7 +68,109 @@ export function Popup() {
     return () => window.clearTimeout(timeout);
   }, [actionFeedback]);
 
+  const warmVideoRenderer = useCallback((): Promise<void> => {
+    if (videoWarmupPromiseRef.current) {
+      return videoWarmupPromiseRef.current;
+    }
+
+    setVideoWarmupStatus("loading");
+
+    const warmupPromise = loadVideoRenderController()
+      .then((controller) => controller.preloadVideoRenderer())
+      .then(() => {
+        if (isMountedRef.current) {
+          setVideoWarmupStatus("ready");
+        }
+      })
+      .catch((error) => {
+        if (isMountedRef.current) {
+          setVideoWarmupStatus("error");
+        }
+
+        throw error;
+      })
+      .finally(() => {
+        videoWarmupPromiseRef.current = null;
+      });
+
+    videoWarmupPromiseRef.current = warmupPromise;
+
+    return warmupPromise;
+  }, []);
+
+  const recoverMissingVideoMedia = useCallback(
+    async (post: ExtractedPost) => {
+      if (!hasMissingVideoUrl(post)) {
+        if (hasVideoMedia(post)) {
+          void warmVideoRenderer().catch(() => undefined);
+        }
+
+        return;
+      }
+
+      const postKey = getPostCacheKey(post);
+
+      if (!postKey || mediaRecoveryPostKeyRef.current === postKey) {
+        return;
+      }
+
+      mediaRecoveryPostKeyRef.current = postKey;
+      setMediaRecoveryStatus("loading");
+      setNotice("Video source is still loading. Keeping the post context visible.");
+
+      try {
+        const warmupPromise = warmVideoRenderer().catch(() => undefined);
+
+        if (!isChromeExtensionRuntime()) {
+          await warmupPromise;
+          return;
+        }
+
+        const tab = await getActiveTab();
+
+        if (!tab.id || !isSupportedUrl(tab.url)) {
+          await warmupPromise;
+          return;
+        }
+
+        await warmupPromise;
+
+        const recoveredPost = await recoverPostVideoMedia(tab.id, post);
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        if (hasMissingVideoUrl(recoveredPost)) {
+          setNotice("Video source is still warming up. Refresh capture in a few seconds if needed.");
+          return;
+        }
+
+        const hydratedPost = preserveSessionMedia(postMediaCacheRef.current, recoveredPost);
+
+        setCapture((current) => {
+          if (!current.post || getPostCacheKey(current.post) !== postKey) {
+            return current;
+          }
+
+          return {
+            post: hydratedPost,
+            status: "ready",
+            message: "Post captured."
+          };
+        });
+        setNotice("");
+      } finally {
+        if (isMountedRef.current) {
+          setMediaRecoveryStatus("idle");
+        }
+      }
+    },
+    [warmVideoRenderer]
+  );
+
   const capturePost = useCallback(async () => {
+    mediaRecoveryPostKeyRef.current = null;
     setCapture((current) => ({
       ...current,
       status: "loading",
@@ -84,6 +194,7 @@ export function Popup() {
           message: "Post captured."
         });
         setContentMode(post.media.length > 0 ? "with-media" : "text-only");
+        void recoverMissingVideoMedia(post);
         return;
       }
 
@@ -96,6 +207,7 @@ export function Popup() {
           message: "Preview post loaded."
         });
         setContentMode(previewPost.media.length > 0 ? "with-media" : "text-only");
+        void recoverMissingVideoMedia(previewPost);
         return;
       }
 
@@ -129,6 +241,7 @@ export function Popup() {
           message: "Post captured."
         });
         setContentMode(post.media.length > 0 ? "with-media" : "text-only");
+        void recoverMissingVideoMedia(post);
         return;
       }
 
@@ -157,7 +270,15 @@ export function Popup() {
         message: error instanceof Error ? error.message : "Quoti could not capture this post."
       });
     }
-  }, []);
+  }, [recoverMissingVideoMedia]);
+
+  useEffect(() => {
+    if (!capture.post || !hasVideoMedia(capture.post)) {
+      return;
+    }
+
+    void warmVideoRenderer().catch(() => undefined);
+  }, [capture.post, warmVideoRenderer]);
 
   useEffect(() => {
     void capturePost();
@@ -203,6 +324,7 @@ export function Popup() {
       const videoMedia = getPrimaryVideo(post);
 
       if (videoMedia) {
+        const { renderPostVideo } = await loadVideoRenderController();
         const video = exportRef.current?.querySelector<HTMLVideoElement>(".context-card__video");
         const result = await renderPostVideo({
           browserVideo: video,
@@ -288,7 +410,15 @@ export function Popup() {
     window.open("/options.html", "_blank", "noopener,noreferrer");
   };
 
-  const isBusy = Boolean(busyAction) || capture.status === "loading";
+  const isRecoveringVideoMedia = mediaRecoveryStatus === "loading";
+  const isBusy = Boolean(busyAction) || capture.status === "loading" || isRecoveringVideoMedia;
+  const statusNotice =
+    notice ||
+    (isRecoveringVideoMedia
+      ? "Video source is still loading. Keeping the post context visible."
+      : videoWarmupStatus === "loading" && capture.post && hasVideoMedia(capture.post)
+        ? "Video renderer is warming up for the first export."
+        : "");
 
   return (
     <main className="popup">
@@ -332,16 +462,45 @@ export function Popup() {
           />
         </div>
       ) : (
-        <EmptyState message={capture.message} onRefresh={capturePost} />
+        <EmptyState isLoading={capture.status === "loading"} message={capture.message} onRefresh={capturePost} />
       )}
 
-      {notice ? <p className="popup__notice" aria-live="polite">{notice}</p> : null}
+      {statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
     </main>
   );
 }
 
+function loadVideoRenderController(): Promise<VideoRenderController> {
+  videoRenderControllerPromise ??= import("../rendering/video/video-render.controller").catch((error) => {
+    videoRenderControllerPromise = null;
+    throw error;
+  });
+
+  return videoRenderControllerPromise;
+}
+
+function getVideoRenderProgressLabel(progress: VideoRenderProgress | null): string | undefined {
+  if (!progress) {
+    return undefined;
+  }
+
+  if (progress.stage === "rendering" && Number.isFinite(progress.progress)) {
+    return `${progress.message} ${Math.round(progress.progress * 100)}%`;
+  }
+
+  return progress.message;
+}
+
 function getPrimaryVideo(post: ExtractedPost) {
   return post.media.find((media) => media.type === "video");
+}
+
+function hasVideoMedia(post: ExtractedPost): boolean {
+  return post.media.some((media) => media.type === "video");
+}
+
+function hasVideoMediaSource(media: VideoPostMedia): boolean {
+  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoSourceUrl(url))));
 }
 
 function getActionErrorMessage(actionName: string, error: unknown): string {
@@ -377,16 +536,128 @@ async function getActiveTab(): Promise<chrome.tabs.Tab> {
 }
 
 async function sendTabMessage(tabId: number): Promise<QuotiMessageResponse> {
-  const observedVideoUrls = await readObservedVideoUrls(tabId);
-  const response = await requestSelectedPost(tabId, observedVideoUrls);
+  return requestSelectedPostWithVideoRetries(tabId, [0, 650, 1250]);
+}
 
-  if (response.status !== "success" || !hasMissingVideoUrl(response.post)) {
-    return response;
+async function requestSelectedPostWithVideoRetries(tabId: number, delays: number[]): Promise<QuotiMessageResponse> {
+  let latestResponse: QuotiMessageResponse | null = null;
+
+  for (const delay of delays) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+
+    const response = await requestSelectedPost(tabId, await readObservedVideoUrls(tabId));
+    latestResponse = response;
+
+    if (response.status !== "success" || !hasMissingVideoUrl(response.post)) {
+      return response;
+    }
   }
 
-  await wait(650);
+  return latestResponse ?? { status: "empty", reason: "Quoti could not read a post from this page." };
+}
 
-  return requestSelectedPost(tabId, await readObservedVideoUrls(tabId));
+async function recoverPostVideoMedia(tabId: number, post: ExtractedPost): Promise<ExtractedPost> {
+  let recoveredPost = hydratePostVideoUrls(post, await readObservedVideoUrls(tabId));
+
+  if (!hasMissingVideoUrl(recoveredPost)) {
+    return recoveredPost;
+  }
+
+  for (const delay of [500, 900, 1400]) {
+    await wait(delay);
+
+    const observedVideoUrls = await readObservedVideoUrls(tabId);
+    recoveredPost = hydratePostVideoUrls(recoveredPost, observedVideoUrls);
+
+    if (!hasMissingVideoUrl(recoveredPost)) {
+      return recoveredPost;
+    }
+
+    const response = await requestSelectedPost(tabId, observedVideoUrls);
+
+    if (response.status === "success") {
+      recoveredPost = mergeRecoveredPostMedia(recoveredPost, response.post);
+    }
+
+    if (!hasMissingVideoUrl(recoveredPost)) {
+      return recoveredPost;
+    }
+  }
+
+  return recoveredPost;
+}
+
+function mergeRecoveredPostMedia(basePost: ExtractedPost, recoveredPost: ExtractedPost): ExtractedPost {
+  if (!isSamePost(basePost, recoveredPost)) {
+    return basePost;
+  }
+
+  return {
+    ...basePost,
+    media: mergePostMedia(recoveredPost.media, basePost.media)
+  };
+}
+
+function isSamePost(left: ExtractedPost, right: ExtractedPost): boolean {
+  const leftKey = getPostCacheKey(left);
+  const rightKey = getPostCacheKey(right);
+
+  if (leftKey && rightKey) {
+    return leftKey === rightKey;
+  }
+
+  return left.authorHandle === right.authorHandle && left.content === right.content;
+}
+
+function hydratePostVideoUrls(post: ExtractedPost, observedVideoUrls: string[]): ExtractedPost {
+  if (observedVideoUrls.length === 0) {
+    return post;
+  }
+
+  let changed = false;
+  const media = post.media.map((item) => {
+    if (item.type !== "video") {
+      return item;
+    }
+
+    const observedUrls = readObservedVideoUrlsForMedia(item.posterUrl, observedVideoUrls);
+    const variants = mergeUrlList([item.url, ...(item.variants ?? []), ...observedUrls]);
+
+    if (variants.length === 0) {
+      return item;
+    }
+
+    const nextItem = {
+      ...item,
+      url: item.url ?? variants[0],
+      variants
+    };
+
+    changed = changed || nextItem.url !== item.url || variants.length !== (item.variants?.length ?? 0);
+
+    return nextItem;
+  });
+
+  return changed ? { ...post, media } : post;
+}
+
+function readObservedVideoUrlsForMedia(posterUrl: string | undefined, observedVideoUrls: string[]): string[] {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+
+  if (!mediaId) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      observedVideoUrls
+        .map(normalizeVideoSourceUrl)
+        .filter((url): url is string => Boolean(url))
+        .filter((url) => url.includes(`/${mediaId}/`) && !isVideoSegmentUrl(url))
+    )
+  ].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
 }
 
 async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): Promise<QuotiMessageResponse> {
@@ -399,7 +670,7 @@ async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): 
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !media.url);
+  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
@@ -439,6 +710,75 @@ async function readObservedVideoUrls(tabId: number): Promise<string[]> {
     return Array.isArray(result?.result) ? result.result.filter((url): url is string => typeof url === "string") : [];
   } catch {
     return [];
+  }
+}
+
+function extractTwitterVideoMediaId(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value);
+
+    return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(url.pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeVideoSourceUrl(value: string | undefined): string | undefined {
+  if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value.replace(/\\u0026/g, "&").replace(/&amp;/g, "&"));
+
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com")) {
+      return undefined;
+    }
+
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function isVideoSegmentUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return (
+      pathname.endsWith(".m4s") ||
+      pathname.endsWith(".ts") ||
+      pathname.includes("/seg/") ||
+      /\/vid\/avc1\/0\/0\/\d{2,5}x\d{2,5}\//.test(pathname) ||
+      (pathname.endsWith(".mp4") && pathname.includes("/pl/") && /(?:^|\/)(init|map)\.mp4$/.test(pathname))
+    );
+  } catch {
+    return true;
+  }
+}
+
+function scoreVideoSourceUrl(value: string): number {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+    const resolution = /\/(\d{2,5})x(\d{2,5})(?:\/|$)/.exec(pathname);
+    const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
+    let score = pixels / 1000;
+
+    if (pathname.endsWith(".m3u8")) {
+      score += 160_000;
+    }
+
+    if (pathname.endsWith(".mp4") && !pathname.includes("/pl/")) {
+      score += 120_000;
+    }
+
+    return score;
+  } catch {
+    return 0;
   }
 }
 

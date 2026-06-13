@@ -302,19 +302,33 @@ async function captureInlinePost(postId: string): Promise<void> {
 }
 
 async function extractInlineXPostWithVideoRetry(postId: string): Promise<PostExtractionResult> {
-  const result = extractInlineXPost(postId, await requestObservedVideoUrls());
+  let latestResult: PostExtractionResult | null = null;
 
-  if (result.status !== "success" || !hasMissingVideoUrl(result.post)) {
-    return result;
+  for (const delay of [0, 650, 1250]) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+
+    const result = extractInlineXPost(postId, await requestObservedVideoUrls());
+    latestResult = result;
+
+    if (result.status !== "success" || !hasMissingVideoUrl(result.post)) {
+      return result;
+    }
   }
 
-  await wait(650);
-
-  return extractInlineXPost(postId, await requestObservedVideoUrls());
+  return latestResult ?? {
+    status: "empty",
+    reason: "Quoti could not read this post."
+  };
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !media.url);
+  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
+}
+
+function hasVideoMediaSource(media: VideoPostMedia): boolean {
+  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoUrl(url))));
 }
 
 async function requestObservedVideoUrls(): Promise<string[]> {

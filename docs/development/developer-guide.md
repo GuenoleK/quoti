@@ -136,7 +136,8 @@ The Phase 1 implementation should:
 Current implementation notes:
 
 - The public entry point is `src/rendering/video/video-render.controller.ts`.
-- The popup calls the controller and does not call FFmpeg directly.
+- The popup loads the video controller lazily and does not call FFmpeg directly.
+- When a video post is captured without a playable URL, the popup keeps the post context visible, warms the renderer, and retries media URL hydration before asking the user to refresh.
 - Direct MP4 sources are preferred for reliability.
 - HLS playlists are downloaded, rewritten, and passed to FFmpeg as local virtual files.
 - If WASM rendering fails and a preview video element is available, Quoti falls back to the previous browser WebM renderer.

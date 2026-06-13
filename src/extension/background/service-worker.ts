@@ -1,5 +1,5 @@
 import type { QuotiMessageResponse } from "../../shared/types/extension-message.types";
-import type { ExtractedPost } from "../../shared/types/post.types";
+import type { ExtractedPost, VideoPostMedia } from "../../shared/types/post.types";
 import { latestPostStorageKey, readQuotiSettings } from "../../shared/settings/quoti-settings";
 
 const contextMenuId = "quoti-create-card";
@@ -114,25 +114,48 @@ async function captureContextPost(tabId: number): Promise<void> {
 }
 
 async function requestContextPost(tabId: number): Promise<QuotiMessageResponse> {
-  const response = (await chrome.tabs.sendMessage(tabId, {
-    type: "QUOTI_GET_CONTEXT_POST",
-    observedVideoUrls: await readObservedVideoUrls(tabId)
-  })) as QuotiMessageResponse;
+  let latestResponse: QuotiMessageResponse | null = null;
 
-  if (response.status !== "success" || !hasMissingVideoUrl(response.post)) {
-    return response;
+  for (const delay of [0, 650, 1250]) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+
+    const response = (await chrome.tabs.sendMessage(tabId, {
+      type: "QUOTI_GET_CONTEXT_POST",
+      observedVideoUrls: await readObservedVideoUrls(tabId)
+    })) as QuotiMessageResponse;
+
+    latestResponse = response;
+
+    if (response.status !== "success" || !hasMissingVideoUrl(response.post)) {
+      return response;
+    }
   }
 
-  await wait(650);
-
-  return chrome.tabs.sendMessage(tabId, {
-    type: "QUOTI_GET_CONTEXT_POST",
-    observedVideoUrls: await readObservedVideoUrls(tabId)
-  }) as Promise<QuotiMessageResponse>;
+  return latestResponse ?? { status: "empty", reason: "Quoti could not read this post." };
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !media.url);
+  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
+}
+
+function hasVideoMediaSource(media: VideoPostMedia): boolean {
+  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoSourceUrl(url))));
+}
+
+function normalizeVideoSourceUrl(value: string | undefined): string | undefined {
+  if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value.replace(/\\u0026/g, "&").replace(/&amp;/g, "&"));
+
+    return ["http:", "https:"].includes(url.protocol) && url.hostname.endsWith("twimg.com") ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function handleInlinePostCaptured(post: unknown): Promise<void> {

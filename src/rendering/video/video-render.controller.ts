@@ -84,6 +84,10 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
   }
 }
 
+export async function preloadVideoRenderer(signal?: AbortSignal): Promise<void> {
+  await loadWasmFfmpegRenderer(signal);
+}
+
 export function getVideoRenderProgressLabel(progress: VideoRenderProgress | null): string | undefined {
   if (!progress) {
     return undefined;

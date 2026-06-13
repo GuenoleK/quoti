@@ -299,6 +299,10 @@ function resolveCardLayout(content: string, media: PostMedia | undefined, mediaS
     return "portrait";
   }
 
+  if (media.type === "image") {
+    return "portrait";
+  }
+
   const estimatedLineCount = estimateRenderedLineCount(content);
   const isLongText = estimatedLineCount > 3;
 
@@ -311,11 +315,7 @@ function resolveCardLayout(content: string, media: PostMedia | undefined, mediaS
   const isVeryTallMedia = mediaRatio >= 1.45;
 
   if (isVeryTallMedia || (isTallMedia && isLongText)) {
-    if (media.type === "video") {
-      return "portrait";
-    }
-
-    return "wide";
+    return "portrait";
   }
 
   if (isTallMedia || isLongText) {
@@ -344,8 +344,8 @@ function getMediaKey(media: PostMedia | undefined): string | undefined {
   return media.type === "image" ? media.url : media.url ?? media.posterUrl;
 }
 
-function getMediaStyle(media: PostMedia, mediaSize: MediaSize | null): React.CSSProperties | undefined {
-  if (media.type !== "video" || !mediaSize) {
+function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null): React.CSSProperties | undefined {
+  if (!mediaSize) {
     return undefined;
   }
 

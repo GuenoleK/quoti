@@ -134,6 +134,7 @@ This structure should only be created when Phase 1 implementation starts. Until 
 | Add progress reporting | Done | Popup labels map to preparing, loading, rendering, finalizing, and ready states. |
 | Add quality presets | Done | Fast, Balanced, and High presets exist; Balanced is the popup default. |
 | Add failure fallbacks | Done | WASM failures fall back to the existing browser WebM renderer when a preview video is available. |
+| Protect first video startup | Done | The popup keeps the captured post visible, retries missing video URL hydration, and warms the video renderer in the background. |
 | Add manual QA checklist | In progress | Build/typecheck pass; real X cases still need manual verification. |
 
 ### Expected FFmpeg Shape

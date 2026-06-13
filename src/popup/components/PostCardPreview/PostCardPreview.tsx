@@ -23,9 +23,10 @@ type CardLayout = "portrait" | "square" | "wide";
 export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: PostCardPreviewProps) {
   const isMountedRef = useRef(true);
   const [mediaSize, setMediaSize] = useState<MediaSize | null>(null);
-  const media = contentMode === "with-media" ? getPrimaryMedia(post.media) : undefined;
-  const mediaKey = getMediaKey(media);
-  const cardLayout = useMemo(() => resolveCardLayout(post.content, mediaSize, Boolean(media)), [media, mediaSize, post.content]);
+  const cachedMedia = getPrimaryMedia(post.media);
+  const media = contentMode === "with-media" ? cachedMedia : undefined;
+  const mediaKey = getMediaKey(cachedMedia);
+  const cardLayout = useMemo(() => resolveCardLayout(post.content, media, mediaSize), [media, mediaSize, post.content]);
 
   useEffect(() => {
     return () => {
@@ -64,9 +65,14 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
 
             <p className="context-card__quote">{post.content}</p>
 
-            {media ? (
-              <figure className="context-card__media" data-media-type={media.type} style={getMediaStyle(media, mediaSize)}>
-                <PostCardMedia media={media} onSize={handleMediaSize} />
+            {cachedMedia ? (
+              <figure
+                className="context-card__media"
+                data-media-type={cachedMedia.type}
+                hidden={contentMode !== "with-media"}
+                style={getMediaStyle(cachedMedia, mediaSize)}
+              >
+                <PostCardMedia active={contentMode === "with-media"} media={cachedMedia} onSize={handleMediaSize} />
               </figure>
             ) : null}
 
@@ -84,12 +90,12 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   );
 }
 
-function PostCardMedia({ media, onSize }: { media: PostMedia; onSize: (size: MediaSize) => void }) {
+function PostCardMedia({ active, media, onSize }: { active: boolean; media: PostMedia; onSize: (size: MediaSize) => void }) {
   if (media.type === "image") {
     return <ImageMedia media={media} onSize={onSize} />;
   }
 
-  return <VideoMedia media={media} onSize={onSize} />;
+  return <VideoMedia active={active} media={media} onSize={onSize} />;
 }
 
 function ImageMedia({ media, onSize }: { media: Extract<PostMedia, { type: "image" }>; onSize: (size: MediaSize) => void }) {
@@ -115,7 +121,7 @@ function ImageMedia({ media, onSize }: { media: Extract<PostMedia, { type: "imag
   );
 }
 
-function VideoMedia({ media, onSize }: { media: Extract<PostMedia, { type: "video" }>; onSize: (size: MediaSize) => void }) {
+function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract<PostMedia, { type: "video" }>; onSize: (size: MediaSize) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [sourceIndex, setSourceIndex] = useState(0);
   const [videoStatus, setVideoStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -129,6 +135,12 @@ function VideoMedia({ media, onSize }: { media: Extract<PostMedia, { type: "vide
     setVideoStatus("idle");
     setVideoError("");
   }, [media.url, media.posterUrl, media.variants]);
+
+  useEffect(() => {
+    if (!active) {
+      videoRef.current?.pause();
+    }
+  }, [active]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -282,8 +294,8 @@ function VideoMedia({ media, onSize }: { media: Extract<PostMedia, { type: "vide
   );
 }
 
-function resolveCardLayout(content: string, mediaSize: MediaSize | null, hasMedia: boolean): CardLayout {
-  if (!hasMedia) {
+function resolveCardLayout(content: string, media: PostMedia | undefined, mediaSize: MediaSize | null): CardLayout {
+  if (!media) {
     return "portrait";
   }
 
@@ -299,6 +311,10 @@ function resolveCardLayout(content: string, mediaSize: MediaSize | null, hasMedi
   const isVeryTallMedia = mediaRatio >= 1.45;
 
   if (isVeryTallMedia || (isTallMedia && isLongText)) {
+    if (media.type === "video") {
+      return "portrait";
+    }
+
     return "wide";
   }
 
@@ -333,9 +349,31 @@ function getMediaStyle(media: PostMedia, mediaSize: MediaSize | null): React.CSS
     return undefined;
   }
 
+  const mediaRatio = mediaSize.height / mediaSize.width;
+  const maxHeight = getVideoMediaMaxHeight(mediaRatio);
+
+  if (maxHeight) {
+    return {
+      aspectRatio: `${mediaSize.width} / ${mediaSize.height}`,
+      width: `min(100%, ${Math.round(maxHeight / mediaRatio)}px)`
+    };
+  }
+
   return {
     aspectRatio: `${mediaSize.width} / ${mediaSize.height}`
   };
+}
+
+function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {
+  if (mediaRatio >= 1.45) {
+    return 560;
+  }
+
+  if (mediaRatio >= 1.18) {
+    return 520;
+  }
+
+  return undefined;
 }
 
 function getPlayableVideoUrl(source: string | undefined): string | undefined {

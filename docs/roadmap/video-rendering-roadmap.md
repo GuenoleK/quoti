@@ -48,7 +48,7 @@ Status legend:
 | Video preview from X media URLs | In progress | HLS and MP4 fallback exist, but X URL discovery can still be timing-sensitive. |
 | Static image fallback for video posts | Done | Video nodes are replaced with a poster snapshot during image export. |
 | Real-time browser video export | Prototype | Useful for learning, but not the long-term path. |
-| Phase 1 FFmpeg WASM renderer | Planned | Main near-term path for bundle-only export. |
+| Phase 1 FFmpeg WASM renderer | In progress | Initial controller/service/adapter implementation exists; real X media QA remains. |
 | Phase 2 Native Messaging renderer | Planned | Optional fast local renderer after Phase 1 is stable. |
 
 ## Phase 1: Bundled FFmpeg WASM Renderer
@@ -124,17 +124,17 @@ This structure should only be created when Phase 1 implementation starts. Until 
 
 | Step | Status | Notes |
 | --- | --- | --- |
-| Define `VideoRenderRequest`, `VideoRenderProgress`, and `VideoRenderResult` | Planned | Contract first. UI should depend on this, not FFmpeg directly. |
-| Move existing realtime export behind a renderer interface | Planned | Keeps current behavior as fallback while new renderer is built. |
-| Add FFmpeg WASM dependency | Planned | Expected packages: `@ffmpeg/ffmpeg` and `@ffmpeg/util`. |
-| Bundle FFmpeg core assets locally | Planned | Must not load executable code from a CDN. |
-| Resolve source media into local input files | Planned | Fetch MP4 directly when possible; support HLS when needed. |
-| Generate card/template overlay assets | Planned | Start with a PNG background/card layer, then improve if needed. |
-| Compose MP4 with audio | Planned | Prefer copying audio when compatible; transcode to AAC when needed. |
-| Add progress reporting | Planned | FFmpeg logs/progress should map to UI states. |
-| Add quality presets | Planned | Start with one default preset, then add Fast/Balanced/High. |
-| Add failure fallbacks | Planned | Copy image remains available; errors should explain what failed. |
-| Add manual QA checklist | Planned | Test short video, long video, vertical video, no-audio video, HLS-only video. |
+| Define `VideoRenderRequest`, `VideoRenderProgress`, and `VideoRenderResult` | Done | Contract lives in `src/rendering/video/video-render.types.ts`. |
+| Move existing realtime export behind a renderer interface | Done | Current MediaRecorder/WebM export is now the browser fallback renderer. |
+| Add FFmpeg WASM dependency | Done | Uses `@ffmpeg/ffmpeg`, `@ffmpeg/util`, and local `@ffmpeg/core` assets. |
+| Bundle FFmpeg core assets locally | Done | Vite emits `assets/ffmpeg/ffmpeg-core.js` and `assets/ffmpeg/ffmpeg-core.wasm`. |
+| Resolve source media into local input files | Done | MP4 is preferred when available; HLS playlists and segments are materialized locally. |
+| Generate card/template overlay assets | Done | The popup card DOM is rendered to a PNG template with a media slot. |
+| Compose MP4 with audio | Done | WASM FFmpeg maps source audio when available and transcodes to AAC. |
+| Add progress reporting | Done | Popup labels map to preparing, loading, rendering, finalizing, and ready states. |
+| Add quality presets | Done | Fast, Balanced, and High presets exist; Balanced is the popup default. |
+| Add failure fallbacks | Done | WASM failures fall back to the existing browser WebM renderer when a preview video is available. |
+| Add manual QA checklist | In progress | Build/typecheck pass; real X cases still need manual verification. |
 
 ### Expected FFmpeg Shape
 
@@ -159,6 +159,7 @@ For Phase 1, this command runs through FFmpeg WASM, not native FFmpeg.
 ### Phase 1 Risks
 
 - FFmpeg WASM can significantly increase extension size.
+- The current local FFmpeg core adds about 32 MB uncompressed to the extension build.
 - Initial renderer load may be slow.
 - Large videos can hit browser memory limits.
 - HLS handling can be complex because X may expose separate video/audio playlists.

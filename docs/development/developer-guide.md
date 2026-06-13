@@ -108,10 +108,19 @@ No Go or Rust is required for Phase 1.
 Expected packages when implementation starts:
 
 ```bash
-npm install @ffmpeg/ffmpeg @ffmpeg/util
+npm install @ffmpeg/ffmpeg @ffmpeg/util @ffmpeg/core
 ```
 
 Do not load FFmpeg WASM code from a CDN in extension runtime. Manifest V3 extensions must package executable code with the extension.
+
+The extension build copies the local FFmpeg core assets into:
+
+```text
+dist/assets/ffmpeg/ffmpeg-core.js
+dist/assets/ffmpeg/ffmpeg-core.wasm
+```
+
+The Manifest V3 CSP includes `wasm-unsafe-eval` so Chrome can compile the packaged WebAssembly module. Do not replace the local core URLs with CDN URLs.
 
 ### Development Goals
 
@@ -123,6 +132,18 @@ The Phase 1 implementation should:
 - use local extension-packaged WASM assets;
 - preserve `Copy image` as a fallback;
 - provide progress and useful errors.
+
+Current implementation notes:
+
+- The public entry point is `src/rendering/video/video-render.controller.ts`.
+- The popup calls the controller and does not call FFmpeg directly.
+- Direct MP4 sources are preferred for reliability.
+- HLS playlists are downloaded, rewritten, and passed to FFmpeg as local virtual files.
+- If WASM rendering fails and a preview video element is available, Quoti falls back to the previous browser WebM renderer.
+- The popup keeps media nodes mounted while toggling Text only/With media so loaded image and video context is not lost.
+- Tall video media is height-capped in the card layout while preserving the source aspect ratio.
+- Video templates render at 1.5x instead of the static image 2x export scale to keep WASM encoding practical.
+- The default WASM preset favors faster x264 encoding over smaller output files, then copies audio when MP4-compatible.
 
 ### Expected Manual Test Matrix
 

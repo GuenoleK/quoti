@@ -22,6 +22,7 @@ type CanvasTheme = {
 const canvasWidth = 720;
 const cardPadding = 48;
 const frameRate = 18;
+const mediaCornerRadius = 28;
 
 type AudioCapture = {
   cleanup: () => void;
@@ -299,6 +300,8 @@ type CardMetrics = {
   dateY: number;
   footerY: number;
   mediaHeight: number;
+  mediaWidth: number;
+  mediaX: number;
   mediaY: number;
   quoteLines: string[];
   quoteY: number;
@@ -306,14 +309,18 @@ type CardMetrics = {
 
 function measureCard(post: ExtractedPost, video: HTMLVideoElement): CardMetrics {
   const cardWidth = canvasWidth;
+  const contentX = cardPadding;
   const contentWidth = cardWidth - cardPadding * 2;
   const probe = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
-  probe.font = "30px Georgia, serif";
+  probe.font = "34px Georgia, serif";
 
-  const quoteLines = wrapText(probe, post.content, contentWidth, 36).slice(0, 12);
-  const quoteHeight = quoteLines.length * 38;
+  const quoteLines = wrapText(probe, post.content, contentWidth, 34).slice(0, 12);
+  const quoteHeight = quoteLines.length * 42;
   const videoRatio = video.videoHeight && video.videoWidth ? video.videoHeight / video.videoWidth : 9 / 16;
-  const mediaHeight = Math.round(contentWidth * videoRatio);
+  const maxMediaHeight = getVideoMediaMaxHeight(videoRatio) ?? Math.round(contentWidth * videoRatio);
+  const mediaHeight = Math.min(Math.round(contentWidth * videoRatio), maxMediaHeight);
+  const mediaWidth = Math.round(mediaHeight / videoRatio);
+  const mediaX = contentX + Math.round((contentWidth - mediaWidth) / 2);
   const quoteY = cardPadding + 72;
   const mediaY = quoteY + quoteHeight + 34;
   const footerY = mediaY + mediaHeight + 58;
@@ -324,11 +331,13 @@ function measureCard(post: ExtractedPost, video: HTMLVideoElement): CardMetrics 
     canvasHeight: cardHeight,
     cardHeight,
     cardWidth,
-    contentX: cardPadding,
+    contentX,
     contentWidth,
     dateY: cardPadding + 24,
     footerY,
     mediaHeight,
+    mediaWidth,
+    mediaX,
     mediaY,
     quoteLines,
     quoteY
@@ -355,16 +364,16 @@ function renderVideoFrame(
   context.fillText(formatPublishedDate(post.publishedAt), canvasWidth - cardPadding, metrics.dateY);
 
   context.fillStyle = theme.quote;
-  context.font = "30px Georgia, serif";
+  context.font = "34px Georgia, serif";
   context.textAlign = "left";
   metrics.quoteLines.forEach((line, index) => {
-    context.fillText(line, metrics.contentX, metrics.quoteY + index * 38);
+    context.fillText(line, metrics.contentX, metrics.quoteY + index * 42);
   });
 
-  drawRoundRect(context, metrics.contentX, metrics.mediaY, metrics.contentWidth, metrics.mediaHeight, 18, "#000");
+  drawRoundRect(context, metrics.mediaX, metrics.mediaY, metrics.mediaWidth, metrics.mediaHeight, mediaCornerRadius, "#000");
   context.save();
-  roundedClip(context, metrics.contentX, metrics.mediaY, metrics.contentWidth, metrics.mediaHeight, 18);
-  context.drawImage(video, metrics.contentX, metrics.mediaY, metrics.contentWidth, metrics.mediaHeight);
+  roundedClip(context, metrics.mediaX, metrics.mediaY, metrics.mediaWidth, metrics.mediaHeight, mediaCornerRadius);
+  context.drawImage(video, metrics.mediaX, metrics.mediaY, metrics.mediaWidth, metrics.mediaHeight);
   context.restore();
 
   context.strokeStyle = theme.border;
@@ -389,6 +398,18 @@ function renderVideoFrame(
   context.textAlign = "right";
   context.fillText("Quoti", metrics.contentX + metrics.contentWidth, metrics.authorY + 10);
   context.textAlign = "left";
+}
+
+function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {
+  if (mediaRatio >= 1.45) {
+    return 560;
+  }
+
+  if (mediaRatio >= 1.18) {
+    return 520;
+  }
+
+  return undefined;
 }
 
 function drawPlatformMark(context: CanvasRenderingContext2D, x: number, y: number): void {

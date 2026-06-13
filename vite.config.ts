@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 
 export default defineConfig({
-  plugins: [react(), wrapContentScript()],
+  plugins: [react(), wrapContentScript(), copyFfmpegCoreAssets()],
   build: {
     emptyOutDir: true,
     rollupOptions: {
@@ -31,6 +33,21 @@ function wrapContentScript(): Plugin {
       if (chunk?.type === "chunk") {
         chunk.code = `{\n${chunk.code}\n}`;
       }
+    }
+  };
+}
+
+function copyFfmpegCoreAssets(): Plugin {
+  return {
+    name: "copy-ffmpeg-core-assets",
+    generateBundle(): void {
+      ["ffmpeg-core.js", "ffmpeg-core.wasm"].forEach((filename) => {
+        this.emitFile({
+          fileName: `assets/ffmpeg/${filename}`,
+          source: readFileSync(resolve("node_modules", "@ffmpeg", "core", "dist", "esm", filename)),
+          type: "asset"
+        });
+      });
     }
   };
 }

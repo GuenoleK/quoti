@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
-import type { CardContentMode, CardTheme, ExtractedPost } from "../shared/types/post.types";
+import type { CardContentMode, CardTheme, ExtractedPost, PostMedia } from "../shared/types/post.types";
 import { latestPostStorageKey } from "../shared/settings/quoti-settings";
 import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
 import { downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
-import { downloadBlob, exportPostVideoToWebmBlob } from "../shared/utils/video-export.util";
+import { downloadBlob } from "../shared/utils/video-export.util";
+import { getVideoRenderProgressLabel, renderPostVideo } from "../rendering/video/video-render.controller";
+import type { VideoRenderProgress } from "../rendering/video/video-render.types";
 import { EmptyState } from "./components/EmptyState/EmptyState";
 import { CardContentToggle } from "./components/CardContentToggle/CardContentToggle";
 import { CardThemeToggle } from "./components/CardThemeToggle/CardThemeToggle";
@@ -25,6 +27,7 @@ const unsupportedPageMessage = "Open x.com or twitter.com, hover a post, then op
 export function Popup() {
   const exportRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
+  const postMediaCacheRef = useRef<Map<string, PostMedia[]>>(new Map());
   const [capture, setCapture] = useState<CaptureState>({
     post: null,
     status: "idle",
@@ -35,6 +38,7 @@ export function Popup() {
   const [contentMode, setContentMode] = useState<CardContentMode>("text-only");
   const [cardTheme, setCardTheme] = useState<CardTheme>("light");
   const [notice, setNotice] = useState<string>("");
+  const [videoRenderProgress, setVideoRenderProgress] = useState<VideoRenderProgress | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -72,17 +76,19 @@ export function Popup() {
       }
 
       if (pendingPost) {
+        const post = preserveSessionMedia(postMediaCacheRef.current, pendingPost);
+
         setCapture({
-          post: pendingPost,
+          post,
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(pendingPost.media.length > 0 ? "with-media" : "text-only");
+        setContentMode(post.media.length > 0 ? "with-media" : "text-only");
         return;
       }
 
       if (!isChromeExtensionRuntime()) {
-        const previewPost = createPreviewPost();
+        const previewPost = preserveSessionMedia(postMediaCacheRef.current, createPreviewPost());
 
         setCapture({
           post: previewPost,
@@ -115,12 +121,14 @@ export function Popup() {
       }
 
       if (response.status === "success") {
+        const post = preserveSessionMedia(postMediaCacheRef.current, response.post);
+
         setCapture({
-          post: response.post,
+          post,
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(response.post.media.length > 0 ? "with-media" : "text-only");
+        setContentMode(post.media.length > 0 ? "with-media" : "text-only");
         return;
       }
 
@@ -160,6 +168,10 @@ export function Popup() {
     setActionFeedback(null);
     setNotice("");
 
+    if (actionName === "download") {
+      setVideoRenderProgress(null);
+    }
+
     try {
       await action();
       if (!isMountedRef.current) {
@@ -192,23 +204,22 @@ export function Popup() {
 
       if (videoMedia) {
         const video = exportRef.current?.querySelector<HTMLVideoElement>(".context-card__video");
-
-        if (!video) {
-          throw new Error("Quoti could not find the video player.");
-        }
-
-        const blob = await exportPostVideoToWebmBlob({
+        const result = await renderPostVideo({
+          browserVideo: video,
           cardTheme,
           post,
-          video
+          quality: "balanced",
+          onProgress: setVideoRenderProgress,
+          templateNode: exportRef.current as HTMLElement
         });
 
-        downloadBlob(blob, createPostFilename(post, "webm"));
+        downloadBlob(result.blob, createPostFilename(post, result.filenameExtension));
         return;
       }
 
       const dataUrl = await exportNodeToJpegDataUrl(exportRef.current as HTMLElement);
       downloadDataUrl(dataUrl, createPostFilename(post, "jpg"));
+      setVideoRenderProgress(null);
     });
   };
 
@@ -309,6 +320,7 @@ export function Popup() {
             actionFeedback={actionFeedback}
             busyAction={busyAction}
             canOpenSource={Boolean(capture.post.sourceUrl)}
+            downloadProgressLabel={getVideoRenderProgressLabel(videoRenderProgress)}
             downloadMode={getPrimaryVideo(capture.post) ? "video" : "image"}
             isBusy={isBusy}
             onCopyImage={handleCopyImage}
@@ -444,6 +456,95 @@ function isChromeExtensionRuntime(): boolean {
 
 function wait(duration: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, duration));
+}
+
+function preserveSessionMedia(cache: Map<string, PostMedia[]>, post: ExtractedPost): ExtractedPost {
+  const cacheKey = getPostCacheKey(post);
+
+  if (!cacheKey) {
+    return post;
+  }
+
+  const cachedMedia = cache.get(cacheKey);
+  const hydratedPost = cachedMedia
+    ? {
+        ...post,
+        media: mergePostMedia(post.media, cachedMedia)
+      }
+    : post;
+
+  cache.set(cacheKey, hydratedPost.media);
+
+  return hydratedPost;
+}
+
+function getPostCacheKey(post: ExtractedPost): string {
+  return post.sourceUrl || post.id;
+}
+
+function mergePostMedia(currentMedia: PostMedia[], cachedMedia: PostMedia[]): PostMedia[] {
+  if (currentMedia.length === 0 && cachedMedia.length > 0) {
+    return cachedMedia;
+  }
+
+  return currentMedia.map((media, index) => {
+    const cached = findCachedMedia(media, cachedMedia, index);
+
+    if (!cached || cached.type !== media.type) {
+      return media;
+    }
+
+    if (media.type === "image" && cached.type === "image") {
+      return {
+        ...media,
+        alt: media.alt ?? cached.alt,
+        url: media.url || cached.url
+      };
+    }
+
+    if (media.type === "video" && cached.type === "video") {
+      const variants = mergeUrlList([media.url, ...(media.variants ?? []), cached.url, ...(cached.variants ?? [])]);
+
+      return {
+        ...media,
+        alt: media.alt ?? cached.alt,
+        duration: media.duration ?? cached.duration,
+        posterUrl: media.posterUrl ?? cached.posterUrl,
+        url: media.url ?? cached.url ?? variants[0],
+        variants
+      };
+    }
+
+    return media;
+  });
+}
+
+function findCachedMedia(media: PostMedia, cachedMedia: PostMedia[], index: number): PostMedia | undefined {
+  const exactMatch = cachedMedia.find((cached) => {
+    if (cached.type !== media.type) {
+      return false;
+    }
+
+    if (media.type === "image" && cached.type === "image") {
+      return cached.url === media.url;
+    }
+
+    if (media.type === "video" && cached.type === "video") {
+      return Boolean(
+        (media.url && cached.url === media.url) ||
+          (media.posterUrl && cached.posterUrl === media.posterUrl) ||
+          (media.posterUrl && cached.variants?.includes(media.posterUrl))
+      );
+    }
+
+    return false;
+  });
+
+  return exactMatch ?? (cachedMedia[index]?.type === media.type ? cachedMedia[index] : undefined);
+}
+
+function mergeUrlList(urls: Array<string | undefined>): string[] {
+  return [...new Set(urls.filter((url): url is string => typeof url === "string" && url.length > 0))];
 }
 
 async function readPendingPost(): Promise<ExtractedPost | null> {

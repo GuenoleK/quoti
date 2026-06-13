@@ -8,6 +8,7 @@ type PostCardActionsProps = {
   } | null;
   busyAction: string | null;
   canOpenSource: boolean;
+  downloadProgressLabel?: string;
   downloadMode: "image" | "video";
   isBusy: boolean;
   onCopyImage: () => void;
@@ -22,6 +23,7 @@ export function PostCardActions({
   actionFeedback,
   busyAction,
   canOpenSource,
+  downloadProgressLabel,
   downloadMode,
   isBusy,
   onCopyImage,
@@ -33,7 +35,14 @@ export function PostCardActions({
 }: PostCardActionsProps) {
   const copyImageLabel = getActionLabel("copy-image", busyAction, actionFeedback, "Copy image");
   const copySourceLabel = getActionLabel("copy-source", busyAction, actionFeedback, "Copy source");
-  const downloadLabel = getActionLabel("download", busyAction, actionFeedback, downloadMode === "video" ? "Download video" : "Download JPG", downloadMode);
+  const downloadLabel = getActionLabel(
+    "download",
+    busyAction,
+    actionFeedback,
+    downloadMode === "video" ? "Download video" : "Download JPG",
+    downloadMode,
+    downloadProgressLabel
+  );
   const copyTextLabel = getActionLabel("copy-text", busyAction, actionFeedback, "Copy text");
   const isVideoDownload = downloadMode === "video";
 
@@ -140,10 +149,11 @@ function getActionLabel(
   busyAction: string | null,
   feedback: PostCardActionsProps["actionFeedback"],
   fallback: string,
-  downloadMode: PostCardActionsProps["downloadMode"] = "image"
+  downloadMode: PostCardActionsProps["downloadMode"] = "image",
+  progressLabel?: string
 ): string {
   if (busyAction === action) {
-    return action === "download" ? "Preparing..." : "Copying...";
+    return action === "download" ? progressLabel ?? "Preparing..." : "Copying...";
   }
 
   if (feedback?.action === action && feedback.status === "success") {

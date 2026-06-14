@@ -617,13 +617,15 @@ function hydratePostVideoUrls(post: ExtractedPost, observedVideoUrls: string[]):
   }
 
   let changed = false;
+  const videoCount = post.media.filter((item) => item.type === "video").length;
+  const fallbackObservedUrls = videoCount === 1 ? readSingleObservedVideoSourceUrls(observedVideoUrls) : [];
   const media = post.media.map((item) => {
     if (item.type !== "video") {
       return item;
     }
 
     const observedUrls = readObservedVideoUrlsForMedia(item.posterUrl, observedVideoUrls);
-    const variants = mergeUrlList([item.url, ...(item.variants ?? []), ...observedUrls]);
+    const variants = mergeUrlList([item.url, ...(item.variants ?? []), ...observedUrls, ...(observedUrls.length === 0 ? fallbackObservedUrls : [])]);
 
     if (variants.length === 0) {
       return item;
@@ -658,6 +660,26 @@ function readObservedVideoUrlsForMedia(posterUrl: string | undefined, observedVi
         .filter((url) => url.includes(`/${mediaId}/`) && !isVideoSegmentUrl(url))
     )
   ].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
+}
+
+function readSingleObservedVideoSourceUrls(observedVideoUrls: string[]): string[] {
+  const urls = [
+    ...new Set(
+      observedVideoUrls
+        .map(normalizeVideoSourceUrl)
+        .filter((url): url is string => Boolean(url))
+        .filter((url) => !isVideoSegmentUrl(url))
+    )
+  ];
+  const sourceEntries = urls.map((url) => ({
+    id: extractTwitterVideoSourceId(url),
+    url
+  }));
+  const sourceIds = new Set(sourceEntries.map(({ id }) => id).filter((id): id is string => Boolean(id)));
+
+  return sourceIds.size === 1 && sourceEntries.every(({ id }) => Boolean(id))
+    ? sourceEntries.map(({ url }) => url).sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a))
+    : [];
 }
 
 async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): Promise<QuotiMessageResponse> {
@@ -722,6 +744,16 @@ function extractTwitterVideoMediaId(value: string | undefined): string | undefin
     const url = new URL(value);
 
     return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(url.pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
   } catch {
     return undefined;
   }

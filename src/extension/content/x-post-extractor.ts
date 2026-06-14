@@ -647,7 +647,9 @@ function readVideoUrls(
     ...readObservedVideoUrls(posterUrl, articleVideoUrls),
     ...readObservedVideoUrls(posterUrl, observedVideoUrls),
     ...readObservedVideoUrls(posterUrl, readLocalObservedVideoUrls()),
-    ...(allowArticleFallback ? readScopedFallbackVideoUrls(articleVideoUrls) : [])
+    ...(allowArticleFallback ? readScopedFallbackVideoUrls(articleVideoUrls) : []),
+    ...(allowArticleFallback ? readScopedFallbackVideoUrls(observedVideoUrls) : []),
+    ...(allowArticleFallback ? readScopedFallbackVideoUrls(readLocalObservedVideoUrls()) : [])
   ];
 
   return [...new Set(candidates.map(normalizeVideoUrl).filter((url): url is string => Boolean(url)))].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
@@ -656,7 +658,7 @@ function readVideoUrls(
 function readArticleAttachedVideoUrls(article: HTMLElement): string[] {
   const urls = new Set<string>();
   const seen = new WeakSet<object>();
-  const nodes = [article, ...Array.from(article.querySelectorAll<HTMLElement>("*"))].slice(0, 80);
+  const nodes = [article, ...Array.from(article.querySelectorAll<HTMLElement>("*"))].slice(0, 220);
 
   nodes.forEach((node) => {
     Object.keys(node)
@@ -668,7 +670,7 @@ function readArticleAttachedVideoUrls(article: HTMLElement): string[] {
 }
 
 function collectTwitterVideoUrls(value: unknown, urls: Set<string>, seen: WeakSet<object>, depth: number): void {
-  if (depth > 10 || urls.size > 40 || value === null || value === undefined) {
+  if (depth > 10 || urls.size > 120 || value === null || value === undefined) {
     return;
   }
 
@@ -692,12 +694,12 @@ function collectTwitterVideoUrls(value: unknown, urls: Set<string>, seen: WeakSe
   }
 
   if (Array.isArray(value)) {
-    value.slice(0, 60).forEach((item) => collectTwitterVideoUrls(item, urls, seen, depth + 1));
+    value.slice(0, 80).forEach((item) => collectTwitterVideoUrls(item, urls, seen, depth + 1));
     return;
   }
 
   Object.entries(value as Record<string, unknown>)
-    .slice(0, 120)
+    .slice(0, 160)
     .forEach(([, item]) => collectTwitterVideoUrls(item, urls, seen, depth + 1));
 }
 

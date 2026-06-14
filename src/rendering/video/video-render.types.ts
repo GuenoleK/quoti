@@ -79,6 +79,12 @@ export type VideoTemplateAsset = {
     y: number;
   };
   path: string;
+  sourceCrop?: {
+    height: number;
+    width: number;
+    x: number;
+    y: number;
+  };
   width: number;
 };
 

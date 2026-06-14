@@ -47,6 +47,7 @@ function toNativeTemplatePayload(template: VideoTemplateAsset) {
     dataBase64: bytesToBase64(template.data),
     height: template.height,
     mediaRect: template.mediaRect,
+    sourceCrop: template.sourceCrop,
     width: template.width
   };
 }

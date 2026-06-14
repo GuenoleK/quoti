@@ -673,76 +673,6 @@ function PopupSettings({
       </div>
 
       <div className="popup-settings__group">
-        <h2 className="popup-settings__heading">Card</h2>
-        <div className="popup-settings__field">
-          <span className="popup-settings__label">Theme</span>
-          <div
-            className="popup-settings__segmented"
-            data-option-count="2"
-            data-selected-index={getCardThemeIndex(settings.cardTheme)}
-            role="group"
-            aria-label="Card theme"
-          >
-            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
-            {[
-              ["light", "Light"],
-              ["dark", "Dark"]
-            ].map(([value, label]) => (
-              <button
-                className={settings.cardTheme === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
-                key={value}
-                onClick={() => onChange("cardTheme", value as QuotiSettings["cardTheme"])}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <ul className="popup-settings__choice-help">
-            <li className={settings.cardTheme === "light" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
-              <strong>Light</strong> keeps the warm editorial card.
-            </li>
-            <li className={settings.cardTheme === "dark" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
-              <strong>Dark</strong> uses a deeper card for dark captures.
-            </li>
-          </ul>
-        </div>
-        <div className="popup-settings__field">
-          <span className="popup-settings__label">Content</span>
-          <div
-            className="popup-settings__segmented"
-            data-option-count="2"
-            data-selected-index={getCardContentModeIndex(settings.cardContentMode)}
-            role="group"
-            aria-label="Card content"
-          >
-            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
-            {[
-              ["text-only", "Text only"],
-              ["with-media", "With media"]
-            ].map(([value, label]) => (
-              <button
-                className={settings.cardContentMode === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
-                key={value}
-                onClick={() => onChange("cardContentMode", value as QuotiSettings["cardContentMode"])}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <ul className="popup-settings__choice-help">
-            <li className={settings.cardContentMode === "text-only" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
-              <strong>Text only</strong> keeps the export focused on the post copy.
-            </li>
-            <li className={settings.cardContentMode === "with-media" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
-              <strong>With media</strong> includes images or videos when the post has them.
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <div className="popup-settings__group">
         <h2 className="popup-settings__heading">Video Export</h2>
         <div className="popup-settings__field">
           <span className="popup-settings__label">Exporter</span>
@@ -835,14 +765,6 @@ function getVideoQualityIndex(value: QuotiSettings["videoQuality"]): number {
   }
 
   return 0;
-}
-
-function getCardThemeIndex(value: QuotiSettings["cardTheme"]): number {
-  return value === "dark" ? 1 : 0;
-}
-
-function getCardContentModeIndex(value: QuotiSettings["cardContentMode"]): number {
-  return value === "with-media" ? 1 : 0;
 }
 
 function resolveCardContentModePreference(post: ExtractedPost | null, preference: CardContentMode): CardContentMode {

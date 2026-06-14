@@ -277,13 +277,29 @@ function buildVideoFilter(template) {
   const { height, width, x, y } = template.mediaRect;
   const canvasWidth = makeEven(template.width);
   const canvasHeight = makeEven(template.height);
+  const sourceFilter = template.sourceCrop ? `crop=${buildSourceCropExpression(template.sourceCrop)},` : "";
 
   return [
-    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[media]`,
+    `[0:v]${sourceFilter}scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[media]`,
     `color=c=black@0:s=${canvasWidth}x${canvasHeight},format=rgba[base]`,
     `[base][media]overlay=${x}:${y}:shortest=1[media_canvas]`,
     `[media_canvas][1:v]overlay=0:0:shortest=1,crop=${canvasWidth}:${canvasHeight},format=yuv420p[v]`
   ].join(";");
+}
+
+function buildSourceCropExpression(crop) {
+  return [
+    `w=trunc(iw*${formatCropValue(crop.width)}/2)*2`,
+    `h=trunc(ih*${formatCropValue(crop.height)}/2)*2`,
+    `x=trunc(iw*${formatCropValue(crop.x)}/2)*2`,
+    `y=trunc(ih*${formatCropValue(crop.y)}/2)*2`
+  ].join(":");
+}
+
+function formatCropValue(value) {
+  const numericValue = Number(value);
+
+  return Math.max(0, Math.min(1, Number.isFinite(numericValue) ? numericValue : 0)).toFixed(6);
 }
 
 function getQualityPreset(quality) {

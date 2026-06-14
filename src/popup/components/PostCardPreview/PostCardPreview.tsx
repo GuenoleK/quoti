@@ -22,12 +22,15 @@ type CardLayout = "portrait" | "square" | "wide";
 
 export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: PostCardPreviewProps) {
   const isMountedRef = useRef(true);
-  const [mediaSize, setMediaSize] = useState<MediaSize | null>(null);
+  const [primaryMediaSize, setPrimaryMediaSize] = useState<MediaSize | null>(null);
+  const [relatedMediaSize, setRelatedMediaSize] = useState<MediaSize | null>(null);
   const primaryMedia = getPrimaryMedia(post.media);
   const relatedMedia = getPrimaryMedia(post.relatedPost?.media ?? []);
   const layoutMedia = contentMode === "with-media" ? primaryMedia ?? relatedMedia : undefined;
-  const mediaKey = getMediaKey(primaryMedia ?? relatedMedia);
-  const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, mediaSize), [layoutMedia, mediaSize, post]);
+  const layoutMediaSize = primaryMedia ? primaryMediaSize : relatedMediaSize;
+  const primaryMediaKey = getMediaKey(primaryMedia);
+  const relatedMediaKey = getMediaKey(relatedMedia);
+  const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, layoutMediaSize), [layoutMedia, layoutMediaSize, post]);
 
   useEffect(() => {
     return () => {
@@ -37,15 +40,28 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
 
   useEffect(() => {
     isMountedRef.current = true;
-    setMediaSize(null);
-  }, [mediaKey]);
+    setPrimaryMediaSize(null);
+  }, [primaryMediaKey]);
 
-  const handleMediaSize = (size: MediaSize): void => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    setRelatedMediaSize(null);
+  }, [relatedMediaKey]);
+
+  const handlePrimaryMediaSize = (size: MediaSize): void => {
     if (!isMountedRef.current) {
       return;
     }
 
-    setMediaSize(size);
+    setPrimaryMediaSize(size);
+  };
+
+  const handleRelatedMediaSize = (size: MediaSize): void => {
+    if (!isMountedRef.current) {
+      return;
+    }
+
+    setRelatedMediaSize(size);
   };
 
   return (
@@ -68,26 +84,34 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
               <p className="context-card__quote">
                 <EmojiText text={post.content} />
               </p>
+              {post.relatedPost && primaryMedia ? (
+                <PostCardMediaFigure
+                  active={contentMode === "with-media"}
+                  media={primaryMedia}
+                  mediaSize={primaryMediaSize}
+                  onMediaSize={handlePrimaryMediaSize}
+                  showMedia={contentMode === "with-media"}
+                />
+              ) : null}
               {post.relatedPost ? (
                 <RelatedPostCard
                   active={contentMode === "with-media"}
-                  mediaSize={mediaSize}
-                  onMediaSize={handleMediaSize}
+                  mediaSize={relatedMediaSize}
+                  onMediaSize={handleRelatedMediaSize}
                   relatedPost={post.relatedPost}
                   showMedia={contentMode === "with-media"}
                 />
               ) : null}
             </div>
 
-            {primaryMedia ? (
-              <figure
-                className="context-card__media"
-                data-media-type={primaryMedia.type}
-                hidden={contentMode !== "with-media"}
-                style={getMediaStyle(primaryMedia, mediaSize)}
-              >
-                <PostCardMedia active={contentMode === "with-media"} media={primaryMedia} onSize={handleMediaSize} />
-              </figure>
+            {primaryMedia && !post.relatedPost ? (
+              <PostCardMediaFigure
+                active={contentMode === "with-media"}
+                media={primaryMedia}
+                mediaSize={primaryMediaSize}
+                onMediaSize={handlePrimaryMediaSize}
+                showMedia={contentMode === "with-media"}
+              />
             ) : null}
 
             <footer className="context-card__footer">
@@ -101,6 +125,31 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
         </article>
       </div>
     </section>
+  );
+}
+
+function PostCardMediaFigure({
+  active,
+  media,
+  mediaSize,
+  onMediaSize,
+  showMedia
+}: {
+  active: boolean;
+  media: PostMedia;
+  mediaSize: MediaSize | null;
+  onMediaSize: (size: MediaSize) => void;
+  showMedia: boolean;
+}) {
+  return (
+    <figure
+      className="context-card__media"
+      data-media-type={media.type}
+      hidden={!showMedia}
+      style={getMediaStyle(media, mediaSize)}
+    >
+      <PostCardMedia active={active} media={media} onSize={onMediaSize} />
+    </figure>
   );
 }
 
@@ -174,6 +223,7 @@ function ImageMedia({ media, onSize }: { media: Extract<PostMedia, { type: "imag
 }
 
 function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract<PostMedia, { type: "video" }>; onSize: (size: MediaSize) => void }) {
+  const posterSizeRef = useRef<MediaSize | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [sourceIndex, setSourceIndex] = useState(0);
   const [videoStatus, setVideoStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -183,6 +233,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
   const posterUrl = getPreviewImageUrl(media.posterUrl);
 
   useEffect(() => {
+    posterSizeRef.current = null;
     setSourceIndex(0);
     setVideoStatus("idle");
     setVideoError("");
@@ -311,7 +362,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
           const video = event.currentTarget;
           setVideoStatus("ready");
 
-          if (video.videoWidth && video.videoHeight) {
+          if (!posterSizeRef.current && video.videoWidth && video.videoHeight) {
             onSize({
               height: video.videoHeight,
               width: video.videoWidth
@@ -330,10 +381,9 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
           src={posterUrl}
           alt={media.alt ?? ""}
           onLoad={(event) => {
-            onSize({
-              height: event.currentTarget.naturalHeight,
-              width: event.currentTarget.naturalWidth
-            });
+            const size = getVisibleImageSize(event.currentTarget);
+            posterSizeRef.current = size;
+            onSize(size);
           }}
         />
       ) : null}
@@ -344,6 +394,77 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
       ) : null}
     </div>
   );
+}
+
+function getVisibleImageSize(image: HTMLImageElement): MediaSize {
+  const fallbackSize = {
+    height: image.naturalHeight,
+    width: image.naturalWidth
+  };
+
+  if (!image.naturalWidth || !image.naturalHeight) {
+    return fallbackSize;
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!context) {
+      return fallbackSize;
+    }
+
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    context.drawImage(image, 0, 0);
+
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const top = findFirstNonLetterboxRow(pixels, canvas.width, canvas.height);
+    const bottom = findFirstNonLetterboxRow(pixels, canvas.width, canvas.height, true);
+    const visibleHeight = bottom >= top ? bottom - top + 1 : canvas.height;
+
+    if (visibleHeight / canvas.height > 0.92 || visibleHeight < canvas.height * 0.35) {
+      return fallbackSize;
+    }
+
+    return {
+      height: visibleHeight,
+      width: canvas.width
+    };
+  } catch {
+    return fallbackSize;
+  }
+}
+
+function findFirstNonLetterboxRow(pixels: Uint8ClampedArray, width: number, height: number, reverse = false): number {
+  for (let step = 0; step < height; step += 1) {
+    const row = reverse ? height - 1 - step : step;
+
+    if (!isLetterboxRow(pixels, width, row)) {
+      return row;
+    }
+  }
+
+  return reverse ? height - 1 : 0;
+}
+
+function isLetterboxRow(pixels: Uint8ClampedArray, width: number, row: number): boolean {
+  let darkPixels = 0;
+  const offset = row * width * 4;
+
+  for (let column = 0; column < width; column += 1) {
+    const index = offset + column * 4;
+    const alpha = pixels[index + 3];
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+
+    if (alpha < 8 || (red < 18 && green < 18 && blue < 18)) {
+      darkPixels += 1;
+    }
+  }
+
+  return darkPixels / width > 0.92;
 }
 
 function resolveCardLayout(content: string, media: PostMedia | undefined, mediaSize: MediaSize | null): CardLayout {

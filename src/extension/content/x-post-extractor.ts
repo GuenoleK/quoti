@@ -519,7 +519,7 @@ function readPostContent(
   const text = postBlocks[0]?.content ?? "";
 
   if (text) {
-    const related = readRelatedPost(article, postBlocks.slice(1), observedVideoUrls);
+    const related = readRelatedPost(article, postBlocks[0].block, postBlocks.slice(1), observedVideoUrls);
 
     return {
       content: text,
@@ -543,6 +543,7 @@ function readPostContent(
 
 function readRelatedPost(
   article: HTMLElement,
+  primaryBlock: HTMLElement,
   postBlocks: Array<{ block: HTMLElement; content: string }>,
   observedVideoUrls: string[]
 ): { container: HTMLElement | null; post: RelatedPost } | undefined {
@@ -552,7 +553,7 @@ function readRelatedPost(
     return undefined;
   }
 
-  const relatedContainer = findRelatedPostContainer(article, relatedBlock.block);
+  const relatedContainer = findRelatedPostContainer(article, relatedBlock.block, primaryBlock);
   const authorBlock = relatedContainer?.querySelector<HTMLElement>('[data-testid="User-Name"]') ?? null;
   const media = relatedContainer ? readPostMedia(relatedContainer, observedVideoUrls) : [];
 
@@ -597,11 +598,15 @@ function readTweetTextBlockContent(block: HTMLElement): string {
   return normalizePostContent(parts.join(""));
 }
 
-function findRelatedPostContainer(article: HTMLElement, block: HTMLElement): HTMLElement | null {
+function findRelatedPostContainer(article: HTMLElement, block: HTMLElement, primaryBlock: HTMLElement): HTMLElement | null {
   let current = block.parentElement;
 
   while (current && current !== article) {
-    if (current.querySelector('[data-testid="User-Name"]')) {
+    if (current.contains(primaryBlock)) {
+      return null;
+    }
+
+    if (current.querySelector('[data-testid="User-Name"]') && containsOnlyTweetTextBlock(current, block)) {
       return current;
     }
 
@@ -609,6 +614,12 @@ function findRelatedPostContainer(article: HTMLElement, block: HTMLElement): HTM
   }
 
   return null;
+}
+
+function containsOnlyTweetTextBlock(container: HTMLElement, block: HTMLElement): boolean {
+  const blocks = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="tweetText"]'));
+
+  return blocks.length === 1 && blocks[0] === block;
 }
 
 function readSourceUrl(time: HTMLTimeElement | null): string | undefined {

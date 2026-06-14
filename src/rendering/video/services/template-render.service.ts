@@ -38,6 +38,7 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
     await waitForImages(exportNode);
 
     lockMediaElementSize(mediaElement, getUsableMediaRect(mediaElement));
+    const sourceCrop = getVideoSourceCrop(videoFrame);
     videoFrame.replaceChildren(createVideoPlaceholder());
     await waitForFrame();
 
@@ -76,6 +77,7 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
       height: templateSize.height,
       mediaRect: processedMediaRect,
       path: "quoti-template.png",
+      sourceCrop,
       width: templateSize.width
     };
   } catch (error) {
@@ -171,6 +173,112 @@ function createVideoPlaceholder(): HTMLDivElement {
   placeholder.style.width = "100%";
 
   return placeholder;
+}
+
+function getVideoSourceCrop(videoFrame: HTMLElement): VideoTemplateAsset["sourceCrop"] {
+  const posterProbe = videoFrame.querySelector<HTMLImageElement>(".context-card__video-probe");
+
+  if (!posterProbe?.naturalWidth || !posterProbe.naturalHeight) {
+    return undefined;
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!context) {
+      return undefined;
+    }
+
+    canvas.width = posterProbe.naturalWidth;
+    canvas.height = posterProbe.naturalHeight;
+    context.drawImage(posterProbe, 0, 0);
+
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const left = findFirstContentColumn(pixels, canvas.width, canvas.height);
+    const right = findFirstContentColumn(pixels, canvas.width, canvas.height, true);
+    const top = findFirstContentRow(pixels, canvas.width, canvas.height);
+    const bottom = findFirstContentRow(pixels, canvas.width, canvas.height, true);
+    const cropWidth = right >= left ? right - left + 1 : canvas.width;
+    const cropHeight = bottom >= top ? bottom - top + 1 : canvas.height;
+
+    if (!shouldCropAxis(cropWidth, canvas.width) && !shouldCropAxis(cropHeight, canvas.height)) {
+      return undefined;
+    }
+
+    return {
+      height: cropHeight / canvas.height,
+      width: cropWidth / canvas.width,
+      x: left / canvas.width,
+      y: top / canvas.height
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldCropAxis(contentSize: number, totalSize: number): boolean {
+  const ratio = contentSize / totalSize;
+
+  return ratio <= 0.92 && ratio >= 0.35;
+}
+
+function findFirstContentRow(pixels: Uint8ClampedArray, width: number, height: number, reverse = false): number {
+  for (let step = 0; step < height; step += 1) {
+    const row = reverse ? height - 1 - step : step;
+
+    if (!isDarkRow(pixels, width, row)) {
+      return row;
+    }
+  }
+
+  return reverse ? height - 1 : 0;
+}
+
+function findFirstContentColumn(pixels: Uint8ClampedArray, width: number, height: number, reverse = false): number {
+  for (let step = 0; step < width; step += 1) {
+    const column = reverse ? width - 1 - step : step;
+
+    if (!isDarkColumn(pixels, width, height, column)) {
+      return column;
+    }
+  }
+
+  return reverse ? width - 1 : 0;
+}
+
+function isDarkRow(pixels: Uint8ClampedArray, width: number, row: number): boolean {
+  let darkPixels = 0;
+  const offset = row * width * 4;
+
+  for (let column = 0; column < width; column += 1) {
+    if (isDarkPixel(pixels, offset + column * 4)) {
+      darkPixels += 1;
+    }
+  }
+
+  return darkPixels / width > 0.92;
+}
+
+function isDarkColumn(pixels: Uint8ClampedArray, width: number, height: number, column: number): boolean {
+  let darkPixels = 0;
+
+  for (let row = 0; row < height; row += 1) {
+    if (isDarkPixel(pixels, (row * width + column) * 4)) {
+      darkPixels += 1;
+    }
+  }
+
+  return darkPixels / height > 0.92;
+}
+
+function isDarkPixel(pixels: Uint8ClampedArray, index: number): boolean {
+  const alpha = pixels[index + 3];
+  const red = pixels[index];
+  const green = pixels[index + 1];
+  const blue = pixels[index + 2];
+
+  return alpha < 8 || (red < 18 && green < 18 && blue < 18);
 }
 
 async function createVideoTemplateOverlayData(

@@ -100,8 +100,7 @@ export function Popup() {
   const updateSetting = <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => {
     const nextSettings = {
       ...settingsRef.current,
-      [key]: value,
-      inlineButtonEnabled: false
+      [key]: value
     };
 
     settingsRef.current = nextSettings;
@@ -664,6 +663,21 @@ function PopupSettings({
             className="popup-settings__switch-input"
             checked={settings.contextMenuEnabled}
             onChange={(event) => onChange("contextMenuEnabled", event.target.checked)}
+            type="checkbox"
+          />
+          <span className="popup-settings__switch-control" aria-hidden="true">
+            <span className="popup-settings__switch-thumb" />
+          </span>
+        </label>
+        <label className="popup-settings__switch-row">
+          <span>
+            <span className="popup-settings__label">Quoti button in posts</span>
+            <span className="popup-settings__description">Show a subtle Quoti button inside supported posts.</span>
+          </span>
+          <input
+            className="popup-settings__switch-input"
+            checked={settings.inlineButtonEnabled}
+            onChange={(event) => onChange("inlineButtonEnabled", event.target.checked)}
             type="checkbox"
           />
           <span className="popup-settings__switch-control" aria-hidden="true">

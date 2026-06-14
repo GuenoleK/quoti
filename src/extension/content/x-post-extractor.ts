@@ -6,6 +6,10 @@ type ContentScriptSettings = {
   inlineButtonEnabled: boolean;
 };
 
+type StoredContentScriptSettings = Partial<ContentScriptSettings> & {
+  inlineButtonPreferenceVersion?: number;
+};
+
 type InlineButtonPlacement = {
   after: ChildNode;
   kind: "meta" | "views";
@@ -15,11 +19,12 @@ type InlineButtonPlacement = {
 const inlineButtonClassName = "quoti-inline-button";
 const inlineButtonInsertedClassName = "quoti-inline-button-inserted";
 const settingsStorageKey = "quoti-settings";
+const inlineButtonPreferenceVersion = 1;
 const maxLocalObservedVideoUrls = 120;
 const defaultContentScriptSettings: ContentScriptSettings = {
   hoverCaptureEnabled: true,
   contextMenuEnabled: true,
-  inlineButtonEnabled: false
+  inlineButtonEnabled: true
 };
 
 let hoveredArticle: HTMLElement | null = null;
@@ -173,22 +178,25 @@ function handleStorageChanged(changes: Record<string, chrome.storage.StorageChan
     return;
   }
 
-  settings = {
-    ...defaultContentScriptSettings,
-    ...changes[settingsStorageKey].newValue,
-    inlineButtonEnabled: false
-  };
+  settings = normalizeContentScriptSettings(changes[settingsStorageKey].newValue as StoredContentScriptSettings);
   updateInlineButtons();
 }
 
 async function readContentScriptSettings(): Promise<ContentScriptSettings> {
   const stored = await chrome.storage.sync.get(settingsStorageKey);
-  const storedSettings = stored[settingsStorageKey] as Partial<ContentScriptSettings> | undefined;
+  const storedSettings = stored[settingsStorageKey] as StoredContentScriptSettings | undefined;
 
+  return normalizeContentScriptSettings(storedSettings);
+}
+
+function normalizeContentScriptSettings(storedSettings: StoredContentScriptSettings | undefined): ContentScriptSettings {
   return {
     ...defaultContentScriptSettings,
     ...storedSettings,
-    inlineButtonEnabled: false
+    inlineButtonEnabled:
+      storedSettings?.inlineButtonPreferenceVersion === inlineButtonPreferenceVersion
+        ? Boolean(storedSettings.inlineButtonEnabled)
+        : defaultContentScriptSettings.inlineButtonEnabled
   };
 }
 
@@ -235,6 +243,7 @@ function injectInlineButtons(): void {
     const placement = getInlineButtonPlacement(article);
 
     if (!placement) {
+      removeArticleInlineButtons(article);
       return;
     }
 
@@ -259,10 +268,6 @@ function injectInlineButtons(): void {
 }
 
 function shouldInjectInlineButton(article: HTMLElement): boolean {
-  if (isStatusPage() && !findViewsElement(article)) {
-    return false;
-  }
-
   return Boolean(article.querySelector('[data-testid="tweetText"]'));
 }
 
@@ -367,10 +372,6 @@ function getInlineButtonPlacement(article: HTMLElement): InlineButtonPlacement |
     };
   }
 
-  if (isStatusPage()) {
-    return null;
-  }
-
   const time = article.querySelector<HTMLTimeElement>("time");
   const timeLink = time?.closest("a");
   const timeContainer = timeLink?.parentElement;
@@ -386,21 +387,20 @@ function getInlineButtonPlacement(article: HTMLElement): InlineButtonPlacement |
   return null;
 }
 
-function isStatusPage(): boolean {
-  return /\/status\/\d+/.test(window.location.pathname);
-}
-
 function findViewsElement(article: HTMLElement): HTMLElement | null {
-  const candidates = Array.from(article.querySelectorAll<HTMLElement>("span"));
+  const candidates = Array.from(article.querySelectorAll<HTMLElement>("span, a, div"));
 
   return candidates
-    .filter((candidate) => candidate.children.length === 0)
     .map((candidate) => ({
       candidate,
       text: normalizeText(candidate.textContent)
     }))
-    .filter(({ text }) => text.length <= 32 && /[\d,.]\s*[\w,.\s]*\s(?:vues|views|posts?)$/i.test(text))
+    .filter(({ candidate, text }) => !candidate.classList.contains(inlineButtonClassName) && isViewsText(text))
     .sort((a, b) => a.text.length - b.text.length)[0]?.candidate ?? null;
+}
+
+function isViewsText(text: string): boolean {
+  return text.length <= 80 && /\d[\d\s.,]*\s*[km]?\s*(?:vues?|views?)\b/i.test(text);
 }
 
 function getCandidateArticle(): HTMLElement | null {

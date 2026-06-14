@@ -14,8 +14,7 @@ export function Options() {
   const updateSetting = <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => {
     const nextSettings = {
       ...settings,
-      [key]: value,
-      inlineButtonEnabled: false
+      [key]: value
     };
 
     setSettings(nextSettings);
@@ -50,6 +49,12 @@ export function Options() {
             description="Right-click a post and choose Create Quoti card."
             label="Add right-click action"
             onChange={(checked) => updateSetting("contextMenuEnabled", checked)}
+          />
+          <SettingsToggle
+            checked={settings.inlineButtonEnabled}
+            description="Show a subtle Quoti button inside supported posts."
+            label="Show Quoti button in posts"
+            onChange={(checked) => updateSetting("inlineButtonEnabled", checked)}
           />
           <div className="options-page__field">
             <span className="options-page__field-label">Video exporter</span>

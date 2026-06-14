@@ -13,15 +13,20 @@ export type QuotiSettings = {
   videoRenderer: VideoRendererSetting;
 };
 
+type StoredQuotiSettings = Partial<QuotiSettings> & {
+  inlineButtonPreferenceVersion?: number;
+};
+
 export const quotiSettingsStorageKey = "quoti-settings";
 export const latestPostStorageKey = "quoti-latest-post";
+const inlineButtonPreferenceVersion = 1;
 
 export const defaultQuotiSettings: QuotiSettings = {
   cardContentMode: "with-media",
   cardTheme: "light",
   hoverCaptureEnabled: true,
   contextMenuEnabled: true,
-  inlineButtonEnabled: false,
+  inlineButtonEnabled: true,
   videoQuality: "balanced",
   videoRenderer: "auto"
 };
@@ -32,12 +37,15 @@ export async function readQuotiSettings(): Promise<QuotiSettings> {
   }
 
   const stored = await chrome.storage.sync.get(quotiSettingsStorageKey);
-  const settings = stored[quotiSettingsStorageKey] as Partial<QuotiSettings> | undefined;
+  const settings = stored[quotiSettingsStorageKey] as StoredQuotiSettings | undefined;
 
-  return normalizeQuotiSettings({
-    ...defaultQuotiSettings,
-    ...settings
-  });
+  return normalizeQuotiSettings(
+    {
+      ...defaultQuotiSettings,
+      ...settings
+    },
+    settings?.inlineButtonPreferenceVersion
+  );
 }
 
 export async function writeQuotiSettings(settings: QuotiSettings): Promise<void> {
@@ -46,16 +54,19 @@ export async function writeQuotiSettings(settings: QuotiSettings): Promise<void>
   }
 
   await chrome.storage.sync.set({
-    [quotiSettingsStorageKey]: normalizeQuotiSettings(settings)
+    [quotiSettingsStorageKey]: {
+      ...normalizeQuotiSettings(settings, inlineButtonPreferenceVersion),
+      inlineButtonPreferenceVersion
+    }
   });
 }
 
-function normalizeQuotiSettings(settings: QuotiSettings): QuotiSettings {
+function normalizeQuotiSettings(settings: QuotiSettings, storedInlineButtonPreferenceVersion?: number): QuotiSettings {
   return {
     ...settings,
     cardContentMode: isCardContentMode(settings.cardContentMode) ? settings.cardContentMode : defaultQuotiSettings.cardContentMode,
     cardTheme: isCardTheme(settings.cardTheme) ? settings.cardTheme : defaultQuotiSettings.cardTheme,
-    inlineButtonEnabled: false,
+    inlineButtonEnabled: storedInlineButtonPreferenceVersion === inlineButtonPreferenceVersion ? Boolean(settings.inlineButtonEnabled) : defaultQuotiSettings.inlineButtonEnabled,
     videoQuality: isVideoQualitySetting(settings.videoQuality) ? settings.videoQuality : defaultQuotiSettings.videoQuality,
     videoRenderer: isVideoRendererSetting(settings.videoRenderer) ? settings.videoRenderer : defaultQuotiSettings.videoRenderer
   };

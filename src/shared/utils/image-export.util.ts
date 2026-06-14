@@ -1,4 +1,4 @@
-import { toBlob, toJpeg, toPng } from "html-to-image";
+import { toPng } from "html-to-image";
 
 const pixelRatio = 2;
 
@@ -6,22 +6,12 @@ export async function exportNodeToPngDataUrl(node: HTMLElement): Promise<string>
   return withExportNode(node, (exportNode) => withExportReadyImages(exportNode, async () => {
     await waitForNodeAssets(exportNode);
 
-    return toPng(exportNode, {
+    const dataUrl = await toPng(exportNode, {
       cacheBust: false,
       pixelRatio
     });
-  }));
-}
 
-export async function exportNodeToJpegDataUrl(node: HTMLElement): Promise<string> {
-  return withExportNode(node, (exportNode) => withExportReadyImages(exportNode, async () => {
-    await waitForNodeAssets(exportNode);
-
-    return toJpeg(exportNode, {
-      cacheBust: false,
-      pixelRatio,
-      quality: 0.95
-    });
+    return clipPngDataUrlToNodeRadius(dataUrl, exportNode);
   }));
 }
 
@@ -29,22 +19,31 @@ export async function exportNodeToPngBlob(node: HTMLElement): Promise<Blob> {
   return withExportNode(node, (exportNode) => withExportReadyImages(exportNode, async () => {
     await waitForNodeAssets(exportNode);
 
-    const blob = await toBlob(exportNode, {
+    const dataUrl = await toPng(exportNode, {
       cacheBust: false,
       pixelRatio
     });
-
-    if (!blob) {
-      throw new Error("Could not generate PNG image.");
-    }
-
-    return blob;
+    return dataUrlToBlob(await clipPngDataUrlToNodeRadius(dataUrl, exportNode));
   }));
 }
 
 export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const response = await fetch(dataUrl);
-  return response.blob();
+  const [metadata, payload] = dataUrl.split(",");
+
+  if (!metadata || payload === undefined) {
+    throw new Error("Invalid image data URL.");
+  }
+
+  const mimeType = /^data:([^;,]+)/.exec(metadata)?.[1] ?? "application/octet-stream";
+  const isBase64 = metadata.endsWith(";base64");
+  const binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new Blob([bytes], { type: mimeType });
 }
 
 export function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -86,6 +85,7 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
   host.style.left = "-10000px";
   host.style.top = "0";
   host.style.width = `${getExportWidth(exportNode)}px`;
+  host.style.background = "transparent";
   host.style.pointerEvents = "none";
   host.append(exportNode);
   document.body.append(host);
@@ -199,6 +199,71 @@ function getExportWidth(node: HTMLElement): number {
   }
 
   return 720;
+}
+
+async function clipPngDataUrlToNodeRadius(dataUrl: string, node: HTMLElement): Promise<string> {
+  const radius = getNodeBorderRadius(node);
+
+  if (radius <= 0) {
+    return dataUrl;
+  }
+
+  const image = await loadImage(dataUrl);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Could not prepare PNG transparency.");
+  }
+
+  const bounds = node.getBoundingClientRect();
+  const scale = bounds.width > 0 ? image.naturalWidth / bounds.width : pixelRatio;
+
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  context.drawImage(image, 0, 0);
+  context.globalCompositeOperation = "destination-in";
+  context.fillStyle = "#000";
+  context.beginPath();
+  addRoundedRectPath(context, 0, 0, canvas.width, canvas.height, radius * scale);
+  context.fill();
+
+  return canvas.toDataURL("image/png");
+}
+
+function getNodeBorderRadius(node: HTMLElement): number {
+  return parseFloat(getComputedStyle(node).borderTopLeftRadius) || 0;
+}
+
+function addRoundedRectPath(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  const resolvedRadius = Math.min(radius, width / 2, height / 2);
+
+  context.moveTo(x + resolvedRadius, y);
+  context.lineTo(x + width - resolvedRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + resolvedRadius);
+  context.lineTo(x + width, y + height - resolvedRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - resolvedRadius, y + height);
+  context.lineTo(x + resolvedRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - resolvedRadius);
+  context.lineTo(x, y + resolvedRadius);
+  context.quadraticCurveTo(x, y, x + resolvedRadius, y);
+  context.closePath();
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  const image = new Image();
+
+  image.decoding = "async";
+  image.src = dataUrl;
+
+  if (image.complete) {
+    return Promise.resolve(image);
+  }
+
+  return new Promise((resolve, reject) => {
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => reject(new Error("Could not load generated PNG.")), { once: true });
+  });
 }
 
 type ImageSnapshot = {

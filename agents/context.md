@@ -20,7 +20,8 @@ The product exists to make conversations portable across platforms without losin
 - Treat docs/architecture/frontend-architecture.md as the technical source of truth.
 - Treat docs/architecture/service-architecture.md as the service organization source of truth.
 - Treat docs/roadmap/video-rendering-roadmap.md as the video rendering roadmap source of truth.
-- Treat docs/design/editorial-craft.md as the design source of truth.
+- Treat DESIGN.md as the design source of truth.
+- Use docs/design/editorial-craft.md as narrative context for design taste and product feeling.
 - Keep new decisions explicit in docs/decisions.
 - Use agents/skills for recurring workflows.
 - Prefer small, reversible changes.

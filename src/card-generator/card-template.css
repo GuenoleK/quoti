@@ -83,7 +83,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.92fr);
   grid-template-areas:
     "source source"
-    "quote media"
+    "body media"
     "footer footer";
   align-items: center;
 }
@@ -92,8 +92,11 @@
   grid-area: source;
 }
 
+.context-card[data-card-layout="wide"] .context-card__body {
+  grid-area: body;
+}
+
 .context-card[data-card-layout="wide"] .context-card__quote {
-  grid-area: quote;
   font-size: clamp(var(--font-size-lg), 2vw, var(--font-size-xl));
 }
 
@@ -103,6 +106,58 @@
 
 .context-card[data-card-layout="wide"] .context-card__footer {
   grid-area: footer;
+}
+
+.context-card__body {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+}
+
+.context-card__related-post {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--card-color-border) 74%, transparent);
+  transition:
+    border-color var(--duration-slow) ease,
+    color var(--duration-slow) ease;
+}
+
+.context-card__related-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--card-color-text-secondary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.context-card__related-label {
+  color: var(--card-color-brand);
+  font-weight: var(--font-weight-bold);
+}
+
+.context-card__related-author {
+  color: var(--card-color-text-primary);
+  font-weight: var(--font-weight-bold);
+}
+
+.context-card__related-handle {
+  overflow-wrap: anywhere;
+}
+
+.context-card__related-content {
+  margin: 0;
+  color: var(--card-color-text-primary);
+  font-family: var(--font-family-serif);
+  font-size: clamp(var(--font-size-md), 2.4vw, var(--font-size-lg));
+  line-height: 1.46;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .context-card__footer {

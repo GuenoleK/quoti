@@ -1,4 +1,4 @@
-import type { ExtractedPost, ImagePostMedia, PostExtractionResult, PostMedia, VideoPostMedia } from "../../shared/types/post.types";
+import type { ExtractedPost, ImagePostMedia, PostExtractionResult, PostMedia, RelatedPost, VideoPostMedia } from "../../shared/types/post.types";
 
 type ContentScriptSettings = {
   hoverCaptureEnabled: boolean;
@@ -459,7 +459,7 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
   const authorBlock = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   const authorName = readAuthorName(authorBlock);
   const authorHandle = readAuthorHandle(authorBlock);
-  const content = readPostContent(article);
+  const { content, relatedPost } = readPostContent(article);
   const time = article.querySelector<HTMLTimeElement>("time");
   const sourceUrl = readSourceUrl(time);
   const media = readPostMedia(article, observedVideoUrls);
@@ -470,6 +470,7 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
     authorName,
     authorHandle,
     content,
+    relatedPost,
     publishedAt: time?.dateTime,
     sourceUrl,
     media,
@@ -481,9 +482,13 @@ function readAuthorName(authorBlock: HTMLElement | null): string {
   const spans = Array.from(authorBlock?.querySelectorAll("span") ?? []);
   const name = spans
     .map((span) => normalizeText(span.textContent))
-    .find((text) => Boolean(text) && !text.startsWith("@") && text !== "Â·");
+    .find((text) => Boolean(text) && !text.startsWith("@") && !isAuthorSeparator(text));
 
   return name ?? "Unknown author";
+}
+
+function isAuthorSeparator(text: string): boolean {
+  return /^[·•]+$/.test(text) || text === "Â·";
 }
 
 function readAuthorHandle(authorBlock: HTMLElement | null): string {
@@ -494,23 +499,65 @@ function readAuthorHandle(authorBlock: HTMLElement | null): string {
   return handle ?? "";
 }
 
-function readPostContent(article: HTMLElement): string {
+function readPostContent(article: HTMLElement): { content: string; relatedPost?: RelatedPost } {
   const tweetTextBlocks = Array.from(article.querySelectorAll<HTMLElement>('[data-testid="tweetText"]'));
-  const text = tweetTextBlocks.map((block) => normalizePostContent(block.innerText)).join("\n\n");
+  const postBlocks = tweetTextBlocks
+    .map((block) => ({
+      block,
+      content: normalizePostContent(block.innerText)
+    }))
+    .filter(({ content }) => Boolean(content));
+  const text = postBlocks[0]?.content ?? "";
 
   if (text) {
-    return text;
+    return {
+      content: text,
+      relatedPost: readRelatedPost(article, postBlocks.slice(1))
+    };
   }
 
   const fallbackText = normalizePostContent(article.innerText);
   const linesToRemove = new Set(["Reply", "Repost", "Like", "View", "Share"]);
 
-  return fallbackText
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !linesToRemove.has(line))
-    .slice(0, 12)
-    .join("\n");
+  return {
+    content: fallbackText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !linesToRemove.has(line))
+      .slice(0, 12)
+      .join("\n")
+  };
+}
+
+function readRelatedPost(article: HTMLElement, postBlocks: Array<{ block: HTMLElement; content: string }>): RelatedPost | undefined {
+  const relatedBlock = postBlocks[0];
+
+  if (!relatedBlock) {
+    return undefined;
+  }
+
+  const relatedContainer = findRelatedPostContainer(article, relatedBlock.block);
+  const authorBlock = relatedContainer?.querySelector<HTMLElement>('[data-testid="User-Name"]') ?? null;
+
+  return {
+    authorName: authorBlock ? readAuthorName(authorBlock) : undefined,
+    authorHandle: authorBlock ? readAuthorHandle(authorBlock) : undefined,
+    content: relatedBlock.content
+  };
+}
+
+function findRelatedPostContainer(article: HTMLElement, block: HTMLElement): HTMLElement | null {
+  let current = block.parentElement;
+
+  while (current && current !== article) {
+    if (current.querySelector('[data-testid="User-Name"]')) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
 }
 
 function readSourceUrl(time: HTMLTimeElement | null): string | undefined {

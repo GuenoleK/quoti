@@ -39,7 +39,7 @@ export function PostCardActions({
     "download",
     busyAction,
     actionFeedback,
-    downloadMode === "video" ? "Download video" : "Download JPG",
+    downloadMode === "video" ? "Download video" : "Download PNG",
     downloadMode,
     downloadProgressLabel
   );
@@ -165,7 +165,7 @@ function getActionLabel(
       return "Source copied";
     }
 
-    return action === "download" ? (downloadMode === "video" ? "Video ready" : "JPG ready") : "Text copied";
+    return action === "download" ? (downloadMode === "video" ? "Video ready" : "PNG ready") : "Text copied";
   }
 
   if (feedback?.action === action && feedback.status === "error") {

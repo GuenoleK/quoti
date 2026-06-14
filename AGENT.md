@@ -21,7 +21,10 @@ Before making any modification, read the following documents.
 
 ## Design
 
+- DESIGN.md
 - docs/design/editorial-craft.md
+
+For any UI, generated card, theme token, layout, typography, visual hierarchy, or interaction polish change, treat DESIGN.md as the canonical design source. Use docs/design/editorial-craft.md only as narrative context for taste and product feeling.
 
 ## Decisions
 
@@ -33,7 +36,6 @@ Before making any modification, read the following documents.
 - agents/instructions/project-overview.md
 - agents/instructions/coding-standards.md
 - agents/instructions/frontend-guidelines.md
-- agents/instructions/design-principles.md
 - agents/instructions/architecture-rules.md
 
 ## Agent Skills

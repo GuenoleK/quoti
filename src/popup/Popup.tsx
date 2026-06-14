@@ -5,7 +5,7 @@ import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, VideoPostMed
 import { latestPostStorageKey } from "../shared/settings/quoti-settings";
 import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
-import { downloadDataUrl, exportNodeToJpegDataUrl, exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
+import { exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
 import { downloadBlob } from "../shared/utils/video-export.util";
 import type { VideoRenderProgress } from "../rendering/video/video-render.types";
 import { EmptyState } from "./components/EmptyState/EmptyState";
@@ -339,8 +339,8 @@ export function Popup() {
         return;
       }
 
-      const dataUrl = await exportNodeToJpegDataUrl(exportRef.current as HTMLElement);
-      downloadDataUrl(dataUrl, createPostFilename(post, "jpg"));
+      const blob = await exportNodeToPngBlob(exportRef.current as HTMLElement);
+      downloadBlob(blob, createPostFilename(post, "png"));
       setVideoRenderProgress(null);
     });
   };
@@ -360,7 +360,7 @@ export function Popup() {
         const copied = copyImageHtmlToClipboard(dataUrl, "Quoti card");
 
         if (!copied) {
-          throw new Error("Chrome refused image clipboard access. Try Download JPG for now.");
+          throw new Error("Chrome refused image clipboard access. Try Download PNG for now.");
         }
       }
     });
@@ -507,7 +507,7 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : "";
 
   if (actionName === "copy-image") {
-    return detail || "Quoti could not copy the image. Try Download JPG.";
+    return detail || "Quoti could not copy the image. Try Download PNG.";
   }
 
   if (actionName === "download") {

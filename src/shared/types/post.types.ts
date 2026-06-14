@@ -20,12 +20,19 @@ export type VideoPostMedia = {
 
 export type PostMedia = ImagePostMedia | VideoPostMedia;
 
+export type RelatedPost = {
+  authorHandle?: string;
+  authorName?: string;
+  content: string;
+};
+
 export type ExtractedPost = {
   id: string;
   platform: SocialPlatform;
   authorName: string;
   authorHandle: string;
   content: string;
+  relatedPost?: RelatedPost;
   publishedAt?: string;
   sourceUrl?: string;
   media: PostMedia[];

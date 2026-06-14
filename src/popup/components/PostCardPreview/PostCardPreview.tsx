@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
-import type { CardContentMode, CardTheme, ExtractedPost, PostMedia } from "../../../shared/types/post.types";
+import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, RelatedPost } from "../../../shared/types/post.types";
 import { formatPublishedDate } from "../../../card-generator/card-generator";
 import { SocialPlatformIcon } from "../../../card-generator/SocialPlatformIcon";
 import "../../../card-generator/card-template.css";
@@ -26,7 +26,7 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   const cachedMedia = getPrimaryMedia(post.media);
   const media = contentMode === "with-media" ? cachedMedia : undefined;
   const mediaKey = getMediaKey(cachedMedia);
-  const cardLayout = useMemo(() => resolveCardLayout(post.content, media, mediaSize), [media, mediaSize, post.content]);
+  const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), media, mediaSize), [media, mediaSize, post]);
 
   useEffect(() => {
     return () => {
@@ -63,7 +63,10 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
               <span className="context-card__date">{formatPublishedDate(post.publishedAt)}</span>
             </header>
 
-            <p className="context-card__quote">{post.content}</p>
+            <div className="context-card__body">
+              <p className="context-card__quote">{post.content}</p>
+              {post.relatedPost ? <RelatedPostCard relatedPost={post.relatedPost} /> : null}
+            </div>
 
             {cachedMedia ? (
               <figure
@@ -87,6 +90,19 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
         </article>
       </div>
     </section>
+  );
+}
+
+function RelatedPostCard({ relatedPost }: { relatedPost: RelatedPost }) {
+  return (
+    <aside className="context-card__related-post" aria-label="Post auquel l'auteur répond">
+      <div className="context-card__related-meta">
+        <span className="context-card__related-label">Répond à</span>
+        {relatedPost.authorName ? <span className="context-card__related-author">{relatedPost.authorName}</span> : null}
+        {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
+      </div>
+      <p className="context-card__related-content">{relatedPost.content}</p>
+    </aside>
   );
 }
 
@@ -323,6 +339,10 @@ function resolveCardLayout(content: string, media: PostMedia | undefined, mediaS
   }
 
   return "portrait";
+}
+
+function getLayoutContent(post: ExtractedPost): string {
+  return post.relatedPost ? `${post.content}\n${post.relatedPost.content}` : post.content;
 }
 
 function estimateRenderedLineCount(content: string): number {

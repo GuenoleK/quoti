@@ -2,6 +2,8 @@
 
 Use this skill when creating or changing Quoti card generation.
 
+Before changing card rendering, read `DESIGN.md`, then `docs/design/editorial-craft.md` when the task needs product taste or narrative context. Keep generated cards aligned with Quoti's design identity.
+
 ## Steps
 
 - Start from normalized post data.

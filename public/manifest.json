@@ -16,7 +16,7 @@
     "type": "module"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; img-src 'self' data: https://pbs.twimg.com https://images.unsplash.com; media-src 'self' blob: https://video.twimg.com; connect-src 'self' https://video.twimg.com https://pbs.twimg.com https://images.unsplash.com;"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; img-src 'self' data: https://pbs.twimg.com https://abs.twimg.com https://images.unsplash.com; media-src 'self' blob: https://video.twimg.com; connect-src 'self' https://video.twimg.com https://pbs.twimg.com https://abs.twimg.com https://images.unsplash.com http://127.0.0.1:* http://localhost:*;"
   },
   "content_scripts": [
     {
@@ -26,6 +26,14 @@
       "run_at": "document_idle"
     }
   ],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://pbs.twimg.com/*", "https://video.twimg.com/*"],
-  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "scripting", "storage", "tabs", "webRequest"]
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://pbs.twimg.com/*",
+    "https://abs.twimg.com/*",
+    "https://video.twimg.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "nativeMessaging", "scripting", "storage", "tabs", "webRequest"]
 }

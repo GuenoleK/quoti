@@ -77,6 +77,7 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
   const host = document.createElement("div");
 
   prepareStaticMediaForExport(node, exportNode);
+  enforceQuotiMark(exportNode);
   exportNode.classList.remove("post-card-preview__card");
   exportNode.style.width = "100%";
   exportNode.style.maxWidth = "none";
@@ -95,6 +96,20 @@ async function withExportNode<T>(node: HTMLElement, callback: (exportNode: HTMLE
   } finally {
     host.remove();
   }
+}
+
+function enforceQuotiMark(exportNode: HTMLElement): void {
+  const mark = exportNode.querySelector<HTMLElement>(".context-card__mark");
+
+  if (!mark) {
+    return;
+  }
+
+  mark.textContent = "Quoti";
+  mark.removeAttribute("hidden");
+  mark.style.display = "";
+  mark.style.visibility = "";
+  mark.style.opacity = "";
 }
 
 function prepareStaticMediaForExport(sourceNode: HTMLElement, exportNode: HTMLElement): void {

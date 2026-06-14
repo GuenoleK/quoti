@@ -1,0 +1,12 @@
+{
+  "name": "@quoti/native-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node src/host.mjs --check"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

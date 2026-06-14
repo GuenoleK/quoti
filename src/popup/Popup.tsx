@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Settings } from "lucide-react";
+import { ArrowLeft, Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
 import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, VideoPostMedia } from "../shared/types/post.types";
-import { latestPostStorageKey } from "../shared/settings/quoti-settings";
+import {
+  defaultQuotiSettings,
+  latestPostStorageKey,
+  readQuotiSettings,
+  writeQuotiSettings,
+  type QuotiSettings
+} from "../shared/settings/quoti-settings";
 import { copyBlobToClipboard, copyImageHtmlToClipboard, copyTextToClipboard } from "../shared/utils/clipboard.util";
 import { createPostFilename, formatPostAsText } from "../shared/utils/post-format.util";
 import { exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/image-export.util";
@@ -37,6 +43,8 @@ export function Popup() {
   const isMountedRef = useRef(true);
   const mediaRecoveryPostKeyRef = useRef<string | null>(null);
   const postMediaCacheRef = useRef<Map<string, CachedPostMedia>>(new Map());
+  const settingsRef = useRef<QuotiSettings>(defaultQuotiSettings);
+  const videoExportRef = useRef<HTMLDivElement>(null);
   const videoWarmupPromiseRef = useRef<Promise<void> | null>(null);
   const [capture, setCapture] = useState<CaptureState>({
     post: null,
@@ -45,8 +53,11 @@ export function Popup() {
   });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ action: string; status: "success" | "error" } | null>(null);
-  const [contentMode, setContentMode] = useState<CardContentMode>("text-only");
-  const [cardTheme, setCardTheme] = useState<CardTheme>("light");
+  const [contentMode, setContentMode] = useState<CardContentMode>(defaultQuotiSettings.cardContentMode);
+  const [cardTheme, setCardTheme] = useState<CardTheme>(defaultQuotiSettings.cardTheme);
+  const [settings, setSettings] = useState<QuotiSettings>(defaultQuotiSettings);
+  const [settingsStatus, setSettingsStatus] = useState("Saved automatically.");
+  const [settingsViewOpen, setSettingsViewOpen] = useState(false);
   const [notice, setNotice] = useState<string>("");
   const [mediaRecoveryStatus, setMediaRecoveryStatus] = useState<MediaRecoveryStatus>("idle");
   const [videoWarmupStatus, setVideoWarmupStatus] = useState<VideoWarmupStatus>("idle");
@@ -71,6 +82,53 @@ export function Popup() {
 
     return () => window.clearTimeout(timeout);
   }, [actionFeedback]);
+
+  useEffect(() => {
+    void readQuotiSettings().then((storedSettings) => {
+      if (isMountedRef.current) {
+        settingsRef.current = storedSettings;
+        setSettings(storedSettings);
+        setCardTheme(storedSettings.cardTheme);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    setContentMode(resolveCardContentModePreference(capture.post, settings.cardContentMode));
+  }, [capture.post, settings.cardContentMode]);
+
+  const updateSetting = <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => {
+    const nextSettings = {
+      ...settingsRef.current,
+      [key]: value,
+      inlineButtonEnabled: false
+    };
+
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
+    setCardTheme(nextSettings.cardTheme);
+    setContentMode(resolveCardContentModePreference(capture.post, nextSettings.cardContentMode));
+
+    void writeQuotiSettings(nextSettings).then(() => {
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      setSettingsStatus("Saved automatically.");
+
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        void chrome.runtime.sendMessage({ type: "QUOTI_SETTINGS_UPDATED" }).catch(() => undefined);
+      }
+    });
+  };
+
+  const handleCardThemeChange = (theme: CardTheme) => {
+    updateSetting("cardTheme", theme);
+  };
+
+  const handleCardContentModeChange = (mode: CardContentMode) => {
+    updateSetting("cardContentMode", mode);
+  };
 
   const warmVideoRenderer = useCallback((): Promise<void> => {
     if (videoWarmupPromiseRef.current) {
@@ -120,7 +178,7 @@ export function Popup() {
 
       mediaRecoveryPostKeyRef.current = postKey;
       setMediaRecoveryStatus("loading");
-      setNotice("Video source is still loading. Keeping the post context visible.");
+      setNotice("Looking for the video. Keep the post visible.");
 
       try {
         const warmupPromise = warmVideoRenderer().catch(() => undefined);
@@ -146,7 +204,7 @@ export function Popup() {
         }
 
         if (hasMissingVideoUrl(recoveredPost)) {
-          setNotice("Video source is still warming up. Refresh capture in a few seconds if needed.");
+          setNotice("The video is still loading. Refresh capture in a few seconds if needed.");
           return;
         }
 
@@ -197,7 +255,7 @@ export function Popup() {
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(hasAnyMedia(post) ? "with-media" : "text-only");
+        setContentMode(resolveCardContentModePreference(post, settingsRef.current.cardContentMode));
         void recoverMissingVideoMedia(post);
         return;
       }
@@ -210,7 +268,7 @@ export function Popup() {
           status: "ready",
           message: "Preview post loaded."
         });
-        setContentMode(hasAnyMedia(previewPost) ? "with-media" : "text-only");
+        setContentMode(resolveCardContentModePreference(previewPost, settingsRef.current.cardContentMode));
         void recoverMissingVideoMedia(previewPost);
         return;
       }
@@ -244,7 +302,7 @@ export function Popup() {
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(hasAnyMedia(post) ? "with-media" : "text-only");
+        setContentMode(resolveCardContentModePreference(post, settingsRef.current.cardContentMode));
         void recoverMissingVideoMedia(post);
         return;
       }
@@ -320,7 +378,7 @@ export function Popup() {
   };
 
   const handleDownload = () => {
-    if (!capture.post || !exportRef.current) {
+    if (!capture.post) {
       return;
     }
 
@@ -329,18 +387,28 @@ export function Popup() {
       const videoMedia = getPrimaryVideo(post);
 
       if (videoMedia) {
+        const templateNode = videoExportRef.current ?? exportRef.current;
+
+        if (!templateNode) {
+          throw new Error("Video export template is not ready yet. Refresh capture and retry.");
+        }
+
         const { renderPostVideo } = await loadVideoRenderController();
         const result = await renderPostVideo({
           cardTheme,
           post,
-          preferredRenderer: "wasm-ffmpeg",
-          quality: "balanced",
+          preferredRenderer: settings.videoRenderer,
+          quality: settings.videoQuality,
           onProgress: setVideoRenderProgress,
-          templateNode: exportRef.current as HTMLElement
+          templateNode
         });
 
         downloadBlob(result.blob, createPostFilename(post, result.filenameExtension));
         return;
+      }
+
+      if (!exportRef.current) {
+        throw new Error("Image export template is not ready yet. Refresh capture and retry.");
       }
 
       const blob = await exportNodeToPngBlob(exportRef.current as HTMLElement);
@@ -406,12 +474,7 @@ export function Popup() {
   };
 
   const handleOpenOptions = () => {
-    if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
-      void chrome.runtime.openOptionsPage();
-      return;
-    }
-
-    window.open("/options.html", "_blank", "noopener,noreferrer");
+    setSettingsViewOpen(true);
   };
 
   const isRecoveringVideoMedia = mediaRecoveryStatus === "loading";
@@ -419,41 +482,58 @@ export function Popup() {
   const statusNotice =
     notice ||
     (isRecoveringVideoMedia
-      ? "Video source is still loading. Keeping the post context visible."
+      ? "Looking for the video. Keep the post visible."
       : videoWarmupStatus === "loading" && capture.post && hasVideoMedia(capture.post)
-        ? "Video renderer is warming up for the first export."
+        ? "Preparing the first video export."
         : "");
 
   return (
     <main className="popup">
       <header className="popup__header">
-        <div className="popup__brand">
-          <span className="popup__logo" aria-hidden="true">Q</span>
-          <div>
-            <h1 className="popup__title">Quoti</h1>
-            <p className="popup__subtitle">Capture the post. Keep the context.</p>
+        {settingsViewOpen ? (
+          <div className="popup__brand">
+            <button className="popup__settings-button" onClick={() => setSettingsViewOpen(false)} type="button" title="Back" aria-label="Back">
+              <ArrowLeft size={17} aria-hidden="true" />
+            </button>
+            <div>
+              <h1 className="popup__title">Settings</h1>
+              <p className="popup__subtitle">Tune capture and export.</p>
+            </div>
           </div>
-        </div>
-        <button className="popup__settings-button" onClick={handleOpenOptions} type="button" title="Open options" aria-label="Open options">
-          <Settings size={17} aria-hidden="true" />
-        </button>
+        ) : (
+          <div className="popup__brand">
+            <span className="popup__logo" aria-hidden="true">Q</span>
+            <div>
+              <h1 className="popup__title">Quoti</h1>
+              <p className="popup__subtitle">Capture the post. Keep the context.</p>
+            </div>
+          </div>
+        )}
+        {settingsViewOpen ? null : (
+          <button className="popup__settings-button" onClick={handleOpenOptions} type="button" title="Open settings" aria-label="Open settings">
+            <Settings size={17} aria-hidden="true" />
+          </button>
+        )}
       </header>
 
-      {capture.post ? (
+      {settingsViewOpen ? (
+        <PopupSettings settings={settings} status={settingsStatus} onChange={updateSetting} />
+      ) : capture.post ? (
         <div className="popup__content">
           <PostCardPreview post={capture.post} contentMode={contentMode} cardTheme={cardTheme} exportRef={exportRef} />
           <div className="popup__toggles">
-            <CardThemeToggle value={cardTheme} onChange={setCardTheme} />
+            <CardThemeToggle value={cardTheme} onChange={handleCardThemeChange} />
             <CardContentToggle
               disabled={!hasAnyMedia(capture.post)}
               value={contentMode}
-              onChange={(mode) => setContentMode(capture.post && hasAnyMedia(capture.post) ? mode : "text-only")}
+              onChange={handleCardContentModeChange}
             />
           </div>
           <PostCardActions
             actionFeedback={actionFeedback}
             busyAction={busyAction}
             canOpenSource={Boolean(capture.post.sourceUrl)}
+            downloadProgress={getVideoRenderProgressValue(videoRenderProgress)}
             downloadProgressLabel={getVideoRenderProgressLabel(videoRenderProgress)}
             downloadMode={getPrimaryVideo(capture.post) ? "video" : "image"}
             isBusy={isBusy}
@@ -469,7 +549,12 @@ export function Popup() {
         <EmptyState isLoading={capture.status === "loading"} message={capture.message} onRefresh={capturePost} />
       )}
 
-      {statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
+      {!settingsViewOpen && statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
+      {!settingsViewOpen && capture.post && getPrimaryVideo(capture.post) ? (
+        <div className="popup__video-export-host" aria-hidden="true">
+          <PostCardPreview post={capture.post} contentMode="with-media" cardTheme={cardTheme} exportRef={videoExportRef} />
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -488,11 +573,284 @@ function getVideoRenderProgressLabel(progress: VideoRenderProgress | null): stri
     return undefined;
   }
 
-  if (progress.stage === "rendering" && Number.isFinite(progress.progress)) {
-    return `${progress.message} ${Math.round(progress.progress * 100)}%`;
+  const label = getFriendlyVideoProgressLabel(progress.stage);
+  const value = getVideoRenderProgressValue(progress);
+
+  if (typeof value === "number" && progress.stage !== "ready") {
+    return `${label} ${Math.round(value * 100)}%`;
   }
 
-  return progress.message;
+  return label;
+}
+
+function getVideoRenderProgressValue(progress: VideoRenderProgress | null): number | undefined {
+  if (!progress) {
+    return undefined;
+  }
+
+  if (Number.isFinite(progress.progress)) {
+    return Math.max(0, Math.min(1, progress.progress ?? 0));
+  }
+
+  if (progress.stage === "preparing-media") {
+    return 0.08;
+  }
+
+  if (progress.stage === "loading-renderer") {
+    return 0.16;
+  }
+
+  if (progress.stage === "finalizing") {
+    return 0.96;
+  }
+
+  return progress.stage === "ready" ? 1 : undefined;
+}
+
+function getFriendlyVideoProgressLabel(stage: VideoRenderProgress["stage"]): string {
+  if (stage === "preparing-media") {
+    return "Preparing video";
+  }
+
+  if (stage === "loading-renderer") {
+    return "Starting export";
+  }
+
+  if (stage === "rendering" || stage === "fallback-rendering") {
+    return "Rendering video";
+  }
+
+  if (stage === "finalizing") {
+    return "Finishing video";
+  }
+
+  return "Video ready";
+}
+
+function PopupSettings({
+  onChange,
+  settings,
+  status
+}: {
+  onChange: <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => void;
+  settings: QuotiSettings;
+  status: string;
+}) {
+  return (
+    <section className="popup-settings" aria-label="Quoti settings">
+      <div className="popup-settings__group">
+        <h2 className="popup-settings__heading">Capture</h2>
+        <label className="popup-settings__switch-row">
+          <span>
+            <span className="popup-settings__label">Remember hovered post</span>
+            <span className="popup-settings__description">Use the post under your cursor when Quoti opens.</span>
+          </span>
+          <input
+            className="popup-settings__switch-input"
+            checked={settings.hoverCaptureEnabled}
+            onChange={(event) => onChange("hoverCaptureEnabled", event.target.checked)}
+            type="checkbox"
+          />
+          <span className="popup-settings__switch-control" aria-hidden="true">
+            <span className="popup-settings__switch-thumb" />
+          </span>
+        </label>
+        <label className="popup-settings__switch-row">
+          <span>
+            <span className="popup-settings__label">Right-click action</span>
+            <span className="popup-settings__description">Add a Create Quoti card action to supported posts.</span>
+          </span>
+          <input
+            className="popup-settings__switch-input"
+            checked={settings.contextMenuEnabled}
+            onChange={(event) => onChange("contextMenuEnabled", event.target.checked)}
+            type="checkbox"
+          />
+          <span className="popup-settings__switch-control" aria-hidden="true">
+            <span className="popup-settings__switch-thumb" />
+          </span>
+        </label>
+      </div>
+
+      <div className="popup-settings__group">
+        <h2 className="popup-settings__heading">Card</h2>
+        <div className="popup-settings__field">
+          <span className="popup-settings__label">Theme</span>
+          <div
+            className="popup-settings__segmented"
+            data-option-count="2"
+            data-selected-index={getCardThemeIndex(settings.cardTheme)}
+            role="group"
+            aria-label="Card theme"
+          >
+            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
+            {[
+              ["light", "Light"],
+              ["dark", "Dark"]
+            ].map(([value, label]) => (
+              <button
+                className={settings.cardTheme === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
+                key={value}
+                onClick={() => onChange("cardTheme", value as QuotiSettings["cardTheme"])}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ul className="popup-settings__choice-help">
+            <li className={settings.cardTheme === "light" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Light</strong> keeps the warm editorial card.
+            </li>
+            <li className={settings.cardTheme === "dark" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Dark</strong> uses a deeper card for dark captures.
+            </li>
+          </ul>
+        </div>
+        <div className="popup-settings__field">
+          <span className="popup-settings__label">Content</span>
+          <div
+            className="popup-settings__segmented"
+            data-option-count="2"
+            data-selected-index={getCardContentModeIndex(settings.cardContentMode)}
+            role="group"
+            aria-label="Card content"
+          >
+            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
+            {[
+              ["text-only", "Text only"],
+              ["with-media", "With media"]
+            ].map(([value, label]) => (
+              <button
+                className={settings.cardContentMode === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
+                key={value}
+                onClick={() => onChange("cardContentMode", value as QuotiSettings["cardContentMode"])}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ul className="popup-settings__choice-help">
+            <li className={settings.cardContentMode === "text-only" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Text only</strong> keeps the export focused on the post copy.
+            </li>
+            <li className={settings.cardContentMode === "with-media" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>With media</strong> includes images or videos when the post has them.
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="popup-settings__group">
+        <h2 className="popup-settings__heading">Video Export</h2>
+        <div className="popup-settings__field">
+          <span className="popup-settings__label">Exporter</span>
+          <div className="popup-settings__segmented" data-selected-index={getVideoRendererIndex(settings.videoRenderer)} role="group" aria-label="Video exporter">
+            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
+            {[
+              ["auto", "Auto"],
+              ["native", "Local"],
+              ["wasm-ffmpeg", "Extension"]
+            ].map(([value, label]) => (
+              <button
+                className={settings.videoRenderer === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
+                key={value}
+                onClick={() => onChange("videoRenderer", value as QuotiSettings["videoRenderer"])}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ul className="popup-settings__choice-help">
+            <li className={settings.videoRenderer === "auto" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Auto</strong> chooses Local when available, then falls back by itself.
+            </li>
+            <li className={settings.videoRenderer === "native" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Local</strong> uses the installed helper on this computer.
+            </li>
+            <li className={settings.videoRenderer === "wasm-ffmpeg" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Extension</strong> uses the renderer included with Quoti.
+            </li>
+          </ul>
+        </div>
+        <div className="popup-settings__field">
+          <span className="popup-settings__label">Quality</span>
+          <div className="popup-settings__segmented" data-selected-index={getVideoQualityIndex(settings.videoQuality)} role="group" aria-label="Video quality">
+            <span className="popup-settings__segmented-indicator" aria-hidden="true" />
+            {[
+              ["fast", "Fast"],
+              ["balanced", "Balanced"],
+              ["high", "High"]
+            ].map(([value, label]) => (
+              <button
+                className={settings.videoQuality === value ? "popup-settings__segment popup-settings__segment--active" : "popup-settings__segment"}
+                key={value}
+                onClick={() => onChange("videoQuality", value as QuotiSettings["videoQuality"])}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ul className="popup-settings__choice-help">
+            <li className={settings.videoQuality === "fast" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Fast</strong> exports sooner with a lighter file.
+            </li>
+            <li className={settings.videoQuality === "balanced" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>Balanced</strong> is the recommended everyday choice.
+            </li>
+            <li className={settings.videoQuality === "high" ? "popup-settings__choice-help-item popup-settings__choice-help-item--active" : "popup-settings__choice-help-item"}>
+              <strong>High</strong> keeps more detail and can take longer.
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <p className="popup-settings__status" aria-live="polite">{status}</p>
+    </section>
+  );
+}
+
+function getVideoRendererIndex(value: QuotiSettings["videoRenderer"]): number {
+  if (value === "native") {
+    return 1;
+  }
+
+  if (value === "wasm-ffmpeg") {
+    return 2;
+  }
+
+  return 0;
+}
+
+function getVideoQualityIndex(value: QuotiSettings["videoQuality"]): number {
+  if (value === "balanced") {
+    return 1;
+  }
+
+  if (value === "high") {
+    return 2;
+  }
+
+  return 0;
+}
+
+function getCardThemeIndex(value: QuotiSettings["cardTheme"]): number {
+  return value === "dark" ? 1 : 0;
+}
+
+function getCardContentModeIndex(value: QuotiSettings["cardContentMode"]): number {
+  return value === "with-media" ? 1 : 0;
+}
+
+function resolveCardContentModePreference(post: ExtractedPost | null, preference: CardContentMode): CardContentMode {
+  if (!post) {
+    return preference;
+  }
+
+  return preference === "with-media" && !hasAnyMedia(post) ? "text-only" : preference;
 }
 
 function getPrimaryVideo(post: ExtractedPost) {
@@ -540,8 +898,8 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
 function formatNoticeDetail(message: string): string {
   const normalized = message.replace(/\s+/g, " ").trim();
 
-  if (normalized.startsWith("FFmpeg exited")) {
-    return "FFmpeg could not render any captured video source. No browser recording fallback was started.";
+  if (/ffmpeg|hls|native|renderer|media source|manifest|playlist/i.test(normalized)) {
+    return "Video export failed. Refresh capture and try again, or use Copy image for this post.";
   }
 
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;

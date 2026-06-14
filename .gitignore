@@ -142,3 +142,10 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 error.txt
+
+# Native renderer vendor binaries
+native/quoti-renderer/vendor/ffmpeg/**
+!native/quoti-renderer/vendor/ffmpeg/
+!native/quoti-renderer/vendor/ffmpeg/**/
+!native/quoti-renderer/vendor/ffmpeg/**/README.md
+!native/quoti-renderer/vendor/ffmpeg/**/.gitkeep

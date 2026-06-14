@@ -2,7 +2,7 @@ import type { CardTheme, ExtractedPost } from "../../shared/types/post.types";
 
 export type VideoRenderQuality = "fast" | "balanced" | "high";
 
-export type VideoRendererKind = "wasm-ffmpeg" | "realtime-browser";
+export type VideoRendererKind = "native" | "wasm-ffmpeg" | "realtime-browser";
 
 export type VideoRenderProgress =
   | {

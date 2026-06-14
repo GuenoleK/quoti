@@ -180,22 +180,21 @@ Go or Rust can be considered later if packaging a small single binary becomes mo
 Install only when working on the native renderer:
 
 - Node.js LTS, already required for the extension.
-- Native FFmpeg available from PATH, or a local FFmpeg binary selected by the helper.
+- A bundled FFmpeg binary at `native/quoti-renderer/vendor/ffmpeg/win32-x64/ffmpeg.exe`.
 - A terminal with permission to write the Native Messaging host manifest during development.
 
 Verify FFmpeg:
 
-```bash
-ffmpeg -version
+```powershell
+npm run native:check
 ```
 
-If `ffmpeg` is not found on Windows, options include:
+If the bundled binary is not found on Windows:
 
-- install with a package manager such as `winget`;
-- download a Windows build linked from the official FFmpeg download page;
-- later, use a Quoti-provided renderer bundle that includes FFmpeg.
+- put the production FFmpeg binary at `native/quoti-renderer/vendor/ffmpeg/win32-x64/ffmpeg.exe`;
+- for diagnostics only, run with `QUOTI_FFMPEG_PATH` pointing to another FFmpeg executable.
 
-The first prototype should discover `ffmpeg` from PATH. Bundling FFmpeg should be a packaging decision, not a requirement for proving the architecture.
+The helper should not silently discover `ffmpeg` from `PATH`. Missing bundled FFmpeg must be treated as "native renderer unavailable" so the extension can fall back to WASM.
 
 ### Native Messaging Development Concepts
 
@@ -213,10 +212,10 @@ Important rules:
 
 ### Windows Development Registration
 
-The future development script should:
+The development script should:
 
-1. Build or locate the helper executable.
-2. Write a Native Messaging host manifest.
+1. Locate `native/quoti-renderer/bin/quoti-renderer.cmd`.
+2. Write a Native Messaging host manifest under the current Windows user profile.
 3. Register the manifest path under:
 
 ```text
@@ -229,7 +228,7 @@ The host manifest should contain:
 {
   "name": "com.quoti.renderer",
   "description": "Quoti local video renderer",
-  "path": "C:\\Path\\To\\quoti-renderer.exe",
+  "path": "C:\\Path\\To\\quoti-renderer.cmd",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://EXTENSION_ID/"]
 }
@@ -237,31 +236,34 @@ The host manifest should contain:
 
 During development, the extension ID can change if the extension is loaded from a different folder. Keep this visible in the setup script output.
 
+Register the host with:
+
+```powershell
+npm run native:install -- -ExtensionId <extension-id>
+```
+
+Unregister it with:
+
+```powershell
+npm run native:uninstall
+```
+
 ### Phase 2 Suggested Repository Layout
 
-Do not create this structure until Phase 2 starts.
-
 ```text
-native-renderer/
+native/quoti-renderer/
   package.json
   src/
-    main.ts
-    controller/
-      native-render.controller.ts
-    services/
-      ffmpeg-render.service.ts
-      temp-file.service.ts
-      local-download.service.ts
-    adapters/
-      native-messaging-stdio.adapter.ts
-      ffmpeg-process.adapter.ts
-    protocol/
-      render-protocol.types.ts
+    host.mjs
   scripts/
     install-native-host.ps1
     uninstall-native-host.ps1
   manifests/
     com.quoti.renderer.windows.json
+  vendor/
+    ffmpeg/
+      win32-x64/
+        ffmpeg.exe
 ```
 
 The native renderer is intentionally separate from `src/` because it runs outside the browser extension.

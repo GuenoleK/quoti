@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Copy, Download, ExternalLink, ImageDown, RefreshCw, Video } from "lucide-react";
 import "./PostCardActions.css";
 
@@ -8,6 +9,7 @@ type PostCardActionsProps = {
   } | null;
   busyAction: string | null;
   canOpenSource: boolean;
+  downloadProgress?: number;
   downloadProgressLabel?: string;
   downloadMode: "image" | "video";
   isBusy: boolean;
@@ -23,6 +25,7 @@ export function PostCardActions({
   actionFeedback,
   busyAction,
   canOpenSource,
+  downloadProgress,
   downloadProgressLabel,
   downloadMode,
   isBusy,
@@ -45,14 +48,17 @@ export function PostCardActions({
   );
   const copyTextLabel = getActionLabel("copy-text", busyAction, actionFeedback, "Copy text");
   const isVideoDownload = downloadMode === "video";
+  const downloadProgressStyle = getDownloadProgressStyle(isVideoDownload, busyAction, downloadProgress);
+  const downloadProgressClassName = downloadProgressStyle ? " post-card-actions__button--progress" : "";
 
   return (
     <div className="post-card-actions" aria-label="Context card actions">
       {isVideoDownload ? (
         <button
-          className={`post-card-actions__button post-card-actions__button--primary${getActionClassName("download", actionFeedback)}`}
+          className={`post-card-actions__button post-card-actions__button--primary${downloadProgressClassName}${getActionClassName("download", actionFeedback)}`}
           disabled={isBusy}
           onClick={onDownload}
+          style={downloadProgressStyle}
           type="button"
           title="Download video"
         >
@@ -169,10 +175,22 @@ function getActionLabel(
   }
 
   if (feedback?.action === action && feedback.status === "error") {
-    return action === "copy-image" ? "Copy failed" : action === "download" ? "Download failed" : "Copy failed";
+    return action === "copy-image" ? "Copy failed" : action === "download" ? "Export failed" : "Copy failed";
   }
 
   return fallback;
+}
+
+function getDownloadProgressStyle(isVideoDownload: boolean, busyAction: string | null, progress: number | undefined): CSSProperties | undefined {
+  if (!isVideoDownload || busyAction !== "download" || typeof progress !== "number") {
+    return undefined;
+  }
+
+  const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
+
+  return {
+    "--download-progress": `${percent}%`
+  } as CSSProperties;
 }
 
 function getActionClassName(action: string, feedback: PostCardActionsProps["actionFeedback"]): string {

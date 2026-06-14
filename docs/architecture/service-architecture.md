@@ -235,12 +235,14 @@ src/rendering/video/
 Recommended native helper shape:
 
 ```text
-native-renderer/
+native/quoti-renderer/
+  bin/
+  manifests/
+  scripts/
   src/
-    controller/
-    services/
-    adapters/
-    protocol/
+    host.mjs
+  vendor/
+    ffmpeg/
 ```
 
 The native helper has its own runtime and should not import browser extension code directly. Shared protocol types can be copied initially and extracted later only if duplication becomes risky.

@@ -65,7 +65,9 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
             </header>
 
             <div className="context-card__body">
-              <p className="context-card__quote">{post.content}</p>
+              <p className="context-card__quote">
+                <EmojiText text={post.content} />
+              </p>
               {post.relatedPost ? (
                 <RelatedPostCard
                   active={contentMode === "with-media"}
@@ -123,7 +125,9 @@ function RelatedPostCard({
         {relatedPost.authorName ? <span className="context-card__related-author">{relatedPost.authorName}</span> : null}
         {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
       </div>
-      <p className="context-card__related-content">{relatedPost.content}</p>
+      <p className="context-card__related-content">
+        <EmojiText text={relatedPost.content} />
+      </p>
       {media ? (
         <figure
           className="context-card__media context-card__related-media"
@@ -199,7 +203,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
 
     if (!playableVideoUrl) {
       setVideoStatus("error");
-      setVideoError("Video URL missing");
+      setVideoError("Video unavailable");
       return;
     }
 
@@ -290,7 +294,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
     }
 
     setVideoStatus("error");
-    setVideoError(message);
+    setVideoError(message ? "Video preview unavailable" : "Video unavailable");
   };
 
   return (
@@ -335,7 +339,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
       ) : null}
       {videoStatus === "error" || !playableVideoUrl ? (
         <span className="context-card__video-status">
-          {playableVideoUrl ? videoError || "Video unavailable" : "Video URL missing"}
+          {playableVideoUrl ? videoError || "Video unavailable" : "Video unavailable"}
         </span>
       ) : null}
     </div>
@@ -459,6 +463,69 @@ function getPlayableVideoUrls(media: Extract<PostMedia, { type: "video" }>): str
         .filter((url) => isMatchingPosterMediaSource(media.posterUrl, url))
     )
   ].sort((a, b) => scorePlayableVideoUrl(b) - scorePlayableVideoUrl(a));
+}
+
+function EmojiText({ text }: { text: string }) {
+  return (
+    <>
+      {splitFlagEmoji(text).map((part, index) =>
+        part.type === "flag" ? (
+          <img
+            alt={part.value}
+            className="context-card__emoji"
+            crossOrigin="anonymous"
+            decoding="async"
+            key={`${part.value}-${index}`}
+            loading="eager"
+            referrerPolicy="no-referrer"
+            src={getTwitterEmojiSvgUrl(part.value)}
+          />
+        ) : (
+          part.value
+        )
+      )}
+    </>
+  );
+}
+
+function splitFlagEmoji(text: string): Array<{ type: "flag" | "text"; value: string }> {
+  const parts: Array<{ type: "flag" | "text"; value: string }> = [];
+  const flagPattern = /([\u{1F1E6}-\u{1F1FF}]{2})/gu;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = flagPattern.exec(text))) {
+    if (match.index > cursor) {
+      parts.push({
+        type: "text",
+        value: text.slice(cursor, match.index)
+      });
+    }
+
+    parts.push({
+      type: "flag",
+      value: match[1]
+    });
+    cursor = match.index + match[1].length;
+  }
+
+  if (cursor < text.length) {
+    parts.push({
+      type: "text",
+      value: text.slice(cursor)
+    });
+  }
+
+  return parts.length > 0 ? parts : [{ type: "text", value: text }];
+}
+
+function getTwitterEmojiSvgUrl(emoji: string): string {
+  const codepoints = Array.from(emoji)
+    .map((character) => character.codePointAt(0)?.toString(16))
+    .filter(Boolean)
+    .join("-");
+
+  return `https://abs.twimg.com/emoji/v2/svg/${codepoints}.svg`;
 }
 
 function isMatchingPosterMediaSource(posterUrl: string | undefined, sourceUrl: string): boolean {

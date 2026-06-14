@@ -1,0 +1,7 @@
+{
+  "name": "com.quoti.renderer",
+  "description": "Quoti native FFmpeg renderer",
+  "path": "__HOST_COMMAND_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}

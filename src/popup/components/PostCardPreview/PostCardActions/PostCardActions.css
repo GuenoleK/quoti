@@ -6,6 +6,7 @@
 
 .post-card-actions__button,
 .post-card-actions__icon-button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -21,6 +22,12 @@
     transform var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease;
+}
+
+.post-card-actions__button > svg,
+.post-card-actions__button > span {
+  position: relative;
+  z-index: 1;
 }
 
 .post-card-actions__button {
@@ -51,6 +58,17 @@
   color: var(--color-text-inverse);
   background: var(--color-text-primary);
   border-color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.post-card-actions__button--progress::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--download-progress, 0%);
+  content: "";
+  background: color-mix(in srgb, var(--color-accent-strong) 76%, #fff 6%);
+  opacity: 0.72;
+  transition: width var(--duration-fast) ease;
 }
 
 .post-card-actions__button--split {

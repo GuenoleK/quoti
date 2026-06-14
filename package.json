@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "native:check": "node native/quoti-renderer/src/host.mjs --check",
+    "native:install": "powershell -ExecutionPolicy Bypass -File native/quoti-renderer/scripts/install-native-host.ps1",
+    "native:uninstall": "powershell -ExecutionPolicy Bypass -File native/quoti-renderer/scripts/uninstall-native-host.ps1",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

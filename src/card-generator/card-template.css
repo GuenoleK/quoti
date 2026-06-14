@@ -79,6 +79,14 @@
   transition: color var(--duration-slow) ease;
 }
 
+.context-card__emoji {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.04em;
+  vertical-align: -0.14em;
+}
+
 .context-card[data-card-layout="square"] .context-card__quote {
   font-size: clamp(var(--font-size-lg), 3vw, var(--font-size-xl));
 }

@@ -1,4 +1,5 @@
 import { getVideoMediaSourceCandidates, resolveVideoMediaSourceCandidate } from "./services/media-source.service";
+import { renderNativeFfmpegVideo } from "./services/native-render.service";
 import { renderRealtimeBrowserVideo } from "./services/realtime-browser-render.service";
 import { renderVideoTemplateAsset } from "./services/template-render.service";
 import { loadWasmFfmpegRenderer, renderWasmFfmpegVideo } from "./services/wasm-ffmpeg-render.service";
@@ -14,6 +15,24 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
 
   if (normalizedRequest.preferredRenderer === "realtime-browser") {
     return renderRealtimeBrowserVideo(normalizedRequest);
+  }
+
+  if (normalizedRequest.preferredRenderer === "auto" || normalizedRequest.preferredRenderer === "native") {
+    try {
+      return await renderNativeFfmpegVideo(normalizedRequest);
+    } catch (error) {
+      const nativeError = toVideoRenderError(error);
+
+      if (normalizedRequest.preferredRenderer === "native" || nativeError.code === "ABORTED") {
+        throw nativeError;
+      }
+
+      reportProgress(normalizedRequest, {
+        stage: "loading-renderer",
+        message: "Native renderer unavailable. Using bundled renderer",
+        progress: 0
+      });
+    }
   }
 
   try {
@@ -99,15 +118,7 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
 
     throw lastCandidateError ?? new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "Quoti could not resolve a playable video source.");
   } catch (error) {
-    if (normalizedRequest.preferredRenderer === "wasm-ffmpeg") {
-      throw toVideoRenderError(error);
-    }
-
-    if (!normalizedRequest.browserVideo) {
-      throw toVideoRenderError(error);
-    }
-
-    return renderRealtimeBrowserVideo(normalizedRequest, getFallbackReason(error));
+    throw toVideoRenderError(error);
   }
 }
 
@@ -147,10 +158,3 @@ function toVideoRenderError(error: unknown): VideoRenderError {
   return new VideoRenderError("FFMPEG_FAILED", "Quoti could not render this video.", error);
 }
 
-function getFallbackReason(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "The FFmpeg renderer could not complete this export.";
-}

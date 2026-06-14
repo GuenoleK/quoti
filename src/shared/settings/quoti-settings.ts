@@ -1,16 +1,29 @@
+import type { CardContentMode, CardTheme } from "../types/post.types";
+
+export type VideoQualitySetting = "fast" | "balanced" | "high";
+export type VideoRendererSetting = "auto" | "native" | "wasm-ffmpeg";
+
 export type QuotiSettings = {
+  cardContentMode: CardContentMode;
+  cardTheme: CardTheme;
   hoverCaptureEnabled: boolean;
   contextMenuEnabled: boolean;
   inlineButtonEnabled: boolean;
+  videoQuality: VideoQualitySetting;
+  videoRenderer: VideoRendererSetting;
 };
 
 export const quotiSettingsStorageKey = "quoti-settings";
 export const latestPostStorageKey = "quoti-latest-post";
 
 export const defaultQuotiSettings: QuotiSettings = {
+  cardContentMode: "with-media",
+  cardTheme: "light",
   hoverCaptureEnabled: true,
   contextMenuEnabled: true,
-  inlineButtonEnabled: false
+  inlineButtonEnabled: false,
+  videoQuality: "balanced",
+  videoRenderer: "auto"
 };
 
 export async function readQuotiSettings(): Promise<QuotiSettings> {
@@ -21,10 +34,10 @@ export async function readQuotiSettings(): Promise<QuotiSettings> {
   const stored = await chrome.storage.sync.get(quotiSettingsStorageKey);
   const settings = stored[quotiSettingsStorageKey] as Partial<QuotiSettings> | undefined;
 
-  return {
+  return normalizeQuotiSettings({
     ...defaultQuotiSettings,
     ...settings
-  };
+  });
 }
 
 export async function writeQuotiSettings(settings: QuotiSettings): Promise<void> {
@@ -33,6 +46,33 @@ export async function writeQuotiSettings(settings: QuotiSettings): Promise<void>
   }
 
   await chrome.storage.sync.set({
-    [quotiSettingsStorageKey]: settings
+    [quotiSettingsStorageKey]: normalizeQuotiSettings(settings)
   });
+}
+
+function normalizeQuotiSettings(settings: QuotiSettings): QuotiSettings {
+  return {
+    ...settings,
+    cardContentMode: isCardContentMode(settings.cardContentMode) ? settings.cardContentMode : defaultQuotiSettings.cardContentMode,
+    cardTheme: isCardTheme(settings.cardTheme) ? settings.cardTheme : defaultQuotiSettings.cardTheme,
+    inlineButtonEnabled: false,
+    videoQuality: isVideoQualitySetting(settings.videoQuality) ? settings.videoQuality : defaultQuotiSettings.videoQuality,
+    videoRenderer: isVideoRendererSetting(settings.videoRenderer) ? settings.videoRenderer : defaultQuotiSettings.videoRenderer
+  };
+}
+
+function isCardContentMode(value: unknown): value is CardContentMode {
+  return value === "text-only" || value === "with-media";
+}
+
+function isCardTheme(value: unknown): value is CardTheme {
+  return value === "light" || value === "dark";
+}
+
+function isVideoQualitySetting(value: unknown): value is VideoQualitySetting {
+  return value === "fast" || value === "balanced" || value === "high";
+}
+
+function isVideoRendererSetting(value: unknown): value is VideoRendererSetting {
+  return value === "auto" || value === "native" || value === "wasm-ffmpeg";
 }

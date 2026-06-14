@@ -17,6 +17,7 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
   const { mediaElement, videoFrame } = prepareVideoTemplateNode(exportNode);
 
   exportNode.classList.remove("post-card-preview__card");
+  enforceQuotiMark(exportNode);
   exportNode.style.width = "100%";
   exportNode.style.maxWidth = "none";
 
@@ -34,8 +35,9 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
 
   try {
     await waitForFrame();
+    await waitForImages(exportNode);
 
-    lockMediaElementSize(mediaElement, mediaElement.getBoundingClientRect());
+    lockMediaElementSize(mediaElement, getUsableMediaRect(mediaElement));
     videoFrame.replaceChildren(createVideoPlaceholder());
     await waitForFrame();
 
@@ -112,6 +114,20 @@ function prepareVideoTemplateNode(exportNode: HTMLElement): PreparedVideoTemplat
   };
 }
 
+function enforceQuotiMark(exportNode: HTMLElement): void {
+  const mark = exportNode.querySelector<HTMLElement>(".context-card__mark");
+
+  if (!mark) {
+    return;
+  }
+
+  mark.textContent = "Quoti";
+  mark.removeAttribute("hidden");
+  mark.style.display = "";
+  mark.style.visibility = "";
+  mark.style.opacity = "";
+}
+
 function lockMediaElementSize(mediaElement: HTMLElement, mediaRect: DOMRect): void {
   const width = Math.max(2, Math.round(mediaRect.width));
   const height = Math.max(2, Math.round(mediaRect.height));
@@ -119,6 +135,29 @@ function lockMediaElementSize(mediaElement: HTMLElement, mediaRect: DOMRect): vo
   mediaElement.style.width = `${width}px`;
   mediaElement.style.maxWidth = "100%";
   mediaElement.style.aspectRatio = `${width} / ${height}`;
+}
+
+function getUsableMediaRect(mediaElement: HTMLElement): DOMRect {
+  const rect = mediaElement.getBoundingClientRect();
+
+  if (rect.width >= 80 && rect.height >= 80) {
+    return rect;
+  }
+
+  const fallbackWidth = Math.max(320, Math.round(mediaElement.parentElement?.getBoundingClientRect().width ?? 0));
+  const fallbackHeight = Math.round(fallbackWidth * 9 / 16);
+
+  mediaElement.style.width = `${fallbackWidth}px`;
+  mediaElement.style.aspectRatio = `${fallbackWidth} / ${fallbackHeight}`;
+  mediaElement.style.minHeight = `${fallbackHeight}px`;
+
+  const videoFrame = mediaElement.querySelector<HTMLElement>(".context-card__video-frame");
+
+  if (videoFrame) {
+    videoFrame.style.minHeight = `${fallbackHeight}px`;
+  }
+
+  return mediaElement.getBoundingClientRect();
 }
 
 function createVideoPlaceholder(): HTMLDivElement {
@@ -238,4 +277,23 @@ function getExportWidth(node: HTMLElement): number {
 
 function waitForFrame(): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function waitForImages(node: HTMLElement): Promise<void> {
+  const images = Array.from(node.querySelectorAll<HTMLImageElement>("img"));
+
+  return Promise.all(
+    images.map(
+      (image) =>
+        new Promise<void>((resolve) => {
+          if (image.complete) {
+            resolve();
+            return;
+          }
+
+          image.addEventListener("load", () => resolve(), { once: true });
+          image.addEventListener("error", () => resolve(), { once: true });
+        })
+    )
+  ).then(() => undefined);
 }

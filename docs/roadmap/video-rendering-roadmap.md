@@ -49,7 +49,7 @@ Status legend:
 | Static image fallback for video posts | Done | Video nodes are replaced with a poster snapshot during image export. |
 | Real-time browser video export | Prototype | Useful for learning, but not the long-term path. |
 | Phase 1 FFmpeg WASM renderer | In progress | Initial controller/service/adapter implementation exists; real X media QA remains. |
-| Phase 2 Native Messaging renderer | Planned | Optional fast local renderer after Phase 1 is stable. |
+| Phase 2 Native Messaging renderer | In progress | Windows-first Native Messaging path exists; it expects a bundled FFmpeg binary and falls back to WASM when unavailable. |
 
 ## Phase 1: Bundled FFmpeg WASM Renderer
 
@@ -133,7 +133,7 @@ This structure should only be created when Phase 1 implementation starts. Until 
 | Compose MP4 with audio | Done | WASM FFmpeg maps source audio when available and transcodes to AAC. |
 | Add progress reporting | Done | Popup labels map to preparing, loading, rendering, finalizing, and ready states. |
 | Add quality presets | Done | Fast, Balanced, and High presets exist; Balanced is the popup default. |
-| Add failure fallbacks | Done | WASM failures fall back to the existing browser WebM renderer when a preview video is available. |
+| Add failure fallbacks | Done | Normal popup exports do not start browser recording implicitly; native failures fall back to WASM, and image copy remains available. |
 | Protect first video startup | Done | The popup keeps the captured post visible, retries missing video URL hydration, and warms the video renderer in the background. |
 | Add manual QA checklist | In progress | Build/typecheck pass; real X cases still need manual verification. |
 
@@ -263,18 +263,20 @@ Initial request:
   "type": "render.video",
   "requestId": "uuid",
   "payload": {
-    "post": {},
-    "media": {
-      "sourceUrl": "https://video.twimg.com/..."
-    },
+    "candidates": ["https://video.twimg.com/..."],
     "template": {
-      "theme": "light",
-      "contentMode": "with-media"
+      "dataBase64": "png-as-base64",
+      "width": 920,
+      "height": 1306,
+      "mediaRect": {
+        "x": 304,
+        "y": 268,
+        "width": 473,
+        "height": 840,
+        "radius": 24
+      }
     },
-    "output": {
-      "format": "mp4",
-      "quality": "balanced"
-    }
+    "quality": "balanced"
   }
 }
 ```
@@ -332,16 +334,16 @@ Option 1 is the best first target because the extension can download the result 
 
 | Step | Status | Notes |
 | --- | --- | --- |
-| Add renderer capability detection | Planned | Extension checks whether `com.quoti.renderer` is available. |
-| Add `nativeMessaging` permission behind a deliberate change | Planned | This affects install permissions and should be documented. |
-| Create helper protocol package | Planned | Shared request/response schemas between extension and helper. |
-| Create Node-based helper prototype | Planned | TypeScript first, native binary packaging later. |
-| Add native host manifest templates | Planned | Windows first, macOS/Linux after. |
-| Add dev registration scripts | Planned | Scripts should install/uninstall native messaging host manifests. |
-| Add native FFmpeg integration | Planned | Discover `ffmpeg` from PATH first, bundle later if needed. |
-| Add progress parser | Planned | Parse FFmpeg stderr progress into Quoti stages. |
-| Add local download handoff | Planned | One-time local URL or controlled output file. |
-| Add user-facing fallback | Planned | If helper is missing or fails, use WASM renderer. |
+| Add renderer capability detection | Done | Extension pings `com.quoti.renderer`; a missing host or missing bundled FFmpeg returns to WASM before template rendering. |
+| Add `nativeMessaging` permission behind a deliberate change | Done | Manifest includes `nativeMessaging` and loopback fetch access for native downloads. |
+| Create helper protocol package | Done | Extension-side protocol lives in `src/rendering/video/native-render.protocol.ts`; helper mirrors the JSON shape. |
+| Create Node-based helper prototype | In progress | Node host reads/writes Native Messaging frames and runs native FFmpeg. |
+| Add native host manifest templates | Done | Windows template lives under `native/quoti-renderer/manifests`. |
+| Add dev registration scripts | Done | Windows install/uninstall scripts register `com.quoti.renderer` under HKCU. |
+| Add native FFmpeg integration | In progress | Helper expects bundled `vendor/ffmpeg/win32-x64/ffmpeg.exe`; it does not silently use `PATH`. |
+| Add progress parser | In progress | Helper parses FFmpeg duration/time stderr and maps it to Quoti render progress. |
+| Add local download handoff | In progress | Helper returns a temporary `127.0.0.1` MP4 URL, then cleans up after `render.release`. |
+| Add user-facing fallback | Done | `auto` tries native first and falls back to the bundled WASM renderer. |
 | Add packaging plan | Planned | Decide installer strategy only after prototype works. |
 
 ### Phase 2 Definition of Done

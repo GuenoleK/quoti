@@ -55,6 +55,80 @@
   gap: var(--space-3);
 }
 
+.options-page__field {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.options-page__field-label {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.options-page__segmented {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.options-page__segmented[data-option-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.options-page__segmented-indicator {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-1);
+  width: calc((100% - var(--space-2)) / 3);
+  height: calc(100% - var(--space-2));
+  background: var(--color-surface-raised);
+  border-radius: calc(var(--radius-sm) - var(--space-1));
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform var(--duration-medium) cubic-bezier(0.22, 1, 0.36, 1),
+    background-color var(--duration-medium) ease,
+    box-shadow var(--duration-medium) ease;
+}
+
+.options-page__segmented[data-option-count="2"] .options-page__segmented-indicator {
+  width: calc((100% - var(--space-2)) / 2);
+}
+
+.options-page__segmented[data-selected-index="1"] .options-page__segmented-indicator {
+  transform: translateX(100%);
+}
+
+.options-page__segmented[data-selected-index="2"] .options-page__segmented-indicator {
+  transform: translateX(200%);
+}
+
+.options-page__segment {
+  position: relative;
+  z-index: 1;
+  min-height: 34px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 3px);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  transition: color var(--duration-medium) ease;
+}
+
+.options-page__segment--active {
+  color: var(--color-text-primary);
+}
+
 .options-page__status {
   margin: 0;
   color: var(--color-text-secondary);

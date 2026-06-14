@@ -175,7 +175,8 @@ function handleStorageChanged(changes: Record<string, chrome.storage.StorageChan
 
   settings = {
     ...defaultContentScriptSettings,
-    ...changes[settingsStorageKey].newValue
+    ...changes[settingsStorageKey].newValue,
+    inlineButtonEnabled: false
   };
   updateInlineButtons();
 }
@@ -186,7 +187,8 @@ async function readContentScriptSettings(): Promise<ContentScriptSettings> {
 
   return {
     ...defaultContentScriptSettings,
-    ...storedSettings
+    ...storedSettings,
+    inlineButtonEnabled: false
   };
 }
 
@@ -660,12 +662,12 @@ function readPostVideos(root: HTMLElement, observedVideoUrls: string[], excluded
 function readPostImages(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMedia[] {
   const imageUrls = new Set<string>();
 
-  return Array.from(root.querySelectorAll<HTMLImageElement>('img[src*="pbs.twimg.com/media/"]'))
+  return Array.from(root.querySelectorAll<HTMLImageElement>("img"))
     .filter((image) => !isInsideExcludedContainer(image, excludedContainer))
     .map((image): ImagePostMedia | null => {
-      const normalizedUrl = normalizeImageUrl(image.currentSrc || image.src);
+      const normalizedUrl = normalizePostImageUrl(readImageSourceUrl(image));
 
-      if (!normalizedUrl || imageUrls.has(normalizedUrl)) {
+      if (!normalizedUrl || imageUrls.has(normalizedUrl) || !isLikelyPostImage(image)) {
         return null;
       }
 
@@ -678,6 +680,20 @@ function readPostImages(root: HTMLElement, excludedContainer?: HTMLElement | nul
       };
     })
     .filter((media): media is ImagePostMedia => media !== null);
+}
+
+function isLikelyPostImage(image: HTMLImageElement): boolean {
+  if (image.closest('[data-testid^="UserAvatar-Container"], [data-testid="UserAvatar-Container-unknown"]')) {
+    return false;
+  }
+
+  const rect = image.getBoundingClientRect();
+
+  if (rect.width > 0 && rect.height > 0 && Math.max(rect.width, rect.height) < 96) {
+    return false;
+  }
+
+  return true;
 }
 
 function isInsideExcludedContainer(element: Element, excludedContainer: HTMLElement | null | undefined): boolean {
@@ -921,6 +937,26 @@ function readVideoAlt(video: HTMLVideoElement): string | undefined {
 }
 
 function normalizeImageUrl(value: string): string | null {
+  return normalizeTwitterImageUrl(value, {
+    allowCardImage: false,
+    allowVideoThumb: true
+  });
+}
+
+function normalizePostImageUrl(value: string | undefined): string | null {
+  return normalizeTwitterImageUrl(value, {
+    allowCardImage: true,
+    allowVideoThumb: false
+  });
+}
+
+function normalizeTwitterImageUrl(
+  value: string | undefined,
+  options: {
+    allowCardImage: boolean;
+    allowVideoThumb: boolean;
+  }
+): string | null {
   if (!value) {
     return null;
   }
@@ -937,13 +973,29 @@ function normalizeImageUrl(value: string): string | null {
     return null;
   }
 
-  if (!url.pathname.includes("/media/") && !url.pathname.includes("_thumb/")) {
+  const pathname = url.pathname;
+  const isPostImage = pathname.includes("/media/") || (options.allowCardImage && pathname.includes("/card_img/"));
+  const isVideoThumb = options.allowVideoThumb && pathname.includes("_thumb/");
+
+  if (!isPostImage && !isVideoThumb) {
     return null;
   }
 
   url.searchParams.set("name", "large");
 
   return url.toString();
+}
+
+function readImageSourceUrl(image: HTMLImageElement): string | undefined {
+  return image.currentSrc || image.src || readBestSrcsetCandidate(image.srcset);
+}
+
+function readBestSrcsetCandidate(srcset: string): string | undefined {
+  return srcset
+    .split(",")
+    .map((candidate) => candidate.trim().split(/\s+/)[0])
+    .filter(Boolean)
+    .at(-1);
 }
 
 function normalizeText(value: string | null | undefined): string {

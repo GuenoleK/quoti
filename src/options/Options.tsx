@@ -11,10 +11,11 @@ export function Options() {
     void readQuotiSettings().then(setSettings);
   }, []);
 
-  const updateSetting = (key: keyof QuotiSettings, value: boolean) => {
+  const updateSetting = <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => {
     const nextSettings = {
       ...settings,
-      [key]: value
+      [key]: value,
+      inlineButtonEnabled: false
     };
 
     setSettings(nextSettings);
@@ -50,16 +51,132 @@ export function Options() {
             label="Add right-click action"
             onChange={(checked) => updateSetting("contextMenuEnabled", checked)}
           />
-          <SettingsToggle
-            checked={settings.inlineButtonEnabled}
-            description="Show a subtle Quoti button inside supported posts."
-            label="Show Quoti button in posts"
-            onChange={(checked) => updateSetting("inlineButtonEnabled", checked)}
-          />
+          <div className="options-page__field">
+            <span className="options-page__field-label">Card theme</span>
+            <div
+              className="options-page__segmented"
+              data-option-count="2"
+              data-selected-index={getCardThemeIndex(settings.cardTheme)}
+              role="group"
+              aria-label="Card theme"
+            >
+              <span className="options-page__segmented-indicator" aria-hidden="true" />
+              {[
+                ["light", "Light"],
+                ["dark", "Dark"]
+              ].map(([value, label]) => (
+                <button
+                  className={settings.cardTheme === value ? "options-page__segment options-page__segment--active" : "options-page__segment"}
+                  key={value}
+                  onClick={() => updateSetting("cardTheme", value as QuotiSettings["cardTheme"])}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="options-page__field">
+            <span className="options-page__field-label">Card content</span>
+            <div
+              className="options-page__segmented"
+              data-option-count="2"
+              data-selected-index={getCardContentModeIndex(settings.cardContentMode)}
+              role="group"
+              aria-label="Card content"
+            >
+              <span className="options-page__segmented-indicator" aria-hidden="true" />
+              {[
+                ["text-only", "Text only"],
+                ["with-media", "With media"]
+              ].map(([value, label]) => (
+                <button
+                  className={settings.cardContentMode === value ? "options-page__segment options-page__segment--active" : "options-page__segment"}
+                  key={value}
+                  onClick={() => updateSetting("cardContentMode", value as QuotiSettings["cardContentMode"])}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="options-page__field">
+            <span className="options-page__field-label">Video exporter</span>
+            <div className="options-page__segmented" data-selected-index={getVideoRendererIndex(settings.videoRenderer)} role="group" aria-label="Video exporter">
+              <span className="options-page__segmented-indicator" aria-hidden="true" />
+              {[
+                ["auto", "Auto"],
+                ["native", "Local"],
+                ["wasm-ffmpeg", "Extension"]
+              ].map(([value, label]) => (
+                <button
+                  className={settings.videoRenderer === value ? "options-page__segment options-page__segment--active" : "options-page__segment"}
+                  key={value}
+                  onClick={() => updateSetting("videoRenderer", value as QuotiSettings["videoRenderer"])}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="options-page__field">
+            <span className="options-page__field-label">Video quality</span>
+            <div className="options-page__segmented" data-selected-index={getVideoQualityIndex(settings.videoQuality)} role="group" aria-label="Video quality">
+              <span className="options-page__segmented-indicator" aria-hidden="true" />
+              {[
+                ["fast", "Fast"],
+                ["balanced", "Balanced"],
+                ["high", "High"]
+              ].map(([value, label]) => (
+                <button
+                  className={settings.videoQuality === value ? "options-page__segment options-page__segment--active" : "options-page__segment"}
+                  key={value}
+                  onClick={() => updateSetting("videoQuality", value as QuotiSettings["videoQuality"])}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <p className="options-page__status" aria-live="polite">{status}</p>
       </section>
     </main>
   );
+}
+
+function getVideoRendererIndex(value: QuotiSettings["videoRenderer"]): number {
+  if (value === "native") {
+    return 1;
+  }
+
+  if (value === "wasm-ffmpeg") {
+    return 2;
+  }
+
+  return 0;
+}
+
+function getVideoQualityIndex(value: QuotiSettings["videoQuality"]): number {
+  if (value === "balanced") {
+    return 1;
+  }
+
+  if (value === "high") {
+    return 2;
+  }
+
+  return 0;
+}
+
+function getCardThemeIndex(value: QuotiSettings["cardTheme"]): number {
+  return value === "dark" ? 1 : 0;
+}
+
+function getCardContentModeIndex(value: QuotiSettings["cardContentMode"]): number {
+  return value === "with-media" ? 1 : 0;
 }

@@ -33,12 +33,16 @@
   --card-color-platform-background: var(--card-dark-color-platform-background);
 }
 
+.context-card[data-card-layout="portrait"] {
+  --card-export-width: 600px;
+}
+
 .context-card[data-card-layout="square"] {
-  --card-export-width: 820px;
+  --card-export-width: 690px;
 }
 
 .context-card[data-card-layout="wide"] {
-  --card-export-width: 1080px;
+  --card-export-width: 920px;
 }
 
 .context-card__inner {
@@ -69,7 +73,7 @@
   font-family: var(--font-family-serif);
   font-size: clamp(1.75rem, 4.8vw, 2.35rem);
   line-height: 1.36;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   white-space: pre-wrap;
   word-break: normal;
   transition: color var(--duration-slow) ease;
@@ -156,8 +160,19 @@
   font-family: var(--font-family-serif);
   font-size: clamp(var(--font-size-md), 2.4vw, var(--font-size-lg));
   line-height: 1.46;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   white-space: pre-wrap;
+  word-break: normal;
+}
+
+.context-card__related-media {
+  width: min(100%, 430px);
+  justify-self: start;
+}
+
+.context-card__related-media .context-card__image,
+.context-card__related-media .context-card__video {
+  max-height: 420px;
 }
 
 .context-card__footer {

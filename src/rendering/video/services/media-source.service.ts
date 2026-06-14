@@ -1,4 +1,4 @@
-import type { ExtractedPost, VideoPostMedia } from "../../../shared/types/post.types";
+import type { ExtractedPost, PostMedia, VideoPostMedia } from "../../../shared/types/post.types";
 import type { VideoRenderMediaSource, VideoRenderProgress } from "../video-render.types";
 import { VideoRenderError } from "../video-render.types";
 import { isHlsMediaUrl, resolveHlsMediaSource } from "../adapters/hls-media.adapter";
@@ -9,69 +9,12 @@ type ResolveMediaSourceOptions = {
 };
 
 export async function resolveVideoMediaSource(post: ExtractedPost, options: ResolveMediaSourceOptions = {}): Promise<VideoRenderMediaSource> {
-  const media = post.media.find((item): item is VideoPostMedia => item.type === "video");
-
-  if (!media) {
-    throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "No video media was found in this post.");
-  }
-
-  const candidates = getVideoSourceCandidates(media);
-
-  if (candidates.length === 0) {
-    throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "No playable video URL was found.");
-  }
-
+  const candidates = getVideoMediaSourceCandidates(post);
   const errors: unknown[] = [];
 
   for (const candidate of candidates) {
     try {
-      if (isHlsMediaUrl(candidate)) {
-        options.onProgress?.({
-          stage: "preparing-media",
-          message: "Preparing HLS media",
-          progress: 0.12
-        });
-
-        return await resolveHlsMediaSource(candidate, {
-          onFileLoaded: (loaded, total) => {
-            options.onProgress?.({
-              stage: "preparing-media",
-              message: "Preparing HLS media",
-              progress: total > 0 ? 0.12 + (loaded / total) * 0.56 : 0.5
-            });
-          },
-          signal: options.signal
-        });
-      }
-
-      options.onProgress?.({
-        stage: "preparing-media",
-        message: "Preparing source video",
-        progress: 0.12
-      });
-
-      const data = await fetchVideoBytes(candidate, {
-        onProgress: (progress) => {
-          options.onProgress?.({
-            stage: "preparing-media",
-            message: "Preparing source video",
-            progress: 0.12 + progress * 0.56
-          });
-        },
-        signal: options.signal
-      });
-
-      return {
-        files: [
-          {
-            data,
-            path: "source.mp4"
-          }
-        ],
-        kind: "mp4",
-        sourceUrl: candidate,
-        videoInputPath: "source.mp4"
-      };
+      return await resolveVideoMediaSourceCandidate(candidate, options);
     } catch (error) {
       if (isAbortError(error)) {
         throw new VideoRenderError("ABORTED", "Video rendering was interrupted.", error);
@@ -84,10 +27,89 @@ export async function resolveVideoMediaSource(post: ExtractedPost, options: Reso
   throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "Quoti could not resolve a playable video source.", errors);
 }
 
+export function getVideoMediaSourceCandidates(post: ExtractedPost): string[] {
+  const media = getAllPostMedia(post).find((item): item is VideoPostMedia => item.type === "video");
+
+  if (!media) {
+    throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "No video media was found in this post.");
+  }
+
+  const candidates = getVideoSourceCandidates(media);
+
+  if (candidates.length === 0) {
+    throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "No playable video URL was found.");
+  }
+
+  return candidates;
+}
+
+function getAllPostMedia(post: ExtractedPost): PostMedia[] {
+  return [...post.media, ...(post.relatedPost?.media ?? [])];
+}
+
+export async function resolveVideoMediaSourceCandidate(candidate: string, options: ResolveMediaSourceOptions = {}): Promise<VideoRenderMediaSource> {
+  if (isHlsMediaUrl(candidate)) {
+    options.onProgress?.({
+      stage: "preparing-media",
+      message: "Preparing HLS media",
+      progress: 0.12
+    });
+
+    return resolveHlsMediaSource(candidate, {
+      onFileLoaded: (loaded, total) => {
+        options.onProgress?.({
+          stage: "preparing-media",
+          message: "Preparing HLS media",
+          progress: total > 0 ? 0.12 + (loaded / total) * 0.56 : 0.5
+        });
+      },
+      signal: options.signal
+    });
+  }
+
+  try {
+    options.onProgress?.({
+      stage: "preparing-media",
+      message: "Preparing source video",
+      progress: 0.12
+    });
+
+    const data = await fetchVideoBytes(candidate, {
+      onProgress: (progress) => {
+        options.onProgress?.({
+          stage: "preparing-media",
+          message: "Preparing source video",
+          progress: 0.12 + progress * 0.56
+        });
+      },
+      signal: options.signal
+    });
+
+    return {
+      files: [
+        {
+          data,
+          path: "source.mp4"
+        }
+      ],
+      kind: "mp4",
+      sourceUrl: candidate,
+      videoInputPath: "source.mp4"
+    };
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new VideoRenderError("ABORTED", "Video rendering was interrupted.", error);
+    }
+
+    throw error;
+  }
+}
+
 function getVideoSourceCandidates(media: VideoPostMedia): string[] {
   const candidates = [media.url, ...(media.variants ?? [])]
     .map(normalizeSourceUrl)
-    .filter((url): url is string => typeof url === "string" && !isVideoSegmentUrl(url));
+    .filter((url): url is string => typeof url === "string" && !isVideoSegmentUrl(url) && !isLikelyAudioOnlySourceUrl(url))
+    .filter((url) => isMatchingPosterMediaSource(media.posterUrl, url));
 
   return [...new Set(candidates)].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
 }
@@ -140,6 +162,46 @@ function isVideoSegmentUrl(value: string): boolean {
     );
   } catch {
     return true;
+  }
+}
+
+function isLikelyAudioOnlySourceUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isMatchingPosterMediaSource(posterUrl: string | undefined, sourceUrl: string): boolean {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+
+  return !mediaId || extractTwitterVideoSourceId(sourceUrl) === mediaId;
+}
+
+function extractTwitterVideoMediaId(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
   }
 }
 

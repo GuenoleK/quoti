@@ -24,6 +24,7 @@ export type RelatedPost = {
   authorHandle?: string;
   authorName?: string;
   content: string;
+  media?: PostMedia[];
 };
 
 export type ExtractedPost = {

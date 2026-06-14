@@ -85,6 +85,10 @@ export async function resolveHlsMediaSource(sourceUrl: string, options: ResolveH
 
 function resolveHlsPlaylists(playlistUrl: string, playlist: string): ResolvedHlsPlaylists {
   if (isMediaPlaylist(playlist)) {
+    if (isLikelyAudioOnlyPlaylistUrl(playlistUrl)) {
+      throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "The HLS playlist appears to contain audio only.");
+    }
+
     return {
       videoPlaylistUrl: playlistUrl
     };
@@ -103,11 +107,16 @@ function resolveHlsPlaylists(playlistUrl: string, playlist: string): ResolvedHls
 
       const streamInfo = lines[index - 1] ?? "";
       const attributes = streamInfo.startsWith("#EXT-X-STREAM-INF:") ? parseHlsAttributes(streamInfo) : {};
+      const variantUrl = new URL(line, playlistUrl).toString();
+
+      if (!isLikelyVideoVariant(streamInfo, variantUrl, attributes)) {
+        return null;
+      }
 
       return {
         audioGroupId: attributes.AUDIO,
         score: scoreHlsVariant(streamInfo),
-        url: new URL(line, playlistUrl).toString()
+        url: variantUrl
       };
     })
     .filter((variant): variant is HlsVariant => Boolean(variant))
@@ -163,6 +172,44 @@ function parseHlsAttributes(line: string): Record<string, string> {
 function isHlsPlaylistReference(line: string, playlistUrl: string): boolean {
   try {
     return new URL(line, playlistUrl).pathname.toLowerCase().endsWith(".m3u8");
+  } catch {
+    return false;
+  }
+}
+
+function isLikelyVideoVariant(streamInfo: string, variantUrl: string, attributes: Record<string, string>): boolean {
+  if (!streamInfo.startsWith("#EXT-X-STREAM-INF:") || isLikelyAudioOnlyPlaylistUrl(variantUrl)) {
+    return false;
+  }
+
+  const codecs = (attributes.CODECS ?? "")
+    .split(",")
+    .map((codec) => codec.trim())
+    .filter(Boolean);
+  const hasResolution = Boolean(attributes.RESOLUTION) || /RESOLUTION=\d+x\d+/i.test(streamInfo);
+  const hasVideoCodec = codecs.some(isVideoCodec);
+  const hasAudioCodec = codecs.some(isAudioCodec);
+
+  if (hasResolution || hasVideoCodec) {
+    return true;
+  }
+
+  return codecs.length === 0 || !hasAudioCodec;
+}
+
+function isVideoCodec(codec: string): boolean {
+  return /^(avc1|hev1|hvc1|vp09|av01)(?:\.|$)/i.test(codec);
+}
+
+function isAudioCodec(codec: string): boolean {
+  return /^(mp4a|ac-3|ec-3)(?:\.|$)/i.test(codec);
+}
+
+function isLikelyAudioOnlyPlaylistUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
   } catch {
     return false;
   }

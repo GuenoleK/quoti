@@ -24,6 +24,10 @@ type CaptureState = {
 type VideoWarmupStatus = "idle" | "loading" | "ready" | "error";
 type MediaRecoveryStatus = "idle" | "loading";
 type VideoRenderController = typeof import("../rendering/video/video-render.controller");
+type CachedPostMedia = {
+  media: PostMedia[];
+  relatedMedia?: PostMedia[];
+};
 
 const unsupportedPageMessage = "Open x.com or twitter.com, hover a post, then open Quoti again.";
 let videoRenderControllerPromise: Promise<VideoRenderController> | null = null;
@@ -32,7 +36,7 @@ export function Popup() {
   const exportRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
   const mediaRecoveryPostKeyRef = useRef<string | null>(null);
-  const postMediaCacheRef = useRef<Map<string, PostMedia[]>>(new Map());
+  const postMediaCacheRef = useRef<Map<string, CachedPostMedia>>(new Map());
   const videoWarmupPromiseRef = useRef<Promise<void> | null>(null);
   const [capture, setCapture] = useState<CaptureState>({
     post: null,
@@ -193,7 +197,7 @@ export function Popup() {
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(post.media.length > 0 ? "with-media" : "text-only");
+        setContentMode(hasAnyMedia(post) ? "with-media" : "text-only");
         void recoverMissingVideoMedia(post);
         return;
       }
@@ -206,7 +210,7 @@ export function Popup() {
           status: "ready",
           message: "Preview post loaded."
         });
-        setContentMode(previewPost.media.length > 0 ? "with-media" : "text-only");
+        setContentMode(hasAnyMedia(previewPost) ? "with-media" : "text-only");
         void recoverMissingVideoMedia(previewPost);
         return;
       }
@@ -240,7 +244,7 @@ export function Popup() {
           status: "ready",
           message: "Post captured."
         });
-        setContentMode(post.media.length > 0 ? "with-media" : "text-only");
+        setContentMode(hasAnyMedia(post) ? "with-media" : "text-only");
         void recoverMissingVideoMedia(post);
         return;
       }
@@ -305,6 +309,7 @@ export function Popup() {
         return;
       }
 
+      console.error(`[Quoti] ${actionName} failed`, error);
       setActionFeedback({ action: actionName, status: "error" });
       setNotice(getActionErrorMessage(actionName, error));
     } finally {
@@ -325,11 +330,10 @@ export function Popup() {
 
       if (videoMedia) {
         const { renderPostVideo } = await loadVideoRenderController();
-        const video = exportRef.current?.querySelector<HTMLVideoElement>(".context-card__video");
         const result = await renderPostVideo({
-          browserVideo: video,
           cardTheme,
           post,
+          preferredRenderer: "wasm-ffmpeg",
           quality: "balanced",
           onProgress: setVideoRenderProgress,
           templateNode: exportRef.current as HTMLElement
@@ -441,9 +445,9 @@ export function Popup() {
           <div className="popup__toggles">
             <CardThemeToggle value={cardTheme} onChange={setCardTheme} />
             <CardContentToggle
-              disabled={capture.post.media.length === 0}
+              disabled={!hasAnyMedia(capture.post)}
               value={contentMode}
-              onChange={(mode) => setContentMode(capture.post?.media.length ? mode : "text-only")}
+              onChange={(mode) => setContentMode(capture.post && hasAnyMedia(capture.post) ? mode : "text-only")}
             />
           </div>
           <PostCardActions
@@ -492,15 +496,23 @@ function getVideoRenderProgressLabel(progress: VideoRenderProgress | null): stri
 }
 
 function getPrimaryVideo(post: ExtractedPost) {
-  return post.media.find((media) => media.type === "video");
+  return getAllPostMedia(post).find((media) => media.type === "video");
+}
+
+function getAllPostMedia(post: ExtractedPost): PostMedia[] {
+  return [...post.media, ...(post.relatedPost?.media ?? [])];
+}
+
+function hasAnyMedia(post: ExtractedPost): boolean {
+  return getAllPostMedia(post).length > 0;
 }
 
 function hasVideoMedia(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video");
+  return getAllPostMedia(post).some((media) => media.type === "video");
 }
 
 function hasVideoMediaSource(media: VideoPostMedia): boolean {
-  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoSourceUrl(url))));
+  return filterVideoSourceUrlsForMedia(media.posterUrl, [media.url, ...(media.variants ?? [])]).length > 0;
 }
 
 function getActionErrorMessage(actionName: string, error: unknown): string {
@@ -511,7 +523,7 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
   }
 
   if (actionName === "download") {
-    return detail || "Quoti could not prepare the download.";
+    return formatNoticeDetail(detail || "Quoti could not prepare the download.");
   }
 
   if (actionName === "copy-text") {
@@ -523,6 +535,16 @@ function getActionErrorMessage(actionName: string, error: unknown): string {
   }
 
   return detail || "The action could not be completed.";
+}
+
+function formatNoticeDetail(message: string): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+
+  if (normalized.startsWith("FFmpeg exited")) {
+    return "FFmpeg could not render any captured video source. No browser recording fallback was started.";
+  }
+
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
 }
 
 async function getActiveTab(): Promise<chrome.tabs.Tab> {
@@ -596,7 +618,8 @@ function mergeRecoveredPostMedia(basePost: ExtractedPost, recoveredPost: Extract
 
   return {
     ...basePost,
-    media: mergePostMedia(recoveredPost.media, basePost.media)
+    media: mergePostMedia(recoveredPost.media, basePost.media),
+    relatedPost: mergeRelatedPostMedia(recoveredPost.relatedPost, basePost.relatedPost)
   };
 }
 
@@ -612,28 +635,33 @@ function isSamePost(left: ExtractedPost, right: ExtractedPost): boolean {
 }
 
 function hydratePostVideoUrls(post: ExtractedPost, observedVideoUrls: string[]): ExtractedPost {
-  if (observedVideoUrls.length === 0) {
-    return post;
-  }
-
   let changed = false;
-  const videoCount = post.media.filter((item) => item.type === "video").length;
-  const fallbackObservedUrls = videoCount === 1 ? readSingleObservedVideoSourceUrls(observedVideoUrls) : [];
-  const media = post.media.map((item) => {
+  const hydrateMedia = (media: PostMedia[]): PostMedia[] => media.map((item) => {
     if (item.type !== "video") {
       return item;
     }
 
-    const observedUrls = readObservedVideoUrlsForMedia(item.posterUrl, observedVideoUrls);
-    const variants = mergeUrlList([item.url, ...(item.variants ?? []), ...observedUrls, ...(observedUrls.length === 0 ? fallbackObservedUrls : [])]);
+    const currentUrls = filterVideoSourceUrlsForMedia(item.posterUrl, [item.url, ...(item.variants ?? [])]);
+    const observedUrls = filterVideoSourceUrlsForMedia(item.posterUrl, observedVideoUrls);
+    const variants = mergeUrlList([...currentUrls, ...observedUrls]);
 
     if (variants.length === 0) {
-      return item;
+      if (!item.url && (!item.variants || item.variants.length === 0)) {
+        return item;
+      }
+
+      changed = true;
+
+      return {
+        ...item,
+        url: undefined,
+        variants: []
+      };
     }
 
     const nextItem = {
       ...item,
-      url: item.url ?? variants[0],
+      url: variants[0],
       variants
     };
 
@@ -641,45 +669,56 @@ function hydratePostVideoUrls(post: ExtractedPost, observedVideoUrls: string[]):
 
     return nextItem;
   });
+  const media = hydrateMedia(post.media);
+  const relatedMedia = post.relatedPost?.media ? hydrateMedia(post.relatedPost.media) : undefined;
 
-  return changed ? { ...post, media } : post;
+  return changed
+    ? {
+        ...post,
+        media,
+        relatedPost: post.relatedPost
+          ? {
+              ...post.relatedPost,
+              media: relatedMedia
+            }
+          : undefined
+      }
+    : post;
+}
+
+function mergeRelatedPostMedia(recoveredPost: ExtractedPost["relatedPost"], basePost: ExtractedPost["relatedPost"]): ExtractedPost["relatedPost"] {
+  if (!recoveredPost && !basePost) {
+    return undefined;
+  }
+
+  const relatedPost = recoveredPost ?? basePost;
+
+  if (!relatedPost) {
+    return undefined;
+  }
+
+  return {
+    ...relatedPost,
+    media: mergePostMedia(recoveredPost?.media ?? [], basePost?.media ?? [])
+  };
 }
 
 function readObservedVideoUrlsForMedia(posterUrl: string | undefined, observedVideoUrls: string[]): string[] {
-  const mediaId = extractTwitterVideoMediaId(posterUrl);
-
-  if (!mediaId) {
-    return [];
-  }
-
-  return [
-    ...new Set(
-      observedVideoUrls
-        .map(normalizeVideoSourceUrl)
-        .filter((url): url is string => Boolean(url))
-        .filter((url) => url.includes(`/${mediaId}/`) && !isVideoSegmentUrl(url))
-    )
-  ].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
+  return filterVideoSourceUrlsForMedia(posterUrl, observedVideoUrls);
 }
 
-function readSingleObservedVideoSourceUrls(observedVideoUrls: string[]): string[] {
-  const urls = [
-    ...new Set(
-      observedVideoUrls
-        .map(normalizeVideoSourceUrl)
-        .filter((url): url is string => Boolean(url))
-        .filter((url) => !isVideoSegmentUrl(url))
-    )
-  ];
-  const sourceEntries = urls.map((url) => ({
-    id: extractTwitterVideoSourceId(url),
-    url
-  }));
-  const sourceIds = new Set(sourceEntries.map(({ id }) => id).filter((id): id is string => Boolean(id)));
+function filterVideoSourceUrlsForMedia(posterUrl: string | undefined, sourceUrls: Array<string | undefined>): string[] {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+  const urls = sourceUrls
+    .map(normalizeVideoSourceUrl)
+    .filter((url): url is string => Boolean(url))
+    .filter((url) => !isVideoSegmentUrl(url));
 
-  return sourceIds.size === 1 && sourceEntries.every(({ id }) => Boolean(id))
-    ? sourceEntries.map(({ url }) => url).sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a))
-    : [];
+  if (!mediaId) {
+    return [...new Set(urls)].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
+  }
+
+  return [...new Set(urls.filter((url) => isMatchingTwitterVideoSourceId(url, mediaId)))].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
 }
 
 async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): Promise<QuotiMessageResponse> {
@@ -692,7 +731,7 @@ async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): 
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
+  return getAllPostMedia(post).some((media) => media.type === "video" && !hasVideoMediaSource(media));
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
@@ -749,16 +788,6 @@ function extractTwitterVideoMediaId(value: string | undefined): string | undefin
   }
 }
 
-function extractTwitterVideoSourceId(value: string): string | undefined {
-  try {
-    const pathname = new URL(value).pathname;
-
-    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizeVideoSourceUrl(value: string | undefined): string | undefined {
   if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
     return undefined;
@@ -771,10 +800,28 @@ function normalizeVideoSourceUrl(value: string | undefined): string | undefined 
       return undefined;
     }
 
+    if (isLikelyAudioOnlySourceUrl(url.toString())) {
+      return undefined;
+    }
+
     return url.toString();
   } catch {
     return undefined;
   }
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function isMatchingTwitterVideoSourceId(value: string, mediaId: string): boolean {
+  return extractTwitterVideoSourceId(value) === mediaId;
 }
 
 function isVideoSegmentUrl(value: string): boolean {
@@ -790,6 +837,16 @@ function isVideoSegmentUrl(value: string): boolean {
     );
   } catch {
     return true;
+  }
+}
+
+function isLikelyAudioOnlySourceUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+  } catch {
+    return false;
   }
 }
 
@@ -830,22 +887,31 @@ function wait(duration: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, duration));
 }
 
-function preserveSessionMedia(cache: Map<string, PostMedia[]>, post: ExtractedPost): ExtractedPost {
+function preserveSessionMedia(cache: Map<string, CachedPostMedia>, post: ExtractedPost): ExtractedPost {
   const cacheKey = getPostCacheKey(post);
 
   if (!cacheKey) {
     return post;
   }
 
-  const cachedMedia = cache.get(cacheKey);
-  const hydratedPost = cachedMedia
+  const cached = cache.get(cacheKey);
+  const hydratedPost = cached
     ? {
         ...post,
-        media: mergePostMedia(post.media, cachedMedia)
+        media: mergePostMedia(post.media, cached.media),
+        relatedPost: post.relatedPost
+          ? {
+              ...post.relatedPost,
+              media: mergePostMedia(post.relatedPost.media ?? [], cached.relatedMedia ?? [])
+            }
+          : post.relatedPost
       }
     : post;
 
-  cache.set(cacheKey, hydratedPost.media);
+  cache.set(cacheKey, {
+    media: hydratedPost.media,
+    relatedMedia: hydratedPost.relatedPost?.media
+  });
 
   return hydratedPost;
 }
@@ -875,14 +941,15 @@ function mergePostMedia(currentMedia: PostMedia[], cachedMedia: PostMedia[]): Po
     }
 
     if (media.type === "video" && cached.type === "video") {
-      const variants = mergeUrlList([media.url, ...(media.variants ?? []), cached.url, ...(cached.variants ?? [])]);
+      const posterUrl = media.posterUrl ?? cached.posterUrl;
+      const variants = filterVideoSourceUrlsForMedia(posterUrl, [media.url, ...(media.variants ?? []), cached.url, ...(cached.variants ?? [])]);
 
       return {
         ...media,
         alt: media.alt ?? cached.alt,
         duration: media.duration ?? cached.duration,
-        posterUrl: media.posterUrl ?? cached.posterUrl,
-        url: media.url ?? cached.url ?? variants[0],
+        posterUrl,
+        url: variants[0],
         variants
       };
     }
@@ -904,13 +971,16 @@ function findCachedMedia(media: PostMedia, cachedMedia: PostMedia[], index: numb
     if (media.type === "video" && cached.type === "video") {
       return Boolean(
         (media.url && cached.url === media.url) ||
-          (media.posterUrl && cached.posterUrl === media.posterUrl) ||
-          (media.posterUrl && cached.variants?.includes(media.posterUrl))
+          (media.posterUrl && cached.posterUrl === media.posterUrl)
       );
     }
 
     return false;
   });
+
+  if (media.type === "video") {
+    return exactMatch;
+  }
 
   return exactMatch ?? (cachedMedia[index]?.type === media.type ? cachedMedia[index] : undefined);
 }

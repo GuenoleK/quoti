@@ -98,5 +98,8 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
   text-align: center;
+  white-space: normal;
 }

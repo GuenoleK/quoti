@@ -1,5 +1,5 @@
 import type { QuotiMessageResponse } from "../../shared/types/extension-message.types";
-import type { ExtractedPost, VideoPostMedia } from "../../shared/types/post.types";
+import type { ExtractedPost, PostMedia, VideoPostMedia } from "../../shared/types/post.types";
 import { latestPostStorageKey, readQuotiSettings } from "../../shared/settings/quoti-settings";
 
 const contextMenuId = "quoti-create-card";
@@ -137,11 +137,15 @@ async function requestContextPost(tabId: number): Promise<QuotiMessageResponse> 
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
+  return getAllPostMedia(post).some((media) => media.type === "video" && !hasVideoMediaSource(media));
 }
 
 function hasVideoMediaSource(media: VideoPostMedia): boolean {
-  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoSourceUrl(url))));
+  return filterVideoSourceUrlsForMedia(media.posterUrl, [media.url, ...(media.variants ?? [])]).length > 0;
+}
+
+function getAllPostMedia(post: ExtractedPost): PostMedia[] {
+  return [...post.media, ...(post.relatedPost?.media ?? [])];
 }
 
 function normalizeVideoSourceUrl(value: string | undefined): string | undefined {
@@ -152,9 +156,58 @@ function normalizeVideoSourceUrl(value: string | undefined): string | undefined 
   try {
     const url = new URL(value.replace(/\\u0026/g, "&").replace(/&amp;/g, "&"));
 
-    return ["http:", "https:"].includes(url.protocol) && url.hostname.endsWith("twimg.com") ? url.toString() : undefined;
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com") || isLikelyAudioOnlySourceUrl(url.toString())) {
+      return undefined;
+    }
+
+    return url.toString();
   } catch {
     return undefined;
+  }
+}
+
+function filterVideoSourceUrlsForMedia(posterUrl: string | undefined, sourceUrls: Array<string | undefined>): string[] {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+  const urls = sourceUrls.map(normalizeVideoSourceUrl).filter((url): url is string => Boolean(url));
+
+  if (!mediaId) {
+    return [...new Set(urls)];
+  }
+
+  return [...new Set(urls.filter((url) => extractTwitterVideoSourceId(url) === mediaId))];
+}
+
+function extractTwitterVideoMediaId(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function isLikelyAudioOnlySourceUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+  } catch {
+    return false;
   }
 }
 

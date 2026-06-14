@@ -4,12 +4,17 @@ import { VideoRenderError } from "../video-render.types";
 
 const videoTemplatePixelRatio = 1.5;
 
+type PreparedVideoTemplateNode = {
+  mediaElement: HTMLElement;
+  videoFrame: HTMLElement;
+};
+
 export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promise<VideoTemplateAsset> {
   await document.fonts?.ready;
 
   const exportNode = templateNode.cloneNode(true) as HTMLElement;
   const host = document.createElement("div");
-  const mediaElement = prepareVideoTemplateNode(exportNode);
+  const { mediaElement, videoFrame } = prepareVideoTemplateNode(exportNode);
 
   exportNode.classList.remove("post-card-preview__card");
   exportNode.style.width = "100%";
@@ -30,9 +35,17 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
   try {
     await waitForFrame();
 
+    lockMediaElementSize(mediaElement, mediaElement.getBoundingClientRect());
+    videoFrame.replaceChildren(createVideoPlaceholder());
+    await waitForFrame();
+
     const cardRect = exportNode.getBoundingClientRect();
     const mediaRect = mediaElement.getBoundingClientRect();
     const mediaStyle = window.getComputedStyle(mediaElement);
+    const templateSize = {
+      height: makeEven(Math.round(cardRect.height * videoTemplatePixelRatio)),
+      width: makeEven(Math.round(cardRect.width * videoTemplatePixelRatio))
+    };
     const processedMediaRect = {
       height: Math.max(2, Math.round(mediaRect.height * videoTemplatePixelRatio)),
       radius: Math.round(readPixelValue(mediaStyle.borderTopLeftRadius) * videoTemplatePixelRatio),
@@ -52,15 +65,16 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
     const data = await createVideoTemplateOverlayData(blob, {
       borderColor: mediaStyle.borderColor,
       borderWidth: readPixelValue(mediaStyle.borderTopWidth) * videoTemplatePixelRatio,
-      mediaRect: processedMediaRect
+      mediaRect: processedMediaRect,
+      size: templateSize
     });
 
     return {
       data,
-      height: Math.round(cardRect.height * videoTemplatePixelRatio),
+      height: templateSize.height,
       mediaRect: processedMediaRect,
       path: "quoti-template.png",
-      width: Math.round(cardRect.width * videoTemplatePixelRatio)
+      width: templateSize.width
     };
   } catch (error) {
     if (error instanceof VideoRenderError) {
@@ -73,8 +87,10 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
   }
 }
 
-function prepareVideoTemplateNode(exportNode: HTMLElement): HTMLElement {
-  const mediaElement = exportNode.querySelector<HTMLElement>(".context-card__media");
+function prepareVideoTemplateNode(exportNode: HTMLElement): PreparedVideoTemplateNode {
+  const mediaElement =
+    exportNode.querySelector<HTMLElement>('.context-card__media[data-media-type="video"]') ??
+    exportNode.querySelector<HTMLElement>(".context-card__media");
 
   if (!mediaElement) {
     throw new VideoRenderError("TEMPLATE_RENDER_FAILED", "The card template does not contain a media frame.");
@@ -90,9 +106,19 @@ function prepareVideoTemplateNode(exportNode: HTMLElement): HTMLElement {
     throw new VideoRenderError("TEMPLATE_RENDER_FAILED", "The card template does not contain a video frame.");
   }
 
-  videoFrame.replaceChildren(createVideoPlaceholder());
+  return {
+    mediaElement,
+    videoFrame
+  };
+}
 
-  return mediaElement;
+function lockMediaElementSize(mediaElement: HTMLElement, mediaRect: DOMRect): void {
+  const width = Math.max(2, Math.round(mediaRect.width));
+  const height = Math.max(2, Math.round(mediaRect.height));
+
+  mediaElement.style.width = `${width}px`;
+  mediaElement.style.maxWidth = "100%";
+  mediaElement.style.aspectRatio = `${width} / ${height}`;
 }
 
 function createVideoPlaceholder(): HTMLDivElement {
@@ -114,6 +140,10 @@ async function createVideoTemplateOverlayData(
     borderColor: string;
     borderWidth: number;
     mediaRect: VideoTemplateAsset["mediaRect"];
+    size: {
+      height: number;
+      width: number;
+    };
   }
 ): Promise<Uint8Array> {
   const bitmap = await createImageBitmap(blob);
@@ -124,8 +154,8 @@ async function createVideoTemplateOverlayData(
     throw new VideoRenderError("TEMPLATE_RENDER_FAILED", "Canvas export is not available.");
   }
 
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
+  canvas.width = options.size.width;
+  canvas.height = options.size.height;
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
 
@@ -188,18 +218,22 @@ function readPixelValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function makeEven(value: number): number {
+  return value % 2 === 0 ? value : value - 1;
+}
+
 function getExportWidth(node: HTMLElement): number {
   const layout = node.dataset.cardLayout;
 
   if (layout === "wide") {
-    return 1080;
+    return 920;
   }
 
   if (layout === "square") {
-    return 820;
+    return 690;
   }
 
-  return 720;
+  return 600;
 }
 
 function waitForFrame(): Promise<void> {

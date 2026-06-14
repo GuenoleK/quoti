@@ -1,4 +1,4 @@
-import { resolveVideoMediaSource } from "./services/media-source.service";
+import { getVideoMediaSourceCandidates, resolveVideoMediaSourceCandidate } from "./services/media-source.service";
 import { renderRealtimeBrowserVideo } from "./services/realtime-browser-render.service";
 import { renderVideoTemplateAsset } from "./services/template-render.service";
 import { loadWasmFfmpegRenderer, renderWasmFfmpegVideo } from "./services/wasm-ffmpeg-render.service";
@@ -23,54 +23,81 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
       progress: 0
     });
 
-    const [mediaSource, template] = await Promise.all([
-      resolveVideoMediaSource(normalizedRequest.post, {
-        onProgress: normalizedRequest.onProgress,
-        signal: normalizedRequest.signal
-      }),
-      renderVideoTemplateAsset(normalizedRequest.templateNode)
-    ]);
+    const candidates = getVideoMediaSourceCandidates(normalizedRequest.post);
+    const template = await renderVideoTemplateAsset(normalizedRequest.templateNode);
+    let rendererLoaded = false;
+    let lastCandidateError: VideoRenderError | null = null;
 
-    reportProgress(normalizedRequest, {
-      stage: "loading-renderer",
-      message: "Loading renderer",
-      progress: 0
-    });
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
 
-    await loadWasmFfmpegRenderer(normalizedRequest.signal);
+      try {
+        reportProgress(normalizedRequest, {
+          stage: "preparing-media",
+          message: candidates.length > 1 ? `Preparing media source ${index + 1}/${candidates.length}` : "Preparing media",
+          progress: 0
+        });
 
-    reportProgress(normalizedRequest, {
-      stage: "rendering",
-      message: "Rendering video",
-      progress: 0
-    });
+        const mediaSource = await resolveVideoMediaSourceCandidate(candidate, {
+          onProgress: normalizedRequest.onProgress,
+          signal: normalizedRequest.signal
+        });
 
-    const result = await renderWasmFfmpegVideo({
-      mediaSource,
-      onProgress: (progress) => {
+        if (!rendererLoaded) {
+          reportProgress(normalizedRequest, {
+            stage: "loading-renderer",
+            message: "Loading renderer",
+            progress: 0
+          });
+
+          await loadWasmFfmpegRenderer(normalizedRequest.signal);
+          rendererLoaded = true;
+        }
+
         reportProgress(normalizedRequest, {
           stage: "rendering",
           message: "Rendering video",
-          progress
+          progress: 0
         });
-      },
-      quality: normalizedRequest.quality,
-      signal: normalizedRequest.signal,
-      template
-    });
 
-    reportProgress(normalizedRequest, {
-      stage: "finalizing",
-      message: "Finalizing MP4",
-      progress: 0.98
-    });
-    reportProgress(normalizedRequest, {
-      stage: "ready",
-      message: "Video ready",
-      progress: 1
-    });
+        const result = await renderWasmFfmpegVideo({
+          mediaSource,
+          onProgress: (progress) => {
+            reportProgress(normalizedRequest, {
+              stage: "rendering",
+              message: "Rendering video",
+              progress
+            });
+          },
+          quality: normalizedRequest.quality,
+          signal: normalizedRequest.signal,
+          template
+        });
 
-    return result;
+        reportProgress(normalizedRequest, {
+          stage: "finalizing",
+          message: "Finalizing MP4",
+          progress: 0.98
+        });
+        reportProgress(normalizedRequest, {
+          stage: "ready",
+          message: "Video ready",
+          progress: 1
+        });
+
+        return result;
+      } catch (error) {
+        const videoError = toVideoRenderError(error);
+
+        if (!shouldTryNextMediaSource(videoError) || index === candidates.length - 1) {
+          throw videoError;
+        }
+
+        lastCandidateError = videoError;
+      }
+    }
+
+    throw lastCandidateError ?? new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "Quoti could not resolve a playable video source.");
   } catch (error) {
     if (normalizedRequest.preferredRenderer === "wasm-ffmpeg") {
       throw toVideoRenderError(error);
@@ -82,6 +109,10 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
 
     return renderRealtimeBrowserVideo(normalizedRequest, getFallbackReason(error));
   }
+}
+
+function shouldTryNextMediaSource(error: VideoRenderError): boolean {
+  return error.code === "FFMPEG_FAILED" || error.code === "MEDIA_SOURCE_UNAVAILABLE";
 }
 
 export async function preloadVideoRenderer(signal?: AbortSignal): Promise<void> {

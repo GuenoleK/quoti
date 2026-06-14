@@ -324,11 +324,15 @@ async function extractInlineXPostWithVideoRetry(postId: string): Promise<PostExt
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {
-  return post.media.some((media) => media.type === "video" && !hasVideoMediaSource(media));
+  return getAllPostMedia(post).some((media) => media.type === "video" && !hasVideoMediaSource(media));
 }
 
 function hasVideoMediaSource(media: VideoPostMedia): boolean {
-  return Boolean(media.url || media.variants?.some((url) => Boolean(normalizeVideoUrl(url))));
+  return filterVideoUrlsForPoster(media.posterUrl, [media.url, ...(media.variants ?? [])]).length > 0;
+}
+
+function getAllPostMedia(post: ExtractedPost): PostMedia[] {
+  return [...post.media, ...(post.relatedPost?.media ?? [])];
 }
 
 async function requestObservedVideoUrls(): Promise<string[]> {
@@ -459,10 +463,10 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
   const authorBlock = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   const authorName = readAuthorName(authorBlock);
   const authorHandle = readAuthorHandle(authorBlock);
-  const { content, relatedPost } = readPostContent(article);
+  const { content, relatedContainer, relatedPost } = readPostContent(article, observedVideoUrls);
   const time = article.querySelector<HTMLTimeElement>("time");
   const sourceUrl = readSourceUrl(time);
-  const media = readPostMedia(article, observedVideoUrls);
+  const media = readPostMedia(article, observedVideoUrls, relatedContainer);
 
   return {
     id: sourceUrl ?? `${authorHandle}-${content.slice(0, 32)}`,
@@ -499,20 +503,26 @@ function readAuthorHandle(authorBlock: HTMLElement | null): string {
   return handle ?? "";
 }
 
-function readPostContent(article: HTMLElement): { content: string; relatedPost?: RelatedPost } {
+function readPostContent(
+  article: HTMLElement,
+  observedVideoUrls: string[]
+): { content: string; relatedContainer?: HTMLElement | null; relatedPost?: RelatedPost } {
   const tweetTextBlocks = Array.from(article.querySelectorAll<HTMLElement>('[data-testid="tweetText"]'));
   const postBlocks = tweetTextBlocks
     .map((block) => ({
       block,
-      content: normalizePostContent(block.innerText)
+      content: readTweetTextBlockContent(block)
     }))
     .filter(({ content }) => Boolean(content));
   const text = postBlocks[0]?.content ?? "";
 
   if (text) {
+    const related = readRelatedPost(article, postBlocks.slice(1), observedVideoUrls);
+
     return {
       content: text,
-      relatedPost: readRelatedPost(article, postBlocks.slice(1))
+      relatedContainer: related?.container,
+      relatedPost: related?.post
     };
   }
 
@@ -529,7 +539,11 @@ function readPostContent(article: HTMLElement): { content: string; relatedPost?:
   };
 }
 
-function readRelatedPost(article: HTMLElement, postBlocks: Array<{ block: HTMLElement; content: string }>): RelatedPost | undefined {
+function readRelatedPost(
+  article: HTMLElement,
+  postBlocks: Array<{ block: HTMLElement; content: string }>,
+  observedVideoUrls: string[]
+): { container: HTMLElement | null; post: RelatedPost } | undefined {
   const relatedBlock = postBlocks[0];
 
   if (!relatedBlock) {
@@ -538,12 +552,47 @@ function readRelatedPost(article: HTMLElement, postBlocks: Array<{ block: HTMLEl
 
   const relatedContainer = findRelatedPostContainer(article, relatedBlock.block);
   const authorBlock = relatedContainer?.querySelector<HTMLElement>('[data-testid="User-Name"]') ?? null;
+  const media = relatedContainer ? readPostMedia(relatedContainer, observedVideoUrls) : [];
 
   return {
-    authorName: authorBlock ? readAuthorName(authorBlock) : undefined,
-    authorHandle: authorBlock ? readAuthorHandle(authorBlock) : undefined,
-    content: relatedBlock.content
+    container: relatedContainer,
+    post: {
+      authorName: authorBlock ? readAuthorName(authorBlock) : undefined,
+      authorHandle: authorBlock ? readAuthorHandle(authorBlock) : undefined,
+      content: relatedBlock.content,
+      media
+    }
   };
+}
+
+function readTweetTextBlockContent(block: HTMLElement): string {
+  const parts: string[] = [];
+  const visit = (node: ChildNode): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+
+    if (node.tagName === "BR") {
+      parts.push("\n");
+      return;
+    }
+
+    if (node instanceof HTMLImageElement && node.alt) {
+      parts.push(node.alt);
+      return;
+    }
+
+    node.childNodes.forEach(visit);
+  };
+
+  block.childNodes.forEach(visit);
+
+  return normalizePostContent(parts.join(""));
 }
 
 function findRelatedPostContainer(article: HTMLElement, block: HTMLElement): HTMLElement | null {
@@ -571,22 +620,22 @@ function readSourceUrl(time: HTMLTimeElement | null): string | undefined {
   return new URL(href, window.location.origin).toString();
 }
 
-function readPostMedia(article: HTMLElement, observedVideoUrls: string[]): PostMedia[] {
-  const videos = readPostVideos(article, observedVideoUrls);
-  const images = readPostImages(article);
+function readPostMedia(root: HTMLElement, observedVideoUrls: string[], excludedContainer?: HTMLElement | null): PostMedia[] {
+  const videos = readPostVideos(root, observedVideoUrls, excludedContainer);
+  const images = readPostImages(root, excludedContainer);
 
   return [...videos, ...images];
 }
 
-function readPostVideos(article: HTMLElement, observedVideoUrls: string[]): VideoPostMedia[] {
+function readPostVideos(root: HTMLElement, observedVideoUrls: string[], excludedContainer?: HTMLElement | null): VideoPostMedia[] {
   const videoKeys = new Set<string>();
-  const videos = Array.from(article.querySelectorAll<HTMLVideoElement>("video"));
-  const articleVideoUrls = readArticleAttachedVideoUrls(article);
+  const videos = Array.from(root.querySelectorAll<HTMLVideoElement>("video")).filter((video) => !isInsideExcludedContainer(video, excludedContainer));
+  const articleVideoUrls = readArticleAttachedVideoUrls(root);
 
   return videos
     .map((video): VideoPostMedia | null => {
       const posterUrl = normalizeImageUrl(video.poster) ?? findVideoPosterUrl(video);
-      const videoUrls = readVideoUrls(video, posterUrl, observedVideoUrls, articleVideoUrls, videos.length === 1);
+      const videoUrls = readVideoUrls(video, posterUrl, observedVideoUrls, articleVideoUrls);
       const url = videoUrls[0];
       const key = url ?? posterUrl;
 
@@ -608,10 +657,11 @@ function readPostVideos(article: HTMLElement, observedVideoUrls: string[]): Vide
     .filter((media): media is VideoPostMedia => media !== null);
 }
 
-function readPostImages(article: HTMLElement): ImagePostMedia[] {
+function readPostImages(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMedia[] {
   const imageUrls = new Set<string>();
 
-  return Array.from(article.querySelectorAll<HTMLImageElement>('img[src*="pbs.twimg.com/media/"]'))
+  return Array.from(root.querySelectorAll<HTMLImageElement>('img[src*="pbs.twimg.com/media/"]'))
+    .filter((image) => !isInsideExcludedContainer(image, excludedContainer))
     .map((image): ImagePostMedia | null => {
       const normalizedUrl = normalizeImageUrl(image.currentSrc || image.src);
 
@@ -630,12 +680,15 @@ function readPostImages(article: HTMLElement): ImagePostMedia[] {
     .filter((media): media is ImagePostMedia => media !== null);
 }
 
+function isInsideExcludedContainer(element: Element, excludedContainer: HTMLElement | null | undefined): boolean {
+  return Boolean(excludedContainer?.contains(element));
+}
+
 function readVideoUrls(
   video: HTMLVideoElement,
   posterUrl: string | undefined,
   observedVideoUrls: string[],
-  articleVideoUrls: string[],
-  allowArticleFallback: boolean
+  articleVideoUrls: string[]
 ): string[] {
   rememberLocalObservedVideoUrls(observedVideoUrls);
   rememberLocalObservedVideoUrls(articleVideoUrls);
@@ -646,13 +699,10 @@ function readVideoUrls(
     ...Array.from(video.querySelectorAll<HTMLSourceElement>("source")).map((source) => source.src),
     ...readObservedVideoUrls(posterUrl, articleVideoUrls),
     ...readObservedVideoUrls(posterUrl, observedVideoUrls),
-    ...readObservedVideoUrls(posterUrl, readLocalObservedVideoUrls()),
-    ...(allowArticleFallback ? readScopedFallbackVideoUrls(articleVideoUrls) : []),
-    ...(allowArticleFallback ? readScopedFallbackVideoUrls(observedVideoUrls) : []),
-    ...(allowArticleFallback ? readScopedFallbackVideoUrls(readLocalObservedVideoUrls()) : [])
+    ...readObservedVideoUrls(posterUrl, readLocalObservedVideoUrls())
   ];
 
-  return [...new Set(candidates.map(normalizeVideoUrl).filter((url): url is string => Boolean(url)))].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+  return filterVideoUrlsForPoster(posterUrl, candidates);
 }
 
 function readArticleAttachedVideoUrls(article: HTMLElement): string[] {
@@ -713,29 +763,22 @@ function extractTwitterVideoUrls(value: string): string[] {
     .filter((url) => !isVideoSegmentUrl(url));
 }
 
-function readScopedFallbackVideoUrls(videoUrls: string[]): string[] {
-  const urls = videoUrls
-    .map(normalizeVideoUrl)
-    .filter((url): url is string => Boolean(url))
-    .filter((url) => !isVideoSegmentUrl(url));
-
-  return [...new Set(urls)].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+function readObservedVideoUrls(posterUrl: string | undefined, observedVideoUrls: string[]): string[] {
+  return filterVideoUrlsForPoster(posterUrl, observedVideoUrls);
 }
 
-function readObservedVideoUrls(posterUrl: string | undefined, observedVideoUrls: string[]): string[] {
+function filterVideoUrlsForPoster(posterUrl: string | undefined, sourceUrls: Array<string | undefined>): string[] {
   const mediaId = extractTwitterVideoMediaId(posterUrl);
-
-  if (!mediaId) {
-    return [];
-  }
-
-  const urls = observedVideoUrls
+  const urls = sourceUrls
     .map(normalizeVideoUrl)
     .filter((url): url is string => Boolean(url))
-    .filter((url) => url.includes(`/${mediaId}/`))
     .filter((url) => !isVideoSegmentUrl(url));
 
-  return [...new Set(urls)].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+  if (!mediaId) {
+    return [...new Set(urls)].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
+  }
+
+  return [...new Set(urls.filter((url) => isMatchingTwitterVideoSourceId(url, mediaId)))].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
 }
 
 function readLocalObservedVideoUrls(): string[] {
@@ -814,7 +857,7 @@ function isLikelyPlayableMp4(pathname: string): boolean {
   return pathname.endsWith(".mp4") && !isTwitterDashInitUrl(pathname) && !isTwitterHlsInitUrl(pathname) && !pathname.includes("/pl/");
 }
 
-function normalizeVideoUrl(value: string): string | null {
+function normalizeVideoUrl(value: string | undefined): string | null {
   if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
     return null;
   }
@@ -831,7 +874,35 @@ function normalizeVideoUrl(value: string): string | null {
     return null;
   }
 
+  if (isLikelyAudioOnlySourceUrl(url.toString())) {
+    return null;
+  }
+
   return url.toString();
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function isMatchingTwitterVideoSourceId(value: string, mediaId: string): boolean {
+  return extractTwitterVideoSourceId(value) === mediaId;
+}
+
+function isLikelyAudioOnlySourceUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+  } catch {
+    return false;
+  }
 }
 
 function findVideoPosterUrl(video: HTMLVideoElement): string | undefined {
@@ -884,6 +955,8 @@ function normalizePostContent(value: string | null | undefined): string {
     value
       ?.replace(/\r\n?/g, "\n")
       .replace(/\u00a0/g, " ")
+      .replace(/\b(https?:\/\/)\s*\n+\s*/gi, "$1")
+      .replace(/\b(https?:\/\/[^\s\n]+)\n+([A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+)/g, "$1$2")
       .split("\n")
       .map((line) => line.trim())
       .join("\n")

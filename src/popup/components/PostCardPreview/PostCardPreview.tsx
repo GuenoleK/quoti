@@ -23,10 +23,11 @@ type CardLayout = "portrait" | "square" | "wide";
 export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: PostCardPreviewProps) {
   const isMountedRef = useRef(true);
   const [mediaSize, setMediaSize] = useState<MediaSize | null>(null);
-  const cachedMedia = getPrimaryMedia(post.media);
-  const media = contentMode === "with-media" ? cachedMedia : undefined;
-  const mediaKey = getMediaKey(cachedMedia);
-  const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), media, mediaSize), [media, mediaSize, post]);
+  const primaryMedia = getPrimaryMedia(post.media);
+  const relatedMedia = getPrimaryMedia(post.relatedPost?.media ?? []);
+  const layoutMedia = contentMode === "with-media" ? primaryMedia ?? relatedMedia : undefined;
+  const mediaKey = getMediaKey(primaryMedia ?? relatedMedia);
+  const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, mediaSize), [layoutMedia, mediaSize, post]);
 
   useEffect(() => {
     return () => {
@@ -65,17 +66,25 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
 
             <div className="context-card__body">
               <p className="context-card__quote">{post.content}</p>
-              {post.relatedPost ? <RelatedPostCard relatedPost={post.relatedPost} /> : null}
+              {post.relatedPost ? (
+                <RelatedPostCard
+                  active={contentMode === "with-media"}
+                  mediaSize={mediaSize}
+                  onMediaSize={handleMediaSize}
+                  relatedPost={post.relatedPost}
+                  showMedia={contentMode === "with-media"}
+                />
+              ) : null}
             </div>
 
-            {cachedMedia ? (
+            {primaryMedia ? (
               <figure
                 className="context-card__media"
-                data-media-type={cachedMedia.type}
+                data-media-type={primaryMedia.type}
                 hidden={contentMode !== "with-media"}
-                style={getMediaStyle(cachedMedia, mediaSize)}
+                style={getMediaStyle(primaryMedia, mediaSize)}
               >
-                <PostCardMedia active={contentMode === "with-media"} media={cachedMedia} onSize={handleMediaSize} />
+                <PostCardMedia active={contentMode === "with-media"} media={primaryMedia} onSize={handleMediaSize} />
               </figure>
             ) : null}
 
@@ -93,7 +102,20 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   );
 }
 
-function RelatedPostCard({ relatedPost }: { relatedPost: RelatedPost }) {
+function RelatedPostCard({
+  active,
+  mediaSize,
+  onMediaSize,
+  relatedPost,
+  showMedia
+}: {
+  active: boolean;
+  mediaSize: MediaSize | null;
+  onMediaSize: (size: MediaSize) => void;
+  relatedPost: RelatedPost;
+  showMedia: boolean;
+}) {
+  const media = getPrimaryMedia(relatedPost.media ?? []);
   return (
     <aside className="context-card__related-post" aria-label="Post auquel l'auteur répond">
       <div className="context-card__related-meta">
@@ -102,6 +124,16 @@ function RelatedPostCard({ relatedPost }: { relatedPost: RelatedPost }) {
         {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
       </div>
       <p className="context-card__related-content">{relatedPost.content}</p>
+      {media ? (
+        <figure
+          className="context-card__media context-card__related-media"
+          data-media-type={media.type}
+          hidden={!showMedia}
+          style={getMediaStyle(media, mediaSize)}
+        >
+          <PostCardMedia active={active} media={media} onSize={onMediaSize} />
+        </figure>
+      ) : null}
     </aside>
   );
 }
@@ -419,7 +451,44 @@ function resetVideoElement(video: HTMLVideoElement): void {
 function getPlayableVideoUrls(media: Extract<PostMedia, { type: "video" }>): string[] {
   const candidates = [media.url, ...(media.variants ?? [])];
 
-  return [...new Set(candidates.map(getPlayableVideoUrl).filter((url): url is string => Boolean(url)))].sort((a, b) => scorePlayableVideoUrl(b) - scorePlayableVideoUrl(a));
+  return [
+    ...new Set(
+      candidates
+        .map(getPlayableVideoUrl)
+        .filter((url): url is string => Boolean(url))
+        .filter((url) => isMatchingPosterMediaSource(media.posterUrl, url))
+    )
+  ].sort((a, b) => scorePlayableVideoUrl(b) - scorePlayableVideoUrl(a));
+}
+
+function isMatchingPosterMediaSource(posterUrl: string | undefined, sourceUrl: string): boolean {
+  const mediaId = extractTwitterVideoMediaId(posterUrl);
+
+  return !mediaId || extractTwitterVideoSourceId(sourceUrl) === mediaId;
+}
+
+function extractTwitterVideoMediaId(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTwitterVideoSourceId(value: string): string | undefined {
+  try {
+    const pathname = new URL(value).pathname;
+
+    return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 function scorePlayableVideoUrl(value: string): number {

@@ -25,6 +25,10 @@ export type QuotiMessage =
       tabId?: number;
     }
   | {
+      type: "QUOTI_HYDRATE_RELATED_POST";
+      post: ExtractedPost;
+    }
+  | {
       type: "QUOTI_INLINE_POST_CAPTURED";
       post?: ExtractedPost;
     }

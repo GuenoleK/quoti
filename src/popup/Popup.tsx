@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { ArrowLeft, Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
 import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, VideoPostMedia } from "../shared/types/post.types";
@@ -51,6 +51,7 @@ export function Popup() {
     status: "idle",
     message: "Looking for the visible post."
   });
+  const [loadingTitle, setLoadingTitle] = useState<string | undefined>();
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ action: string; status: "success" | "error" } | null>(null);
   const [contentMode, setContentMode] = useState<CardContentMode>(defaultQuotiSettings.cardContentMode);
@@ -237,6 +238,7 @@ export function Popup() {
       status: "loading",
       message: "Capturing the visible post."
     }));
+    setLoadingTitle(undefined);
     setNotice("");
 
     try {
@@ -247,7 +249,17 @@ export function Popup() {
       }
 
       if (pendingPost) {
-        const post = preserveSessionMedia(postMediaCacheRef.current, pendingPost);
+        if (showRelatedPostHydrationLoader(pendingPost, setCapture, setLoadingTitle)) {
+          await waitForUiFrame();
+        }
+
+        const hydratedPendingPost = await hydrateRelatedPost(pendingPost);
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        const post = preserveSessionMedia(postMediaCacheRef.current, hydratedPendingPost);
 
         setCapture({
           post,
@@ -294,7 +306,17 @@ export function Popup() {
       }
 
       if (response.status === "success") {
-        const post = preserveSessionMedia(postMediaCacheRef.current, response.post);
+        if (showRelatedPostHydrationLoader(response.post, setCapture, setLoadingTitle)) {
+          await waitForUiFrame();
+        }
+
+        const hydratedPost = await hydrateRelatedPost(response.post);
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        const post = preserveSessionMedia(postMediaCacheRef.current, hydratedPost);
 
         setCapture({
           post,
@@ -545,7 +567,12 @@ export function Popup() {
           />
         </div>
       ) : (
-        <EmptyState isLoading={capture.status === "loading"} message={capture.message} onRefresh={capturePost} />
+        <EmptyState
+          isLoading={capture.status === "loading"}
+          message={capture.message}
+          onRefresh={capturePost}
+          title={capture.status === "loading" ? loadingTitle : undefined}
+        />
       )}
 
       {!settingsViewOpen && statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
@@ -1022,6 +1049,65 @@ async function requestSelectedPost(tabId: number, observedVideoUrls: string[]): 
     await ensureContentScript(tabId);
     return chrome.tabs.sendMessage(tabId, { type: "QUOTI_GET_SELECTED_POST", observedVideoUrls });
   }
+}
+
+async function hydrateRelatedPost(post: ExtractedPost): Promise<ExtractedPost> {
+  if (!post.relatedPost?.sourceUrl || !isChromeExtensionRuntime()) {
+    return post;
+  }
+
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: "QUOTI_HYDRATE_RELATED_POST",
+      post
+    })) as QuotiMessageResponse;
+
+    return response.status === "success" ? response.post : post;
+  } catch {
+    return post;
+  }
+}
+
+function showRelatedPostHydrationLoader(
+  post: ExtractedPost,
+  setCapture: Dispatch<SetStateAction<CaptureState>>,
+  setLoadingTitle: Dispatch<SetStateAction<string | undefined>>
+): boolean {
+  if (!post.relatedPost?.sourceUrl || !shouldHydrateRelatedPost(post.relatedPost.content)) {
+    return false;
+  }
+
+  setLoadingTitle("Loading quoted tweet");
+  setCapture((current) => ({
+    ...current,
+    post: null,
+    status: "loading",
+    message: "The quoted tweet may be shortened by X. Quoti is opening it in the background to recover the full text before generating the card."
+  }));
+
+  return true;
+}
+
+function shouldHydrateRelatedPost(content: string): boolean {
+  const trimmedContent = content.trim();
+
+  if (!trimmedContent) {
+    return false;
+  }
+
+  if (/[.\u2026]\s*$/.test(trimmedContent)) {
+    return true;
+  }
+
+  return /[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]$/.test(trimmedContent);
+}
+
+function waitForUiFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function hasMissingVideoUrl(post: ExtractedPost): boolean {

@@ -4,7 +4,10 @@ import { latestPostStorageKey, readQuotiSettings } from "../../shared/settings/q
 
 const contextMenuId = "quoti-create-card";
 const observedVideoUrlsStorageKey = "quoti-observed-video-urls";
+const hydratedRelatedPostsStorageKey = "quoti-hydrated-related-posts";
 const maxCachedVideoUrlsPerTab = 80;
+const maxHydratedRelatedPosts = 40;
+const hydratedRelatedPostsByUrl = new Map<string, ExtractedPost>();
 const observedVideoUrlsByTabId = new Map<number, string[]>();
 
 chrome.webRequest.onBeforeRequest.addListener(
@@ -61,6 +64,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     void readObservedVideoUrlsFromSender(message.tabId ?? _sender.tab?.id).then((observedVideoUrls) =>
       sendResponse({ status: "video-urls", observedVideoUrls })
     );
+    return true;
+  }
+
+  if (message.type === "QUOTI_HYDRATE_RELATED_POST") {
+    void hydrateRelatedPost(message.post)
+      .then((post) => sendResponse({ status: "success", post }))
+      .catch(() => sendResponse({ status: "success", post: message.post }));
     return true;
   }
 
@@ -219,6 +229,176 @@ async function handleInlinePostCaptured(post: unknown): Promise<void> {
   }
 
   await openQuotiSurface();
+}
+
+async function hydrateRelatedPost(post: ExtractedPost): Promise<ExtractedPost> {
+  const relatedPost = post.relatedPost;
+  const relatedSourceUrl = relatedPost?.sourceUrl;
+
+  if (!relatedSourceUrl || !isSupportedXUrl(relatedSourceUrl) || !shouldHydrateRelatedPost(relatedPost.content)) {
+    return post;
+  }
+
+  const cachedPost = await readHydratedRelatedPost(relatedSourceUrl);
+
+  if (cachedPost) {
+    return mergeHydratedRelatedPost(post, relatedPost, relatedSourceUrl, cachedPost);
+  }
+
+  const tab = await chrome.tabs.create({
+    active: false,
+    url: relatedSourceUrl
+  });
+
+  if (!tab.id) {
+    return post;
+  }
+
+  try {
+    await waitForTabReady(tab.id);
+    await ensureContentScript(tab.id);
+
+    const extractedPost = await extractPostFromHydrationTab(tab.id);
+
+    if (!extractedPost) {
+      return post;
+    }
+
+    await writeHydratedRelatedPost(relatedSourceUrl, extractedPost);
+
+    return mergeHydratedRelatedPost(post, relatedPost, relatedSourceUrl, extractedPost);
+  } finally {
+    await chrome.tabs.remove(tab.id).catch(() => undefined);
+  }
+}
+
+function mergeHydratedRelatedPost(
+  post: ExtractedPost,
+  relatedPost: NonNullable<ExtractedPost["relatedPost"]>,
+  relatedSourceUrl: string,
+  extractedPost: ExtractedPost
+): ExtractedPost {
+  return {
+    ...post,
+    relatedPost: {
+      ...relatedPost,
+      authorHandle: extractedPost.authorHandle || relatedPost.authorHandle,
+      authorName: extractedPost.authorName || relatedPost.authorName,
+      content: extractedPost.content || relatedPost.content,
+      media: extractedPost.media.length > 0 ? extractedPost.media : relatedPost.media,
+      sourceUrl: extractedPost.sourceUrl ?? relatedSourceUrl
+    }
+  };
+}
+
+function shouldHydrateRelatedPost(content: string): boolean {
+  const trimmedContent = content.trim();
+
+  if (!trimmedContent) {
+    return false;
+  }
+
+  if (/[.\u2026]\s*$/.test(trimmedContent)) {
+    return true;
+  }
+
+  return /[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff0-9]$/.test(trimmedContent);
+}
+
+async function readHydratedRelatedPost(sourceUrl: string): Promise<ExtractedPost | null> {
+  const memoryPost = hydratedRelatedPostsByUrl.get(sourceUrl);
+
+  if (memoryPost) {
+    return memoryPost;
+  }
+
+  const stored = await chrome.storage.session.get(hydratedRelatedPostsStorageKey);
+  const cache = stored[hydratedRelatedPostsStorageKey] as Record<string, ExtractedPost> | undefined;
+  const cachedPost = cache?.[sourceUrl];
+
+  if (cachedPost && isExtractedPost(cachedPost)) {
+    hydratedRelatedPostsByUrl.set(sourceUrl, cachedPost);
+    return cachedPost;
+  }
+
+  return null;
+}
+
+async function writeHydratedRelatedPost(sourceUrl: string, post: ExtractedPost): Promise<void> {
+  hydratedRelatedPostsByUrl.set(sourceUrl, post);
+
+  const memoryEntries = [...hydratedRelatedPostsByUrl.entries()].slice(-maxHydratedRelatedPosts);
+  hydratedRelatedPostsByUrl.clear();
+  memoryEntries.forEach(([url, cachedPost]) => hydratedRelatedPostsByUrl.set(url, cachedPost));
+
+  const stored = await chrome.storage.session.get(hydratedRelatedPostsStorageKey);
+  const cache = (stored[hydratedRelatedPostsStorageKey] as Record<string, ExtractedPost> | undefined) ?? {};
+  const nextCacheEntries = [...Object.entries(cache), [sourceUrl, post]].slice(-maxHydratedRelatedPosts);
+
+  await chrome.storage.session.set({
+    [hydratedRelatedPostsStorageKey]: Object.fromEntries(nextCacheEntries)
+  });
+}
+
+async function extractPostFromHydrationTab(tabId: number): Promise<ExtractedPost | null> {
+  let latestResponse: QuotiMessageResponse | null = null;
+
+  for (const delay of [0, 850, 1600, 2600]) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+
+    const response = (await chrome.tabs.sendMessage(tabId, {
+      type: "QUOTI_GET_SELECTED_POST",
+      observedVideoUrls: await readObservedVideoUrls(tabId)
+    })) as QuotiMessageResponse;
+
+    latestResponse = response;
+
+    if (response.status === "success" && response.post.content) {
+      return response.post;
+    }
+  }
+
+  return latestResponse?.status === "success" ? latestResponse.post : null;
+}
+
+function waitForTabReady(tabId: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      resolve();
+    }, 8000);
+
+    const handleUpdated = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") {
+        return;
+      }
+
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      resolve();
+    };
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+    void chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(handleUpdated);
+        resolve();
+      }
+    });
+  });
+}
+
+function isSupportedXUrl(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+
+    return ["x.com", "twitter.com"].includes(parsedUrl.hostname) && /\/status\/\d+/.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function isExtractedPost(value: unknown): value is ExtractedPost {

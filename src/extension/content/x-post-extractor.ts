@@ -556,16 +556,237 @@ function readRelatedPost(
   const relatedContainer = findRelatedPostContainer(article, relatedBlock.block, primaryBlock);
   const authorBlock = relatedContainer?.querySelector<HTMLElement>('[data-testid="User-Name"]') ?? null;
   const media = relatedContainer ? readPostMedia(relatedContainer, observedVideoUrls) : [];
+  const content = readBestRelatedPostContent(relatedBlock.content, relatedContainer, article);
+  const sourceUrl = relatedContainer ? readRelatedPostSourceUrl(relatedContainer) : undefined;
 
   return {
     container: relatedContainer,
     post: {
       authorName: authorBlock ? readAuthorName(authorBlock) : undefined,
       authorHandle: authorBlock ? readAuthorHandle(authorBlock) : undefined,
-      content: relatedBlock.content,
-      media
+      content,
+      media,
+      sourceUrl
     }
   };
+}
+
+function readBestRelatedPostContent(visibleContent: string, relatedContainer: HTMLElement | null, article: HTMLElement): string {
+  const roots = [relatedContainer, article].filter((root): root is HTMLElement => Boolean(root));
+
+  if (roots.length === 0) {
+    return visibleContent;
+  }
+
+  const candidates = roots.flatMap(readReactTextCandidates);
+  const normalizedVisibleContent = normalizePostContent(visibleContent);
+  const compactVisibleContent = compactText(normalizedVisibleContent);
+
+  return (
+    candidates
+      .map((content) => buildRelatedPostContentCandidate(content, normalizedVisibleContent))
+      .filter((content) => content.length > normalizedVisibleContent.length && content.length <= 1000)
+      .filter((content) => compactText(content).startsWith(compactVisibleContent))
+      .sort((a, b) => scoreRelatedPostContentCandidate(b, normalizedVisibleContent) - scoreRelatedPostContentCandidate(a, normalizedVisibleContent))[0] ??
+    visibleContent
+  );
+}
+
+function buildRelatedPostContentCandidate(content: string, visibleContent: string): string {
+  const fullContentCandidate = sliceCandidateFromVisibleContent(content, visibleContent);
+
+  if (compactText(fullContentCandidate).startsWith(compactText(visibleContent))) {
+    return fullContentCandidate;
+  }
+
+  const visibleParagraph = getLastVisibleParagraph(visibleContent);
+
+  if (!visibleParagraph) {
+    return fullContentCandidate;
+  }
+
+  const paragraphCandidate = sliceCandidateFromVisibleContent(content, visibleParagraph);
+
+  if (!compactText(paragraphCandidate).startsWith(compactText(visibleParagraph))) {
+    return fullContentCandidate;
+  }
+
+  const paragraphIndex = visibleContent.lastIndexOf(visibleParagraph);
+
+  return paragraphIndex >= 0 ? `${visibleContent.slice(0, paragraphIndex)}${paragraphCandidate}`.trim() : fullContentCandidate;
+}
+
+function getLastVisibleParagraph(content: string): string {
+  return (
+    content
+      .split(/\n+/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean)
+      .at(-1) ?? ""
+  );
+}
+
+function sliceCandidateFromVisibleContent(content: string, visibleContent: string): string {
+  const normalizedContent = normalizePostContent(content);
+  const visibleIndex = normalizedContent.indexOf(visibleContent);
+
+  return visibleIndex >= 0 ? normalizedContent.slice(visibleIndex).trim() : normalizedContent;
+}
+
+function scoreRelatedPostContentCandidate(content: string, visibleContent: string): number {
+  const extraLength = content.length - visibleContent.length;
+  const tail = content.trim().slice(-8);
+  const hasClosingQuote = /(?:\u00bb|"|\u201d)/.test(tail) ? 120 : 0;
+  const hasSentenceEnding = /[.!?\u2026\u00bb"\u201d]/.test(tail) ? 60 : 0;
+  const conciseBonus = Math.max(0, 80 - Math.abs(extraLength - 32));
+
+  return hasClosingQuote + hasSentenceEnding + conciseBonus;
+}
+
+function readReactTextCandidates(root: HTMLElement): string[] {
+  const candidates = new Set<string>();
+  const seen = new WeakSet<object>();
+  const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))].slice(0, 160);
+
+  nodes.forEach((node) => {
+    Object.keys(node)
+      .filter((key) => key.startsWith("__reactProps$") || key.startsWith("__reactFiber$"))
+      .forEach((key) => {
+        const reactValue = (node as unknown as Record<string, unknown>)[key];
+        const renderedText = normalizePostContent(readReactRenderedText(reactValue, new WeakSet<object>(), 0, false));
+
+        if (renderedText.length >= 12 && /\s/.test(renderedText)) {
+          candidates.add(renderedText);
+        }
+
+        collectReactTextCandidates(reactValue, candidates, seen, 0);
+      });
+  });
+
+  return [...candidates];
+}
+
+function readReactRenderedText(value: unknown, seen: WeakSet<object>, depth: number, includeSibling: boolean): string {
+  if (depth > 12 || value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+
+  if (typeof value !== "object" || seen.has(value)) {
+    return "";
+  }
+
+  seen.add(value);
+
+  if (value instanceof Node || value instanceof Window) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => readReactRenderedText(item, seen, depth + 1, false)).join("");
+  }
+
+  const record = value as Record<string, unknown>;
+  const props = readReactProps(record);
+  const parts: string[] = [];
+
+  if (props) {
+    const propsRecord = props as Record<string, unknown>;
+
+    if (typeof propsRecord.alt === "string") {
+      parts.push(propsRecord.alt);
+    }
+
+    parts.push(readReactRenderedText(propsRecord.children, seen, depth + 1, false));
+  }
+
+  parts.push(readReactRenderedText(record.child, seen, depth + 1, true));
+
+  if (includeSibling) {
+    parts.push(readReactRenderedText(record.sibling, seen, depth + 1, true));
+  }
+
+  return parts.join("");
+}
+
+function readReactProps(record: Record<string, unknown>): unknown {
+  return record.memoizedProps ?? record.pendingProps ?? record.props;
+}
+
+function collectReactTextCandidates(value: unknown, candidates: Set<string>, seen: WeakSet<object>, depth: number): void {
+  if (depth > 14 || candidates.size > 160 || value === null || value === undefined) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    const content = normalizePostContent(value);
+
+    if (content.length >= 12 && /\s/.test(content)) {
+      candidates.add(content);
+    }
+    return;
+  }
+
+  if (typeof value !== "object" || seen.has(value)) {
+    return;
+  }
+
+  seen.add(value);
+
+  if (value instanceof Node || value instanceof Window) {
+    return;
+  }
+
+  collectKnownTweetTextCandidates(value as Record<string, unknown>, candidates, seen, depth);
+
+  if (Array.isArray(value)) {
+    value.slice(0, 120).forEach((item) => collectReactTextCandidates(item, candidates, seen, depth + 1));
+    return;
+  }
+
+  Object.entries(value as Record<string, unknown>)
+    .sort(([keyA], [keyB]) => scoreReactTextCandidateKey(keyB) - scoreReactTextCandidateKey(keyA))
+    .slice(0, 240)
+    .forEach(([, item]) => collectReactTextCandidates(item, candidates, seen, depth + 1));
+}
+
+function collectKnownTweetTextCandidates(record: Record<string, unknown>, candidates: Set<string>, seen: WeakSet<object>, depth: number): void {
+  [
+    record.note_tweet,
+    record.noteTweet,
+    record.note_tweet_results,
+    record.noteTweetResults,
+    record.legacy,
+    record.tweet,
+    record.result
+  ].forEach((candidate) => collectReactTextCandidates(candidate, candidates, seen, depth + 1));
+
+  ["full_text", "fullText", "text"].forEach((key) => {
+    const value = record[key];
+
+    if (typeof value === "string") {
+      const content = normalizePostContent(value);
+
+      if (content.length >= 12 && /\s/.test(content)) {
+        candidates.add(content);
+      }
+    }
+  });
+}
+
+function scoreReactTextCandidateKey(key: string): number {
+  if (/note|tweet|legacy|result|full_text|fullText|text/i.test(key)) {
+    return 2;
+  }
+
+  if (/child|sibling|props|memoized|pending/i.test(key)) {
+    return 1;
+  }
+
+  return 0;
 }
 
 function readTweetTextBlockContent(block: HTMLElement): string {
@@ -596,6 +817,32 @@ function readTweetTextBlockContent(block: HTMLElement): string {
   block.childNodes.forEach(visit);
 
   return normalizePostContent(parts.join(""));
+}
+
+function readRelatedPostSourceUrl(relatedContainer: HTMLElement): string | undefined {
+  const timeUrl = readSourceUrl(relatedContainer.querySelector<HTMLTimeElement>("time"));
+
+  if (timeUrl) {
+    return timeUrl;
+  }
+
+  return Array.from(relatedContainer.querySelectorAll<HTMLAnchorElement>('a[href*="/status/"]'))
+    .map((link) => normalizeStatusUrl(link.getAttribute("href")))
+    .find((url): url is string => Boolean(url));
+}
+
+function normalizeStatusUrl(href: string | null): string | undefined {
+  if (!href) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(href, window.location.origin);
+
+    return /\/status\/\d+/.test(url.pathname) ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function findRelatedPostContainer(article: HTMLElement, block: HTMLElement, primaryBlock: HTMLElement): HTMLElement | null {
@@ -1011,6 +1258,10 @@ function readBestSrcsetCandidate(srcset: string): string | undefined {
 
 function normalizeText(value: string | null | undefined): string {
   return value?.replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").replace(/[ \t]+/g, " ").trim() ?? "";
+}
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function normalizePostContent(value: string | null | undefined): string {

@@ -14,6 +14,7 @@ Before making any modification, read the following documents.
 ## Roadmap
 
 - docs/roadmap/video-rendering-roadmap.md
+- docs/roadmap/mobile-app-phase-3.md
 
 ## Development
 

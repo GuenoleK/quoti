@@ -43,6 +43,7 @@ Developer documentation lives separately from user installation notes:
 - [Frontend architecture](docs/architecture/frontend-architecture.md)
 - [Service architecture](docs/architecture/service-architecture.md)
 - [Video rendering roadmap](docs/roadmap/video-rendering-roadmap.md)
+- [Mobile app Phase 3 roadmap](docs/roadmap/mobile-app-phase-3.md)
 
 Install dependencies:
 

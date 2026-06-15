@@ -311,6 +311,7 @@ Use English for new project documentation.
 ## Key References
 
 - Video rendering roadmap: `docs/roadmap/video-rendering-roadmap.md`
+- Mobile app Phase 3 roadmap: `docs/roadmap/mobile-app-phase-3.md`
 - Service architecture: `docs/architecture/service-architecture.md`
 - Frontend architecture: `docs/architecture/frontend-architecture.md`
 - Agent entry point: `AGENT.md`

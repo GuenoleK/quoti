@@ -374,11 +374,28 @@ Ajouts :
 
 ## Phase 3
 
-Ajouts :
+Application mobile compagnon.
+
+Objectif :
+
+* Android en premier
+* iOS ensuite
+* interface adaptee a chaque OS
+* Quoti disponible dans l'action systeme Partager
+* ouverture de Quoti avec le contexte partage
+* generation, edition, export et partage de la carte depuis mobile
+
+La roadmap detaillee vit dans `docs/roadmap/mobile-app-phase-3.md`.
+
+---
+
+## Phase ulterieure
+
+Ajouts possibles :
 
 * historique local
 * favoris
-* bibliothèque de cartes
+* bibliotheque de cartes
 
 Toujours sans backend.
 

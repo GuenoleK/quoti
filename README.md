@@ -62,6 +62,44 @@ Build the extension:
 npm run build
 ```
 
+## Native Video Rendering
+
+For the best video export quality, use the native FFmpeg renderer. It lets Quoti render MP4 exports locally through Chrome Native Messaging instead of relying only on the in-extension WASM fallback.
+
+1. Download a Windows x64 FFmpeg build.
+2. Copy `ffmpeg.exe` into this path:
+
+```text
+native/quoti-renderer/vendor/ffmpeg/win32-x64/ffmpeg.exe
+```
+
+3. Build the extension:
+
+```bash
+npm run build
+```
+
+4. Open `chrome://extensions`, enable Developer mode, load the `dist/` folder, then copy the extension ID shown by Chrome.
+5. Register the native renderer for that extension ID:
+
+```powershell
+npm run native:install -- -ExtensionId <extension-id>
+```
+
+6. Verify that Quoti can find the bundled FFmpeg binary:
+
+```powershell
+npm run native:check
+```
+
+To remove the native host registration:
+
+```powershell
+npm run native:uninstall
+```
+
+The native renderer does not use FFmpeg from `PATH`; the binary must be present at the path above.
+
 ## Test The Extension
 
 1. Run `npm run build`.

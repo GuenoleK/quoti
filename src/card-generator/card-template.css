@@ -7,6 +7,7 @@
   --card-color-platform: var(--card-light-color-platform);
   --card-color-platform-background: var(--card-light-color-platform-background);
 
+  box-sizing: border-box;
   position: relative;
   width: min(100%, var(--card-export-width));
   max-width: 100%;
@@ -196,6 +197,10 @@
 .context-card__media {
   display: grid;
   place-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   margin: 0;
   overflow: hidden;
@@ -233,6 +238,7 @@
   display: grid;
   place-items: center;
   width: 100%;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
   border-radius: inherit;

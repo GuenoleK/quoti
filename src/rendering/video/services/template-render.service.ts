@@ -9,6 +9,13 @@ type PreparedVideoTemplateNode = {
   videoFrame: HTMLElement;
 };
 
+type ElementRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
 export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promise<VideoTemplateAsset> {
   await document.fonts?.ready;
 
@@ -37,13 +44,16 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
     await waitForFrame();
     await waitForImages(exportNode);
 
-    lockMediaElementSize(mediaElement, getUsableMediaRect(mediaElement));
+    const initialCardRect = exportNode.getBoundingClientRect();
+    const initialMediaRect = getBoundedMediaRect(initialCardRect, getUsableMediaRect(mediaElement));
+
+    lockMediaElementSize(mediaElement, initialMediaRect);
     const sourceCrop = getVideoSourceCrop(videoFrame);
     videoFrame.replaceChildren(createVideoPlaceholder());
     await waitForFrame();
 
     const cardRect = exportNode.getBoundingClientRect();
-    const mediaRect = mediaElement.getBoundingClientRect();
+    const mediaRect = getBoundedMediaRect(cardRect, mediaElement.getBoundingClientRect());
     const mediaStyle = window.getComputedStyle(mediaElement);
     const templateSize = {
       height: makeEven(Math.round(cardRect.height * videoTemplatePixelRatio)),
@@ -53,8 +63,8 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
       height: Math.max(2, Math.round(mediaRect.height * videoTemplatePixelRatio)),
       radius: Math.round(readPixelValue(mediaStyle.borderTopLeftRadius) * videoTemplatePixelRatio),
       width: Math.max(2, Math.round(mediaRect.width * videoTemplatePixelRatio)),
-      x: Math.round((mediaRect.left - cardRect.left) * videoTemplatePixelRatio),
-      y: Math.round((mediaRect.top - cardRect.top) * videoTemplatePixelRatio)
+      x: Math.max(0, Math.round((mediaRect.left - cardRect.left) * videoTemplatePixelRatio)),
+      y: Math.max(0, Math.round((mediaRect.top - cardRect.top) * videoTemplatePixelRatio))
     };
     const blob = await toBlob(exportNode, {
       cacheBust: false,
@@ -130,7 +140,7 @@ function enforceQuotiMark(exportNode: HTMLElement): void {
   mark.style.opacity = "";
 }
 
-function lockMediaElementSize(mediaElement: HTMLElement, mediaRect: DOMRect): void {
+function lockMediaElementSize(mediaElement: HTMLElement, mediaRect: ElementRect): void {
   const width = Math.max(2, Math.round(mediaRect.width));
   const height = Math.max(2, Math.round(mediaRect.height));
 
@@ -160,6 +170,20 @@ function getUsableMediaRect(mediaElement: HTMLElement): DOMRect {
   }
 
   return mediaElement.getBoundingClientRect();
+}
+
+function getBoundedMediaRect(cardRect: DOMRect, mediaRect: DOMRect): ElementRect {
+  const left = Math.max(mediaRect.left, cardRect.left);
+  const top = Math.max(mediaRect.top, cardRect.top);
+  const right = Math.min(mediaRect.right, cardRect.right);
+  const bottom = Math.min(mediaRect.bottom, cardRect.bottom);
+
+  return {
+    height: Math.max(2, bottom - top),
+    left,
+    top,
+    width: Math.max(2, right - left)
+  };
 }
 
 function createVideoPlaceholder(): HTMLDivElement {

@@ -1104,6 +1104,11 @@ function isVideoSegmentUrl(value: string): boolean {
 function scoreVideoUrl(value: string): number {
   const url = new URL(value);
   const pathname = url.pathname.toLowerCase();
+
+  if (isLikelyAudioOnlySourceUrl(value)) {
+    return -1;
+  }
+
   const resolution = /\/(\d{2,5})x(\d{2,5})(?:\/|$)/.exec(pathname);
   const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
   let score = pixels / 1000;
@@ -1145,10 +1150,6 @@ function normalizeVideoUrl(value: string | undefined): string | null {
   }
 
   if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com")) {
-    return null;
-  }
-
-  if (isLikelyAudioOnlySourceUrl(url.toString())) {
     return null;
   }
 

@@ -1,5 +1,5 @@
 import type { ExtractedPost, PostMedia, VideoPostMedia } from "../../../shared/types/post.types";
-import type { VideoRenderMediaSource, VideoRenderProgress } from "../video-render.types";
+import type { VideoRenderMediaSource, VideoRenderProgress, VideoRenderSourceCandidate } from "../video-render.types";
 import { VideoRenderError } from "../video-render.types";
 import { isHlsMediaUrl, resolveHlsMediaSource } from "../adapters/hls-media.adapter";
 
@@ -27,7 +27,7 @@ export async function resolveVideoMediaSource(post: ExtractedPost, options: Reso
   throw new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "Quoti could not resolve a playable video source.", errors);
 }
 
-export function getVideoMediaSourceCandidates(post: ExtractedPost): string[] {
+export function getVideoMediaSourceCandidates(post: ExtractedPost): VideoRenderSourceCandidate[] {
   const media = getAllPostMedia(post).find((item): item is VideoPostMedia => item.type === "video");
 
   if (!media) {
@@ -47,15 +47,15 @@ function getAllPostMedia(post: ExtractedPost): PostMedia[] {
   return [...post.media, ...(post.relatedPost?.media ?? [])];
 }
 
-export async function resolveVideoMediaSourceCandidate(candidate: string, options: ResolveMediaSourceOptions = {}): Promise<VideoRenderMediaSource> {
-  if (isHlsMediaUrl(candidate)) {
+export async function resolveVideoMediaSourceCandidate(candidate: VideoRenderSourceCandidate, options: ResolveMediaSourceOptions = {}): Promise<VideoRenderMediaSource> {
+  if (isHlsMediaUrl(candidate.url)) {
     options.onProgress?.({
       stage: "preparing-media",
       message: "Preparing HLS media",
       progress: 0.12
     });
 
-    return resolveHlsMediaSource(candidate, {
+    return resolveHlsMediaSource(candidate.url, {
       onFileLoaded: (loaded, total) => {
         options.onProgress?.({
           stage: "preparing-media",
@@ -74,7 +74,7 @@ export async function resolveVideoMediaSourceCandidate(candidate: string, option
       progress: 0.12
     });
 
-    const data = await fetchVideoBytes(candidate, {
+    const data = await fetchVideoBytes(candidate.url, {
       onProgress: (progress) => {
         options.onProgress?.({
           stage: "preparing-media",
@@ -85,15 +85,35 @@ export async function resolveVideoMediaSourceCandidate(candidate: string, option
       signal: options.signal
     });
 
+    const files = [
+      {
+        data,
+        path: "source.mp4"
+      }
+    ];
+    const audioInputPath = candidate.audioUrl ? `source-audio${getUrlExtension(candidate.audioUrl, ".mp4")}` : undefined;
+
+    if (candidate.audioUrl && audioInputPath) {
+      files.push({
+        data: await fetchVideoBytes(candidate.audioUrl, {
+          onProgress: (progress) => {
+            options.onProgress?.({
+              stage: "preparing-media",
+              message: "Preparing source audio",
+              progress: 0.68 + progress * 0.2
+            });
+          },
+          signal: options.signal
+        }),
+        path: audioInputPath
+      });
+    }
+
     return {
-      files: [
-        {
-          data,
-          path: "source.mp4"
-        }
-      ],
+      audioInputPath,
+      files,
       kind: "mp4",
-      sourceUrl: candidate,
+      sourceUrl: candidate.url,
       videoInputPath: "source.mp4"
     };
   } catch (error) {
@@ -105,13 +125,18 @@ export async function resolveVideoMediaSourceCandidate(candidate: string, option
   }
 }
 
-function getVideoSourceCandidates(media: VideoPostMedia): string[] {
-  const candidates = [media.url, ...(media.variants ?? [])]
+function getVideoSourceCandidates(media: VideoPostMedia): VideoRenderSourceCandidate[] {
+  const urls = [media.url, ...(media.variants ?? [])]
     .map(normalizeSourceUrl)
-    .filter((url): url is string => typeof url === "string" && !isVideoSegmentUrl(url) && !isLikelyAudioOnlySourceUrl(url))
+    .filter((url): url is string => typeof url === "string" && !isVideoSegmentUrl(url))
     .filter((url) => isMatchingPosterMediaSource(media.posterUrl, url));
+  const audioUrls = [...new Set(urls.filter(isLikelyAudioOnlySourceUrl))];
+  const videoUrls = [...new Set(urls.filter((url) => !isLikelyAudioOnlySourceUrl(url)))].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
 
-  return [...new Set(candidates)].sort((a, b) => scoreVideoSourceUrl(b) - scoreVideoSourceUrl(a));
+  return videoUrls.map((url) => ({
+    audioUrl: isHlsMediaUrl(url) ? undefined : audioUrls[0],
+    url
+  }));
 }
 
 function normalizeSourceUrl(source: string | undefined): string | undefined {
@@ -135,11 +160,11 @@ function scoreVideoSourceUrl(value: string): number {
     const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
     let score = pixels / 1000;
 
-    if (pathname.endsWith(".mp4") && !pathname.includes("/pl/")) {
-      score += 220_000;
+    if (pathname.endsWith(".m3u8")) {
+      score += 260_000;
     }
 
-    if (pathname.endsWith(".m3u8")) {
+    if (pathname.endsWith(".mp4") && !pathname.includes("/pl/")) {
       score += 120_000;
     }
 
@@ -162,6 +187,16 @@ function isVideoSegmentUrl(value: string): boolean {
     );
   } catch {
     return true;
+  }
+}
+
+function getUrlExtension(value: string, fallback: string): string {
+  try {
+    const extension = /\.[a-z0-9]+$/i.exec(new URL(value).pathname)?.[0];
+
+    return extension ?? fallback;
+  } catch {
+    return fallback;
   }
 }
 

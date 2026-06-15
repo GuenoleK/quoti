@@ -68,6 +68,11 @@ export type VideoRenderMediaSource = {
   videoInputPath: string;
 };
 
+export type VideoRenderSourceCandidate = {
+  audioUrl?: string;
+  url: string;
+};
+
 export type VideoTemplateAsset = {
   data: Uint8Array;
   height: number;

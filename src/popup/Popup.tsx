@@ -416,6 +416,7 @@ export function Popup() {
 
         const { renderPostVideo } = await loadVideoRenderController();
         const result = await renderPostVideo({
+          browserVideo: getExportVideoElement(templateNode),
           cardTheme,
           post,
           preferredRenderer: settings.videoRenderer,
@@ -820,6 +821,10 @@ function getPrimaryVideo(post: ExtractedPost) {
   return getAllPostMedia(post).find((media) => media.type === "video");
 }
 
+function getExportVideoElement(templateNode: HTMLElement): HTMLVideoElement | null {
+  return templateNode.querySelector<HTMLVideoElement>(".context-card__video");
+}
+
 function getAllPostMedia(post: ExtractedPost): PostMedia[] {
   return [...post.media, ...(post.relatedPost?.media ?? [])];
 }
@@ -1180,10 +1185,6 @@ function normalizeVideoSourceUrl(value: string | undefined): string | undefined 
       return undefined;
     }
 
-    if (isLikelyAudioOnlySourceUrl(url.toString())) {
-      return undefined;
-    }
-
     return url.toString();
   } catch {
     return undefined;
@@ -1220,19 +1221,14 @@ function isVideoSegmentUrl(value: string): boolean {
   }
 }
 
-function isLikelyAudioOnlySourceUrl(value: string): boolean {
-  try {
-    const pathname = new URL(value).pathname.toLowerCase();
-
-    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
-  } catch {
-    return false;
-  }
-}
-
 function scoreVideoSourceUrl(value: string): number {
   try {
     const pathname = new URL(value).pathname.toLowerCase();
+
+    if (isLikelyAudioOnlySourceUrl(value)) {
+      return -1;
+    }
+
     const resolution = /\/(\d{2,5})x(\d{2,5})(?:\/|$)/.exec(pathname);
     const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
     let score = pixels / 1000;
@@ -1248,6 +1244,16 @@ function scoreVideoSourceUrl(value: string): number {
     return score;
   } catch {
     return 0;
+  }
+}
+
+function isLikelyAudioOnlySourceUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+
+    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+  } catch {
+    return false;
   }
 }
 

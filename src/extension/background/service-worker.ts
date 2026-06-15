@@ -166,7 +166,7 @@ function normalizeVideoSourceUrl(value: string | undefined): string | undefined 
   try {
     const url = new URL(value.replace(/\\u0026/g, "&").replace(/&amp;/g, "&"));
 
-    if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com") || isLikelyAudioOnlySourceUrl(url.toString())) {
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith("twimg.com")) {
       return undefined;
     }
 
@@ -208,16 +208,6 @@ function extractTwitterVideoSourceId(value: string): string | undefined {
     return /\/(?:ext_tw_video|amplify_video|tweet_video)\/([^/]+)\//.exec(pathname)?.[1];
   } catch {
     return undefined;
-  }
-}
-
-function isLikelyAudioOnlySourceUrl(value: string): boolean {
-  try {
-    const pathname = new URL(value).pathname.toLowerCase();
-
-    return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
-  } catch {
-    return false;
   }
 }
 
@@ -535,6 +525,11 @@ function readMainWorldVideoUrls(): string[] {
   const scoreVideoUrl = (value: string): number => {
     try {
       const pathname = new URL(value).pathname.toLowerCase();
+
+      if (isLikelyAudioOnlySourceUrl(value)) {
+        return -1;
+      }
+
       const resolution = /\/(\d{2,5})x(\d{2,5})(?:\/|$)/.exec(pathname);
       const pixels = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
       let score = pixels / 1000;
@@ -550,6 +545,15 @@ function readMainWorldVideoUrls(): string[] {
       return score;
     } catch {
       return 0;
+    }
+  };
+  const isLikelyAudioOnlySourceUrl = (value: string): boolean => {
+    try {
+      const pathname = new URL(value).pathname.toLowerCase();
+
+      return /(?:^|\/)(?:audio|aud|mp4a|aac)(?:[./_-]|\/|$)/.test(pathname);
+    } catch {
+      return false;
     }
   };
 

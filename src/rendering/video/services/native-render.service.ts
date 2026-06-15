@@ -36,6 +36,7 @@ export async function renderNativeFfmpegVideo(request: VideoRenderRequest): Prom
     payload: {
       candidates,
       quality: request.quality ?? "balanced",
+      requireAudio: Boolean(request.browserVideo),
       template: toNativeTemplatePayload(template)
     },
     signal: request.signal

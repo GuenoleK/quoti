@@ -1,10 +1,11 @@
-import type { VideoRenderProgress, VideoRenderQuality } from "./video-render.types";
+import type { VideoRenderProgress, VideoRenderQuality, VideoRenderSourceCandidate } from "./video-render.types";
 
 export const nativeRendererHostName = "com.quoti.renderer";
 
 export type NativeVideoRenderPayload = {
-  candidates: string[];
+  candidates: VideoRenderSourceCandidate[];
   quality: VideoRenderQuality;
+  requireAudio?: boolean;
   template: {
     dataBase64: string;
     height: number;

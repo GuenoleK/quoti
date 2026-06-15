@@ -148,6 +148,7 @@ async function runRenderJob(message) {
         job,
         outputPath,
         quality: payload.quality,
+        requireAudio: Boolean(payload.requireAudio),
         template: payload.template,
         templatePath
       });
@@ -185,14 +186,16 @@ async function runRenderJob(message) {
   });
 }
 
-async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality, template, templatePath }) {
-  const filter = buildVideoFilter(template);
+async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality, requireAudio, template, templatePath }) {
+  const source = normalizeCandidate(candidate);
+  const filter = buildVideoFilter(template, Boolean(source.audioUrl));
   const preset = getQualityPreset(quality);
   const args = [
     "-y",
     "-hide_banner",
     "-i",
-    candidate,
+    source.url,
+    ...(source.audioUrl ? ["-i", source.audioUrl] : []),
     "-loop",
     "1",
     "-i",
@@ -202,7 +205,7 @@ async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality
     "-map",
     "[v]",
     "-map",
-    "0:a?",
+    `${source.audioUrl ? 1 : 0}:a?`,
     "-c:v",
     "libx264",
     "-preset",
@@ -225,6 +228,7 @@ async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality
     let stderr = "";
     let durationSeconds = 0;
     let lastProgress = 0.1;
+    let outputHasAudio = false;
 
     const ffmpeg = spawn(ffmpegPath, args, {
       stdio: ["ignore", "ignore", "pipe"],
@@ -236,6 +240,7 @@ async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality
     ffmpeg.stderr.setEncoding("utf8");
     ffmpeg.stderr.on("data", (chunk) => {
       stderr += chunk;
+      outputHasAudio = outputHasAudio || hasOutputAudioStream(stderr);
       durationSeconds = parseDurationSeconds(stderr) || durationSeconds;
 
       const timeSeconds = parseLastTimeSeconds(chunk);
@@ -263,6 +268,11 @@ async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality
       job.ffmpeg = null;
 
       if (code === 0) {
+        if (requireAudio && !outputHasAudio) {
+          reject(new NativeRenderError("MEDIA_SOURCE_UNAVAILABLE", "Native FFmpeg rendered the video without an audio track."));
+          return;
+        }
+
         sendProgress(job.requestId, "rendering", "Rendering with native FFmpeg", 0.96);
         resolve();
         return;
@@ -273,17 +283,18 @@ async function renderCandidate({ candidate, ffmpegPath, job, outputPath, quality
   });
 }
 
-function buildVideoFilter(template) {
+function buildVideoFilter(template, hasAudioInput = false) {
   const { height, width, x, y } = template.mediaRect;
   const canvasWidth = makeEven(template.width);
   const canvasHeight = makeEven(template.height);
   const sourceFilter = template.sourceCrop ? `crop=${buildSourceCropExpression(template.sourceCrop)},` : "";
+  const templateInputIndex = hasAudioInput ? 2 : 1;
 
   return [
     `[0:v]${sourceFilter}scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[media]`,
     `color=c=black@0:s=${canvasWidth}x${canvasHeight},format=rgba[base]`,
     `[base][media]overlay=${x}:${y}:shortest=1[media_canvas]`,
-    `[media_canvas][1:v]overlay=0:0:shortest=1,crop=${canvasWidth}:${canvasHeight},format=yuv420p[v]`
+    `[media_canvas][${templateInputIndex}:v]overlay=0:0:shortest=1,crop=${canvasWidth}:${canvasHeight},format=yuv420p[v]`
   ].join(";");
 }
 
@@ -300,6 +311,13 @@ function formatCropValue(value) {
   const numericValue = Number(value);
 
   return Math.max(0, Math.min(1, Number.isFinite(numericValue) ? numericValue : 0)).toFixed(6);
+}
+
+function hasOutputAudioStream(stderr) {
+  const outputIndex = stderr.lastIndexOf("Output #0");
+  const outputLog = outputIndex >= 0 ? stderr.slice(outputIndex) : stderr;
+
+  return /Stream #0:\d+(?:\[[^\]]+\])?(?:\([^)]*\))?: Audio:/i.test(outputLog);
 }
 
 function getQualityPreset(quality) {
@@ -408,7 +426,9 @@ function validatePayload(payload) {
   }
 
   for (const candidate of payload.candidates) {
-    if (typeof candidate !== "string" || !/^https?:\/\//i.test(candidate)) {
+    const source = normalizeCandidate(candidate);
+
+    if (!/^https?:\/\//i.test(source.url) || (source.audioUrl && !/^https?:\/\//i.test(source.audioUrl))) {
       throw new NativeRenderError("MEDIA_SOURCE_UNAVAILABLE", "Native media source candidates must be HTTP URLs.");
     }
   }
@@ -416,6 +436,25 @@ function validatePayload(payload) {
   if (!payload.template || typeof payload.template.dataBase64 !== "string") {
     throw new NativeRenderError("INVALID_REQUEST", "Missing native template PNG.");
   }
+}
+
+function normalizeCandidate(candidate) {
+  if (typeof candidate === "string") {
+    return {
+      url: candidate
+    };
+  }
+
+  if (candidate && typeof candidate === "object" && typeof candidate.url === "string") {
+    return {
+      audioUrl: typeof candidate.audioUrl === "string" ? candidate.audioUrl : undefined,
+      url: candidate.url
+    };
+  }
+
+  return {
+    url: ""
+  };
 }
 
 async function assertFileExists(filePath) {

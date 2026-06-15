@@ -27,6 +27,10 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
         throw nativeError;
       }
 
+      if (nativeError.code === "MEDIA_SOURCE_UNAVAILABLE" && normalizedRequest.browserVideo) {
+        return renderRealtimeBrowserVideo(normalizedRequest, nativeError.message);
+      }
+
       reportProgress(normalizedRequest, {
         stage: "loading-renderer",
         message: "Native renderer unavailable. Using bundled renderer",
@@ -118,7 +122,13 @@ export async function renderPostVideo(request: VideoRenderRequest): Promise<Vide
 
     throw lastCandidateError ?? new VideoRenderError("MEDIA_SOURCE_UNAVAILABLE", "Quoti could not resolve a playable video source.");
   } catch (error) {
-    throw toVideoRenderError(error);
+    const videoError = toVideoRenderError(error);
+
+    if (normalizedRequest.browserVideo && videoError.code !== "ABORTED") {
+      return renderRealtimeBrowserVideo(normalizedRequest, videoError.message);
+    }
+
+    throw videoError;
   }
 }
 

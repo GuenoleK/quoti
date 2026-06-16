@@ -171,6 +171,7 @@ object QuotiCardExporter {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
+        onProgress: (Int) -> Unit = {},
     ): Uri {
         val fileName = quotiVideoFileName(post.id)
         val output =
@@ -180,18 +181,23 @@ object QuotiCardExporter {
                 File(exportDir, fileName)
             }
 
+        onProgress(0)
         renderVideoCardMp4(
             output = output,
             post = post,
             cardTone = cardTone,
             contentMode = contentMode,
+            onProgress = onProgress,
         )
+        onProgress(99)
 
-        return writeCacheVideoToMovies(
+        val uri = writeCacheVideoToMovies(
             context = context,
             cacheFile = output,
             fileName = fileName,
         )
+        onProgress(100)
+        return uri
     }
 
     private suspend fun renderCardBitmap(
@@ -255,6 +261,7 @@ object QuotiCardExporter {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
+        onProgress: (Int) -> Unit,
     ) {
         val mediaSources = post.exportMediaSources().take(4)
         val videoSource = mediaSources.firstOrNull { source -> source.playableVideoUrl != null }
@@ -282,6 +289,7 @@ object QuotiCardExporter {
                     cardTone = cardTone,
                     contentMode = contentMode,
                     mediaSlots = mediaSlots,
+                    onProgress = onProgress,
                 )
             }
         } finally {
@@ -301,9 +309,12 @@ object QuotiCardExporter {
         cardTone: CardTone,
         contentMode: CardContentMode,
         mediaSlots: List<ExportVideoMediaSlot>,
+        onProgress: (Int) -> Unit,
     ) {
         var encoder: AvcBitmapEncoder? = null
         var frameRenderer: QuotiCardBitmapRenderer.VideoFrameRenderer? = null
+        var encodedFrameCount = 0
+        var lastProgress = -1
 
         try {
             val sourceDurationMs = videoDurationMs(videoPath)
@@ -345,6 +356,15 @@ object QuotiCardExporter {
                             encoder = createdEncoder
                         }
                 activeEncoder.encode(cardBitmap, presentationTimeUs)
+                encodedFrameCount++
+                val progress =
+                    ((encodedFrameCount.toFloat() / frameCount.toFloat()) * 98f)
+                        .roundToInt()
+                        .coerceIn(1, 98)
+                if (progress != lastProgress) {
+                    onProgress(progress)
+                    lastProgress = progress
+                }
             }
             encoder?.finish()
         } finally {

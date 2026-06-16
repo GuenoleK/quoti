@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.1.9-background-export"
+        versionCode = 11
+        versionName = "0.1.10-export-progress"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

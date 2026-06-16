@@ -10,4 +10,9 @@
     <style name="Quoti_LoadingIndicatorContained">
         <item name="loadingIndicatorStyle">@style/Widget.Material3.LoadingIndicator.Contained</item>
     </style>
+
+    <style name="Quoti_LinearProgressIndicatorWavy" parent="Widget.Material3Expressive.LinearProgressIndicator.Wavy">
+        <item name="trackCornerRadius">4dp</item>
+        <item name="trackThickness">8dp</item>
+    </style>
 </resources>

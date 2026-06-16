@@ -136,6 +136,7 @@ import com.quoti.android.export.QuotiExportWork
 import com.quoti.android.export.QuotiCardExporter
 import com.quoti.android.share.IncomingShareDraft
 import com.google.android.material.loadingindicator.LoadingIndicator
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -195,6 +196,12 @@ fun QuotiApp(shareState: QuotiShareState) {
             ?.let { typeName -> runCatching { QuotiExportType.valueOf(typeName) }.getOrNull() }
             ?: QuotiExportType.Video
     val isExportProcessing = activeExportId != null && activeExportInfo?.state?.isFinished != true
+    val activeExportProgress =
+        activeExportInfo
+            ?.progress
+            ?.getInt(QuotiExportWork.ProgressPercent, 0)
+            ?.coerceIn(0, 100)
+            ?: 0
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (!granted) {
@@ -316,13 +323,19 @@ fun QuotiApp(shareState: QuotiShareState) {
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { QuotiSnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            QuotiSnackbarHost(
+                hostState = snackbarHostState,
+                avoidToolbar = post != null,
+            )
+        },
     ) { innerPadding ->
         QuotiCaptureScreen(
             shareState = shareState,
             settings = settings,
             isExportProcessing = isExportProcessing,
             activeExportType = activeExportType,
+            activeExportProgress = activeExportProgress,
             onCardToneChange = { cardTone = it },
             onContentModeChange = { contentMode = it },
             onSettingsClick = { showSettings = true },
@@ -427,8 +440,17 @@ fun QuotiApp(shareState: QuotiShareState) {
 }
 
 @Composable
-private fun QuotiSnackbarHost(hostState: SnackbarHostState) {
-    SnackbarHost(hostState = hostState) { snackbarData ->
+private fun QuotiSnackbarHost(
+    hostState: SnackbarHostState,
+    avoidToolbar: Boolean,
+) {
+    SnackbarHost(
+        hostState = hostState,
+        modifier =
+            Modifier
+                .navigationBarsPadding()
+                .padding(bottom = if (avoidToolbar) 98.dp else 0.dp),
+    ) { snackbarData ->
         Snackbar(
             snackbarData = snackbarData,
             modifier =
@@ -449,6 +471,7 @@ private fun QuotiCaptureScreen(
     settings: QuotiUiSettings,
     isExportProcessing: Boolean,
     activeExportType: QuotiExportType,
+    activeExportProgress: Int,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
     onSettingsClick: () -> Unit,
@@ -549,6 +572,7 @@ private fun QuotiCaptureScreen(
             ) {
                 ExportProcessingState(
                     exportType = activeExportType,
+                    progressPercent = activeExportProgress,
                     modifier =
                         Modifier
                             .widthIn(max = 440.dp)
@@ -600,6 +624,7 @@ private fun LoadingCaptureState() {
 @Composable
 private fun ExportProcessingState(
     exportType: QuotiExportType,
+    progressPercent: Int,
     modifier: Modifier = Modifier,
 ) {
     StateFrame(modifier = modifier) {
@@ -613,6 +638,21 @@ private fun ExportProcessingState(
             text = exportType.processingTitle,
             style = MaterialTheme.typography.titleMediumEmphasized,
         )
+        Spacer(modifier = Modifier.height(16.dp))
+        MaterialLinearProgressIndicator(
+            progressPercent = progressPercent,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(18.dp),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "$progressPercent%",
+            style = MaterialTheme.typography.labelLargeEmphasized,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "You can leave Quoti or lock your phone. We'll notify you when it's ready.",
             style = MaterialTheme.typography.bodyMedium,
@@ -646,6 +686,35 @@ private fun MaterialLoadingIndicator(
                     )
                 this.contentDescription = contentDescription
             }
+        },
+    )
+}
+
+@Composable
+private fun MaterialLinearProgressIndicator(
+    progressPercent: Int,
+    modifier: Modifier = Modifier,
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            val materialContext =
+                ContextThemeWrapper(context, com.google.android.material.R.style.Theme_Material3_DayNight_NoActionBar)
+            val indicatorContext =
+                ContextThemeWrapper(materialContext, com.quoti.android.R.style.Quoti_LinearProgressIndicatorWavy)
+            LinearProgressIndicator(indicatorContext).apply {
+                layoutParams =
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+                max = 100
+                isIndeterminate = false
+                progress = progressPercent.coerceIn(0, 100)
+            }
+        },
+        update = { indicator ->
+            indicator.setProgressCompat(progressPercent.coerceIn(0, 100), true)
         },
     )
 }

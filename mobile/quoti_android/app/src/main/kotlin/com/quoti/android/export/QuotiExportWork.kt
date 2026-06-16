@@ -35,6 +35,7 @@ enum class QuotiExportType {
 }
 
 object QuotiExportWork {
+    const val ProgressPercent = "progress_percent"
     const val OutputUri = "output_uri"
     const val OutputMimeType = "output_mime_type"
     const val OutputMessage = "output_message"
@@ -101,6 +102,7 @@ class QuotiExportWorker(
 
         notifications.ensureChannel()
         setForeground(notifications.foregroundInfo(exportType, notificationId))
+        setProgressPercent(0)
 
         return try {
             val post = withContext(Dispatchers.IO) {
@@ -108,13 +110,15 @@ class QuotiExportWorker(
             }
             val outputUri =
                 when (exportType) {
-                    QuotiExportType.Image ->
+                    QuotiExportType.Image -> {
+                        setProgressPercent(35)
                         QuotiCardExporter.writePicturesPng(
                             context = applicationContext,
                             post = post,
                             cardTone = cardTone,
                             contentMode = contentMode,
                         )
+                    }
 
                     QuotiExportType.Video ->
                         QuotiCardExporter.writeMoviesMp4(
@@ -122,9 +126,11 @@ class QuotiExportWorker(
                             post = post,
                             cardTone = cardTone,
                             contentMode = CardContentMode.WithMedia,
+                            onProgress = ::setProgressPercent,
                         )
                 }
 
+            setProgressPercent(100)
             notifications.showReady(exportType, outputUri, outputMimeType, notificationId + 1)
             Result.success(
                 workDataOf(
@@ -144,6 +150,14 @@ class QuotiExportWorker(
         } finally {
             jsonFile.delete()
         }
+    }
+
+    private fun setProgressPercent(progressPercent: Int) {
+        setProgressAsync(
+            workDataOf(
+                QuotiExportWork.ProgressPercent to progressPercent.coerceIn(0, 100),
+            ),
+        )
     }
 }
 

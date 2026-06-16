@@ -249,10 +249,36 @@ The first mobile test suite should focus on the product core:
 | Build dev gallery with post fixtures | Done | Fixtures exist and feed the mobile preview; fixture selection is not exposed in the default product shell. |
 | Implement Android incoming share prototype | Done | Receive shared text and URLs from Android Sharesheet into the Compose app. |
 | Implement first card editor and preview | In progress | First Compose card preview exists; editable fields still need implementation. |
-| Add export image prototype | Planned | Generate a shareable image from the card. |
-| Add Android unit and Compose tests | In progress | JVM test covers incoming share normalization; Compose UI tests still need implementation. |
-| Validate on Android emulator and physical device | Planned | Sharesheet behavior must be tested on a real device. |
+| Add export image prototype | Done | PNG export, image clipboard, source URL clipboard item, and Android image share intent are implemented. |
+| Add Android unit and Compose tests | In progress | JVM tests cover incoming share normalization and export naming; Compose instrumentation covers the primary controls. |
+| Validate on Android emulator and physical device | In progress | Emulator validation passes; physical Pixel 9 Pro APK install and real Sharesheet behavior still need product-path validation. |
 | Plan iOS Share Extension implementation | Planned | Account for App Groups and extension limitations. |
+
+## Next MVP Priorities
+
+The next work should turn the current functional prototype into the smallest reliable mobile MVP.
+
+### Priority 1: Core Share-To-Card Flow
+
+- Validate the real flow from X/Twitter: share a post to Quoti, parse the incoming Android payload, show a correct card preview, then copy, share, or download it.
+- Replace fixture-driven preview data with real incoming shared data wherever the Android share payload provides enough information.
+- Identify what X/Twitter actually sends on Android: text, URL, author, source handle, media, or only a link.
+- Add a simple edit surface for missing metadata, because mobile share payloads may be incomplete.
+- Stabilize card export beyond visible-screen capture by adding an offscreen card renderer for long cards.
+
+### Priority 2: Product Completeness
+
+- Simplify settings to only the controls that matter for the MVP.
+- Persist user preferences for card tone, text/media mode, and source actions.
+- Add proper Material 3 states for loading, empty, error, success, and export/share progress.
+- Either implement real video download/export or hide the video action until it is production-ready.
+
+### Priority 3: Mobile Polish
+
+- Make the floating toolbar actions easier to understand while staying close to Material 3 guidance.
+- Review motion, state layers, haptics, and sheet/button feedback on emulator and physical device.
+- Test dark mode, status bar, navigation bar, Android Sharesheet, copy image, share image, and PNG download on the Pixel 9 Pro.
+- Prepare a clean installable build path: app icon, version naming, signing, release APK/AAB, and install instructions.
 
 ## Phase 3 Definition Of Done
 

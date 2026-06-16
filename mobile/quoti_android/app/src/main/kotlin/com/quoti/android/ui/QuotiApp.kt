@@ -2,6 +2,10 @@ package com.quoti.android.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.Rect
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -28,8 +32,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Image
@@ -38,6 +42,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
@@ -65,6 +70,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.ToggleButton
@@ -81,9 +87,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -98,11 +108,14 @@ import com.quoti.android.core.model.RelatedPost
 import com.quoti.android.core.model.SocialPlatform
 import com.quoti.android.core.model.hasMedia
 import com.quoti.android.data.GalleryFixtureRepository
+import com.quoti.android.export.QuotiCardExporter
 import com.quoti.android.share.IncomingShareDraft
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlinx.coroutines.launch
 
 data class QuotiUiSettings(
@@ -139,10 +152,12 @@ private val FallbackPreviewPost =
 @Composable
 fun QuotiApp(incomingDraft: IncomingShareDraft?) {
     val context = LocalContext.current
+    val rootView = LocalView.current
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    var cardBounds by remember { mutableStateOf<Rect?>(null) }
     val galleryState by produceState<GalleryLoadState>(
         initialValue = GalleryLoadState.Ready(listOf(FallbackPreviewPost)),
     ) {
@@ -192,7 +207,28 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
             onSettingsClick = { showSettings = true },
             onCopyImage = {
                 scope.launch {
-                    snackbarHostState.showSnackbar("Image copy is next")
+                    runCatching {
+                        copyCardImage(
+                            context = context,
+                            clipboard = clipboard,
+                            rootView = rootView,
+                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
+                            post = post,
+                        )
+                    }.fold(
+                        onSuccess = {
+                            snackbarHostState.showSnackbar(
+                                if (post.sourceUrl == null) {
+                                    "Image copied"
+                                } else {
+                                    "Image and source link copied"
+                                },
+                            )
+                        },
+                        onFailure = {
+                            snackbarHostState.showSnackbar("Unable to copy image")
+                        },
+                    )
                 }
             },
             onDownloadVideo = {
@@ -202,7 +238,35 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
             },
             onDownloadPng = {
                 scope.launch {
-                    snackbarHostState.showSnackbar("PNG export is next")
+                    runCatching {
+                        QuotiCardExporter.writePicturesPng(
+                            context = context,
+                            rootView = rootView,
+                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
+                            postId = post.id,
+                        )
+                    }.fold(
+                        onSuccess = {
+                            snackbarHostState.showSnackbar("PNG saved to Pictures/Quoti")
+                        },
+                        onFailure = {
+                            snackbarHostState.showSnackbar("Unable to save PNG")
+                        },
+                    )
+                }
+            },
+            onShareImage = {
+                scope.launch {
+                    runCatching {
+                        shareCardImage(
+                            context = context,
+                            rootView = rootView,
+                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
+                            post = post,
+                        )
+                    }.onFailure {
+                        snackbarHostState.showSnackbar("Unable to share image")
+                    }
                 }
             },
             onCopyText = {
@@ -241,6 +305,7 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
                     Toast.LENGTH_SHORT,
                 ).show()
             },
+            onCardBoundsChange = { cardBounds = it },
             contentPadding = innerPadding,
         )
     }
@@ -270,10 +335,12 @@ private fun QuotiCaptureScreen(
     onCopyImage: () -> Unit,
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
+    onShareImage: () -> Unit,
     onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onRefresh: () -> Unit,
+    onCardBoundsChange: (Rect) -> Unit,
     contentPadding: PaddingValues,
 ) {
     Box(
@@ -288,6 +355,7 @@ private fun QuotiCaptureScreen(
             onCopyImage = onCopyImage,
             onDownloadVideo = onDownloadVideo,
             onDownloadPng = onDownloadPng,
+            onShareImage = onShareImage,
             onCopyText = onCopyText,
             onCopySource = onCopySource,
             onOpenSource = onOpenSource,
@@ -316,6 +384,7 @@ private fun QuotiCaptureScreen(
                 post = post,
                 cardTone = settings.cardTone,
                 contentMode = settings.contentMode,
+                onCardBoundsChange = onCardBoundsChange,
             )
             ExpressiveChoiceGroup(
                 value = settings.cardTone,
@@ -385,6 +454,7 @@ private fun PreviewFrame(
     post: QuotiPost,
     cardTone: CardTone,
     contentMode: CardContentMode,
+    onCardBoundsChange: (Rect) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -397,6 +467,10 @@ private fun PreviewFrame(
                 post = post,
                 cardTone = cardTone,
                 contentMode = contentMode,
+                modifier =
+                    Modifier.onGloballyPositioned { coordinates ->
+                        onCardBoundsChange(coordinates.boundsInRoot().toAndroidRect())
+                    },
             )
         }
     }
@@ -407,6 +481,7 @@ private fun QuotiCardPreview(
     post: QuotiPost,
     cardTone: CardTone,
     contentMode: CardContentMode,
+    modifier: Modifier = Modifier,
 ) {
     val dark = cardTone == CardTone.Dark
     val containerColor = if (dark) Color(0xFF211A16) else Color(0xFFFFFBF6)
@@ -415,7 +490,7 @@ private fun QuotiCardPreview(
     val dividerColor = contentColor.copy(alpha = 0.14f)
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
         colors =
             CardDefaults.cardColors(
@@ -506,6 +581,14 @@ private fun QuotiCardPreview(
     }
 }
 
+private fun ComposeRect.toAndroidRect(): Rect =
+    Rect(
+        floor(left).toInt(),
+        floor(top).toInt(),
+        ceil(right).toInt(),
+        ceil(bottom).toInt(),
+    )
+
 @Composable
 private fun RelatedPostBlock(
     relatedPost: RelatedPost,
@@ -580,6 +663,7 @@ private fun QuotiActionToolbar(
     onCopyImage: () -> Unit,
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
+    onShareImage: () -> Unit,
     onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
@@ -636,7 +720,7 @@ private fun QuotiActionToolbar(
                 onClick = onCopyText,
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Article,
+                    imageVector = Icons.AutoMirrored.Outlined.Article,
                     contentDescription = "Copy text",
                 )
             }
@@ -680,6 +764,19 @@ private fun QuotiActionToolbar(
                             },
                         )
                     }
+                    DropdownMenuItem(
+                        text = { Text("Share image") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Share,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            overflowExpanded = false
+                            onShareImage()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Refresh preview") },
                         leadingIcon = {
@@ -732,7 +829,7 @@ private fun ToolbarActionButton(
     icon: @Composable () -> Unit,
 ) {
     TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
         tooltip = {
             PlainTooltip {
                 Text(label)
@@ -873,6 +970,57 @@ private fun selectPreviewPost(posts: List<QuotiPost>): QuotiPost? {
 private fun QuotiPost.containsVideo(): Boolean {
     return media.any { it is PostMedia.Video } ||
         relatedPost?.media?.any { it is PostMedia.Video } == true
+}
+
+private suspend fun copyCardImage(
+    context: Context,
+    clipboard: ClipboardManager,
+    rootView: android.view.View,
+    cardBounds: Rect,
+    post: QuotiPost,
+) {
+    val uri =
+        QuotiCardExporter.writeCachePng(
+            context = context,
+            rootView = rootView,
+            cardBounds = cardBounds,
+            postId = post.id,
+        )
+    val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
+    post.sourceUrl?.let { sourceUrl ->
+        clipData.addItem(ClipData.Item(sourceUrl))
+    }
+    clipboard.setPrimaryClip(clipData)
+}
+
+private suspend fun shareCardImage(
+    context: Context,
+    rootView: android.view.View,
+    cardBounds: Rect,
+    post: QuotiPost,
+) {
+    val uri: Uri =
+        QuotiCardExporter.writeCachePng(
+            context = context,
+            rootView = rootView,
+            cardBounds = cardBounds,
+            postId = post.id,
+        )
+    val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
+    val shareIntent =
+        Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            post.sourceUrl?.let { sourceUrl ->
+                putExtra(Intent.EXTRA_TEXT, sourceUrl)
+            }
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            this.clipData = clipData
+        }
+
+    context.startActivity(
+        Intent.createChooser(shareIntent, "Share Quoti card"),
+    )
 }
 
 private fun formatDate(value: String): String {

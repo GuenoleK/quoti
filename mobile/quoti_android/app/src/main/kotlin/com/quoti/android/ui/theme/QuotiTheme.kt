@@ -1,20 +1,27 @@
 package com.quoti.android.ui.theme
 
+import android.app.Activity
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.TextUnit
+import androidx.core.view.WindowCompat
 
 private val QuotiLightColors =
     lightColorScheme(
@@ -112,10 +119,42 @@ fun QuotiTheme(
 ) {
     val colorScheme = if (darkTheme) QuotiDarkColors else QuotiLightColors
 
+    QuotiSystemBars(
+        colorScheme = colorScheme,
+        darkTheme = darkTheme,
+    )
+
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
         typography = QuotiTypography,
         shapes = QuotiShapes,
         content = content,
     )
+}
+
+@Composable
+@Suppress("DEPRECATION")
+private fun QuotiSystemBars(
+    colorScheme: ColorScheme,
+    darkTheme: Boolean,
+) {
+    val view = LocalView.current
+    if (view.isInEditMode) return
+
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        val background = colorScheme.background.toArgb()
+
+        window.statusBarColor = background
+        window.navigationBarColor = background
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !darkTheme
+            isAppearanceLightNavigationBars = !darkTheme
+        }
+    }
 }

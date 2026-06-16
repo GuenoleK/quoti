@@ -1,19 +1,24 @@
 package com.quoti.android.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.view.ContextThemeWrapper
 import android.view.Surface
 import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -92,6 +97,7 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -115,17 +121,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Observer
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.quoti.android.BuildConfig
 import com.quoti.android.core.model.CardContentMode
 import com.quoti.android.core.model.CardTone
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
+import com.quoti.android.export.QuotiExportType
+import com.quoti.android.export.QuotiExportWork
 import com.quoti.android.export.QuotiCardExporter
 import com.quoti.android.share.IncomingShareDraft
 import com.google.android.material.loadingindicator.LoadingIndicator
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -169,11 +182,27 @@ fun QuotiApp(shareState: QuotiShareState) {
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val workManager = remember(context) { WorkManager.getInstance(context.applicationContext) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var cardTone by rememberSaveable { mutableStateOf(CardTone.Light) }
     var contentMode by rememberSaveable { mutableStateOf(CardContentMode.WithMedia) }
     var sourceActionsEnabled by rememberSaveable { mutableStateOf(true) }
-    var isVideoProcessing by rememberSaveable { mutableStateOf(false) }
+    var activeExportId by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeExportTypeName by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeExportInfo by remember { mutableStateOf<WorkInfo?>(null) }
+    val activeExportType =
+        activeExportTypeName
+            ?.let { typeName -> runCatching { QuotiExportType.valueOf(typeName) }.getOrNull() }
+            ?: QuotiExportType.Video
+    val isExportProcessing = activeExportId != null && activeExportInfo?.state?.isFinished != true
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                scope.launch {
+                    snackbarHostState.showSnackbar("Notifications are off. Keep Quoti open to see the result here.")
+                }
+            }
+        }
     val settings =
         QuotiUiSettings(
             cardTone = cardTone,
@@ -188,6 +217,103 @@ fun QuotiApp(shareState: QuotiShareState) {
         }
     }
 
+    DisposableEffect(workManager, activeExportId) {
+        activeExportInfo = null
+        val workId =
+            activeExportId
+                ?.let { id -> runCatching { UUID.fromString(id) }.getOrNull() }
+
+        if (workId == null) {
+            onDispose {}
+        } else {
+            val liveData = workManager.getWorkInfoByIdLiveData(workId)
+            val observer = Observer<WorkInfo?> { info -> activeExportInfo = info }
+            liveData.observeForever(observer)
+            onDispose { liveData.removeObserver(observer) }
+        }
+    }
+
+    LaunchedEffect(activeExportInfo?.id, activeExportInfo?.state) {
+        val info = activeExportInfo ?: return@LaunchedEffect
+        if (!info.state.isFinished) {
+            return@LaunchedEffect
+        }
+
+        val finishedExportType = activeExportType
+        val outputData = info.outputData
+        if (info.state == WorkInfo.State.SUCCEEDED) {
+            val uri = outputData.getString(QuotiExportWork.OutputUri)?.let(Uri::parse)
+            val mimeType = outputData.getString(QuotiExportWork.OutputMimeType)
+            if (uri != null && mimeType != null) {
+                snackbarHostState.showSavedMediaSnackbar(
+                    context = context,
+                    message = outputData.getString(QuotiExportWork.OutputMessage)
+                        ?: finishedExportType.savedSnackbarMessage,
+                    uri = uri,
+                    mimeType = mimeType,
+                    failureMessage = outputData.getString(QuotiExportWork.OutputFailureMessage)
+                        ?: finishedExportType.openFailureSnackbarMessage,
+                )
+            } else {
+                snackbarHostState.showSnackbar(finishedExportType.readySnackbarMessage)
+            }
+        } else {
+            snackbarHostState.showSnackbar(
+                outputData.getString(QuotiExportWork.OutputFailureMessage)
+                    ?: finishedExportType.failedSnackbarMessage,
+            )
+        }
+
+        activeExportId = null
+        activeExportTypeName = null
+        activeExportInfo = null
+    }
+
+    fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return
+        }
+
+        if (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    fun startExport(
+        activePost: QuotiPost,
+        exportType: QuotiExportType,
+        exportContentMode: CardContentMode,
+    ) {
+        if (isExportProcessing) {
+            return
+        }
+
+        requestNotificationPermissionIfNeeded()
+        scope.launch {
+            runCatching {
+                QuotiExportWork.enqueue(
+                    context = context,
+                    post = activePost,
+                    exportType = exportType,
+                    cardTone = settings.cardTone,
+                    contentMode = exportContentMode,
+                )
+            }.fold(
+                onSuccess = { workId ->
+                    activeExportId = workId.toString()
+                    activeExportTypeName = exportType.name
+                    snackbarHostState.showSnackbar(exportType.startedSnackbarMessage)
+                },
+                onFailure = {
+                    snackbarHostState.showSnackbar(exportType.failedSnackbarMessage)
+                },
+            )
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { QuotiSnackbarHost(snackbarHostState) },
@@ -195,7 +321,8 @@ fun QuotiApp(shareState: QuotiShareState) {
         QuotiCaptureScreen(
             shareState = shareState,
             settings = settings,
-            isVideoProcessing = isVideoProcessing,
+            isExportProcessing = isExportProcessing,
+            activeExportType = activeExportType,
             onCardToneChange = { cardTone = it },
             onContentModeChange = { contentMode = it },
             onSettingsClick = { showSettings = true },
@@ -227,66 +354,11 @@ fun QuotiApp(shareState: QuotiShareState) {
             },
             onDownloadVideo = {
                 val activePost = post ?: return@QuotiCaptureScreen
-                if (isVideoProcessing) {
-                    return@QuotiCaptureScreen
-                }
-                scope.launch {
-                    isVideoProcessing = true
-                    val exportResult =
-                        try {
-                            runCatching {
-                                QuotiCardExporter.writeMoviesMp4(
-                                    context = context,
-                                    post = activePost,
-                                    cardTone = settings.cardTone,
-                                    contentMode = CardContentMode.WithMedia,
-                                )
-                            }
-                        } finally {
-                            isVideoProcessing = false
-                        }
-
-                    exportResult.fold(
-                        onSuccess = { uri ->
-                            snackbarHostState.showSavedMediaSnackbar(
-                                context = context,
-                                message = "Video saved to Movies/Quoti",
-                                uri = uri,
-                                mimeType = "video/mp4",
-                                failureMessage = "Unable to open video",
-                            )
-                        },
-                        onFailure = {
-                            snackbarHostState.showSnackbar("Unable to export video")
-                        },
-                    )
-                }
+                startExport(activePost, QuotiExportType.Video, CardContentMode.WithMedia)
             },
             onDownloadPng = {
                 val activePost = post ?: return@QuotiCaptureScreen
-                scope.launch {
-                    runCatching {
-                        QuotiCardExporter.writePicturesPng(
-                            context = context,
-                            post = activePost,
-                            cardTone = settings.cardTone,
-                            contentMode = settings.contentMode,
-                        )
-                    }.fold(
-                        onSuccess = { uri ->
-                            snackbarHostState.showSavedMediaSnackbar(
-                                context = context,
-                                message = "PNG saved to Pictures/Quoti",
-                                uri = uri,
-                                mimeType = "image/png",
-                                failureMessage = "Unable to open image",
-                            )
-                        },
-                        onFailure = {
-                            snackbarHostState.showSnackbar("Unable to save PNG")
-                        },
-                    )
-                }
+                startExport(activePost, QuotiExportType.Image, settings.contentMode)
             },
             onShareImage = {
                 val activePost = post ?: return@QuotiCaptureScreen
@@ -375,7 +447,8 @@ private fun QuotiSnackbarHost(hostState: SnackbarHostState) {
 private fun QuotiCaptureScreen(
     shareState: QuotiShareState,
     settings: QuotiUiSettings,
-    isVideoProcessing: Boolean,
+    isExportProcessing: Boolean,
+    activeExportType: QuotiExportType,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
     onSettingsClick: () -> Unit,
@@ -461,7 +534,7 @@ private fun QuotiCaptureScreen(
             }
         }
 
-        if (isVideoProcessing) {
+        if (isExportProcessing) {
             Box(
                 modifier =
                     Modifier
@@ -474,7 +547,8 @@ private fun QuotiCaptureScreen(
                         ) {},
                 contentAlignment = Alignment.Center,
             ) {
-                VideoProcessingState(
+                ExportProcessingState(
+                    exportType = activeExportType,
                     modifier =
                         Modifier
                             .widthIn(max = 440.dp)
@@ -524,20 +598,23 @@ private fun LoadingCaptureState() {
 }
 
 @Composable
-private fun VideoProcessingState(modifier: Modifier = Modifier) {
+private fun ExportProcessingState(
+    exportType: QuotiExportType,
+    modifier: Modifier = Modifier,
+) {
     StateFrame(modifier = modifier) {
         MaterialLoadingIndicator(
             modifier = Modifier.size(48.dp),
-            contentDescription = "Processing video",
+            contentDescription = exportType.processingTitle,
             contained = true,
         )
         Spacer(modifier = Modifier.height(14.dp))
         Text(
-            text = "Processing video",
+            text = exportType.processingTitle,
             style = MaterialTheme.typography.titleMediumEmphasized,
         )
         Text(
-            text = "Rendering the card and audio.",
+            text = "You can leave Quoti or lock your phone. We'll notify you when it's ready.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1571,6 +1648,48 @@ private fun QuotiPost.containsVideo(): Boolean {
     return media.any { it is PostMedia.Video } ||
         relatedPost?.media?.any { it is PostMedia.Video } == true
 }
+
+private val QuotiExportType.processingTitle: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "Saving image"
+            QuotiExportType.Video -> "Processing video"
+        }
+
+private val QuotiExportType.startedSnackbarMessage: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "Image export started"
+            QuotiExportType.Video -> "Video export started"
+        }
+
+private val QuotiExportType.readySnackbarMessage: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "Image ready"
+            QuotiExportType.Video -> "Video ready"
+        }
+
+private val QuotiExportType.savedSnackbarMessage: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "PNG saved to Pictures/Quoti"
+            QuotiExportType.Video -> "Video saved to Movies/Quoti"
+        }
+
+private val QuotiExportType.openFailureSnackbarMessage: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "Unable to open image"
+            QuotiExportType.Video -> "Unable to open video"
+        }
+
+private val QuotiExportType.failedSnackbarMessage: String
+    get() =
+        when (this) {
+            QuotiExportType.Image -> "Unable to save PNG"
+            QuotiExportType.Video -> "Unable to export video"
+        }
 
 private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
     withContext(Dispatchers.IO) {

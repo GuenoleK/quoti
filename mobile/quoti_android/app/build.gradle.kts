@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.1.7-video-export-guard"
+        versionCode = 10
+        versionName = "0.1.9-background-export"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.0")
     implementation("com.google.android.material:material:1.14.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

@@ -303,6 +303,7 @@ object QuotiCardExporter {
         mediaSlots: List<ExportVideoMediaSlot>,
     ) {
         var encoder: AvcBitmapEncoder? = null
+        var frameRenderer: QuotiCardBitmapRenderer.VideoFrameRenderer? = null
 
         try {
             val sourceDurationMs = videoDurationMs(videoPath)
@@ -320,34 +321,34 @@ object QuotiCardExporter {
             ) { frame, presentationTimeUs ->
                 val mediaBitmaps = mediaSlots.toMediaBitmaps(frame)
                 val cardBitmap =
-                    QuotiCardBitmapRenderer.render(
-                        post = post,
-                        cardTone = cardTone,
-                        contentMode = contentMode,
-                        mediaBitmaps = mediaBitmaps,
-                    ).scaleForVideoExport().ensureEvenSize()
+                    (frameRenderer
+                        ?: QuotiCardBitmapRenderer.prepareVideoFrameRenderer(
+                            post = post,
+                            cardTone = cardTone,
+                            contentMode = contentMode,
+                            mediaBitmaps = mediaBitmaps,
+                        ).also { preparedRenderer ->
+                            frameRenderer = preparedRenderer
+                        }).render(mediaBitmaps)
 
-                try {
-                    val activeEncoder =
-                        encoder
-                            ?: AvcBitmapEncoder(
-                                output = output,
-                                width = cardBitmap.width,
-                                height = cardBitmap.height,
-                                frameRate = VideoExportFrameRate,
-                                audioSourcePath = videoPath,
-                                audioFormat = audioFormat,
-                                maxDurationUs = exportDurationUs,
-                            ).also { createdEncoder ->
-                                encoder = createdEncoder
-                            }
-                    activeEncoder.encode(cardBitmap, presentationTimeUs)
-                } finally {
-                    cardBitmap.recycle()
-                }
+                val activeEncoder =
+                    encoder
+                        ?: AvcBitmapEncoder(
+                            output = output,
+                            width = cardBitmap.width,
+                            height = cardBitmap.height,
+                            frameRate = VideoExportFrameRate,
+                            audioSourcePath = videoPath,
+                            audioFormat = audioFormat,
+                            maxDurationUs = exportDurationUs,
+                        ).also { createdEncoder ->
+                            encoder = createdEncoder
+                        }
+                activeEncoder.encode(cardBitmap, presentationTimeUs)
             }
             encoder?.finish()
         } finally {
+            frameRenderer?.release()
             encoder?.release()
         }
     }
@@ -1133,6 +1134,81 @@ private object QuotiCardBitmapRenderer {
         return bitmap
     }
 
+    fun prepareVideoFrameRenderer(
+        post: QuotiPost,
+        cardTone: CardTone,
+        contentMode: CardContentMode,
+        mediaBitmaps: List<ExportMediaBitmap>,
+    ): VideoFrameRenderer {
+        val palette = RenderPalette.from(cardTone)
+        val measure = measure(post, palette, contentMode, mediaBitmaps)
+        val staticBase = Bitmap.createBitmap(ExportBitmapWidth, measure.height, Bitmap.Config.ARGB_8888)
+        val staticCanvas = Canvas(staticBase)
+
+        staticCanvas.drawColor(palette.surface)
+        drawCard(
+            canvas = staticCanvas,
+            post = post,
+            palette = palette,
+            measure = measure,
+            contentMode = contentMode,
+            mediaBitmaps = mediaBitmaps,
+            drawMediaContent = false,
+        )
+
+        val outputSize = videoExportSizeFor(staticBase.width, staticBase.height)
+        val fullFrame = Bitmap.createBitmap(staticBase.width, staticBase.height, Bitmap.Config.ARGB_8888)
+        val outputFrame =
+            if (outputSize.width == fullFrame.width && outputSize.height == fullFrame.height) {
+                fullFrame
+            } else {
+                Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
+            }
+        val mediaRect = mediaRectFor(measure, contentMode)
+
+        return VideoFrameRenderer(
+            staticBase = staticBase,
+            fullFrame = fullFrame,
+            outputFrame = outputFrame,
+            drawDynamicMedia = { canvas, dynamicMediaBitmaps ->
+                mediaRect?.let { rect ->
+                    drawMedia(canvas, dynamicMediaBitmaps, rect, palette)
+                }
+            },
+        )
+    }
+
+    class VideoFrameRenderer(
+        private val staticBase: Bitmap,
+        private val fullFrame: Bitmap,
+        private val outputFrame: Bitmap,
+        private val drawDynamicMedia: (Canvas, List<ExportMediaBitmap>) -> Unit,
+    ) {
+        private val fullCanvas = Canvas(fullFrame)
+        private val outputCanvas = Canvas(outputFrame)
+        private val outputRect = RectF(0f, 0f, outputFrame.width.toFloat(), outputFrame.height.toFloat())
+        private val scalePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+        fun render(mediaBitmaps: List<ExportMediaBitmap>): Bitmap {
+            fullCanvas.drawBitmap(staticBase, 0f, 0f, null)
+            drawDynamicMedia(fullCanvas, mediaBitmaps)
+
+            if (outputFrame !== fullFrame) {
+                outputCanvas.drawBitmap(fullFrame, null, outputRect, scalePaint)
+            }
+
+            return outputFrame
+        }
+
+        fun release() {
+            staticBase.recycle()
+            if (outputFrame !== fullFrame) {
+                outputFrame.recycle()
+            }
+            fullFrame.recycle()
+        }
+    }
+
     private fun measure(
         post: QuotiPost,
         palette: RenderPalette,
@@ -1236,6 +1312,7 @@ private object QuotiCardBitmapRenderer {
         measure: MeasuredCard,
         contentMode: CardContentMode,
         mediaBitmaps: List<ExportMediaBitmap>,
+        drawMediaContent: Boolean = true,
     ) {
         val contentWidth = ExportBitmapWidth - CardPadding * 2
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -1282,7 +1359,9 @@ private object QuotiCardBitmapRenderer {
         if (contentMode == CardContentMode.WithMedia && measure.mediaHeight > 0f) {
             y += SectionGap
             val mediaRect = RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
-            drawMedia(canvas, mediaBitmaps, mediaRect, palette)
+            if (drawMediaContent) {
+                drawMedia(canvas, mediaBitmaps, mediaRect, palette)
+            }
             y += measure.mediaHeight
         }
 
@@ -1303,6 +1382,44 @@ private object QuotiCardBitmapRenderer {
             layout = measure.markLayout,
             x = ExportBitmapWidth - CardPadding - measure.markLayout.width,
             y = y,
+        )
+    }
+
+    private fun mediaRectFor(
+        measure: MeasuredCard,
+        contentMode: CardContentMode,
+    ): RectF? {
+        if (contentMode != CardContentMode.WithMedia || measure.mediaHeight <= 0f) {
+            return null
+        }
+
+        val contentWidth = ExportBitmapWidth - CardPadding * 2
+        var y = CardPadding + HeaderHeight + SectionGap + measure.contentLayout.height
+
+        measure.relatedPost?.let { relatedPost ->
+            y += SectionGap
+            y += relatedPost.height
+        }
+
+        y += SectionGap
+        return RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+    }
+
+    private fun videoExportSizeFor(
+        width: Int,
+        height: Int,
+    ): VideoExportSize {
+        if (width <= VideoExportBitmapWidth) {
+            return VideoExportSize(
+                width = width.makeEven(),
+                height = height.makeEven(),
+            )
+        }
+
+        val scale = VideoExportBitmapWidth.toFloat() / width.toFloat()
+        return VideoExportSize(
+            width = VideoExportBitmapWidth.makeEven(),
+            height = max(2, (height * scale).roundToInt()).makeEven(),
         )
     }
 
@@ -1507,6 +1624,11 @@ private data class ExportMediaBitmap(
     val isVideo: Boolean,
 )
 
+private data class VideoExportSize(
+    val width: Int,
+    val height: Int,
+)
+
 private data class ExportMediaSource(
     val url: String,
     val isVideo: Boolean,
@@ -1704,31 +1826,6 @@ private fun videoBitRate(
         .roundToLong()
         .coerceIn(VideoExportMinBitRate, VideoExportMaxBitRate)
         .toInt()
-}
-
-private fun Bitmap.scaleForVideoExport(): Bitmap {
-    if (width <= VideoExportBitmapWidth) {
-        return this
-    }
-
-    val scale = VideoExportBitmapWidth.toFloat() / width.toFloat()
-    val scaledHeight = max(2, (height * scale).roundToInt()).makeEven()
-    val output = Bitmap.createScaledBitmap(this, VideoExportBitmapWidth, scaledHeight, true)
-    recycle()
-    return output
-}
-
-private fun Bitmap.ensureEvenSize(): Bitmap {
-    val evenWidth = width.makeEven()
-    val evenHeight = height.makeEven()
-    if (evenWidth == width && evenHeight == height) {
-        return this
-    }
-
-    val output = Bitmap.createBitmap(evenWidth, evenHeight, Bitmap.Config.ARGB_8888)
-    Canvas(output).drawBitmap(this, 0f, 0f, null)
-    recycle()
-    return output
 }
 
 private fun Int.makeEven(): Int = if (this % 2 == 0) this else this - 1

@@ -1,9 +1,13 @@
 <resources>
-    <style name="Theme.Quoti" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.Quoti" parent="Theme.Material3.Light.NoActionBar">
         <item name="android:windowBackground">@color/quoti_background</item>
         <item name="android:windowDisablePreview">true</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <style name="Quoti_LoadingIndicatorContained">
+        <item name="loadingIndicatorStyle">@style/Widget.Material3.LoadingIndicator.Contained</item>
     </style>
 </resources>

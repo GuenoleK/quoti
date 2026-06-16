@@ -275,7 +275,7 @@ Current implementation notes:
 - Public X page enrichment now imports multiple image media, playable video variants, and reliable reply/quoted-post metadata when exposed by X.
 - Compose preview and offscreen PNG export preserve media aspect ratio instead of cropping into a fixed landscape frame.
 - Copy image, share image, and download PNG use an offscreen model-driven renderer instead of visible-screen capture.
-- Video previews play muted looping MP4 variants when X exposes one; MP4 video-card export remains a follow-up, and PNG exports still use the poster image.
+- Video previews play looping MP4 variants muted by default with a sound toggle when X exposes one. Video posts now expose a primary video action, show a Material processing state during generation, and export a short 12 fps MP4 Quoti card with source audio; PNG exports still use the poster image.
 - Physical X/Twitter app validation still needs a device pass to record the exact payload variants sent by the installed X app version.
 
 ### Priority 2: Product Completeness
@@ -283,7 +283,7 @@ Current implementation notes:
 - Simplify settings to only the controls that matter for the MVP.
 - Persist user preferences for card tone, text/media mode, and source actions.
 - Add proper Material 3 states for loading, empty, error, success, and export/share progress.
-- Either implement real video download/export or hide the video action until it is production-ready.
+- Improve mobile MP4 export quality and duration beyond the current short software-encoded card.
 
 ### Priority 3: Mobile Polish
 

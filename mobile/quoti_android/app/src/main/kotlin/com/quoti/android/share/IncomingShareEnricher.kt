@@ -160,13 +160,18 @@ internal object XPostPageParser {
 
     fun extractMedia(html: String): List<PostMedia> {
         val normalized = html.normalizedHtml()
-        val videos = extractVideos(normalized)
-        val videoPosters = videos.mapNotNull { media -> media.posterUrl }.toSet()
-        val images =
+        val imageUrls =
             imageUrlPattern
                 .findAll(normalized)
                 .map { match -> match.value.normalizedMediaUrl() }
                 .filterNot { imageUrl -> imageUrl.contains("profile_images") }
+                .distinctBy { imageUrl -> imageUrl.mediaIdentity() }
+                .take(4)
+                .toList()
+        val videos = extractVideos(normalized, imageUrls)
+        val videoPosters = videos.mapNotNull { media -> media.posterUrl }.toSet()
+        val images =
+            imageUrls
                 .filterNot { imageUrl -> imageUrl in videoPosters }
                 .distinctBy { imageUrl -> imageUrl.mediaIdentity() }
                 .take(4)
@@ -213,7 +218,10 @@ internal object XPostPageParser {
             .toSet()
     }
 
-    private fun extractVideos(normalizedHtml: String): List<PostMedia.Video> {
+    private fun extractVideos(
+        normalizedHtml: String,
+        fallbackPosters: List<String>,
+    ): List<PostMedia.Video> {
         val variants =
             videoVariantPattern
                 .findAll(normalizedHtml)
@@ -231,6 +239,7 @@ internal object XPostPageParser {
                 .distinct()
                 .take(2)
                 .toList()
+                .ifEmpty { fallbackPosters.take(1) }
 
         if (posters.isEmpty() && variants.isEmpty()) {
             return emptyList()

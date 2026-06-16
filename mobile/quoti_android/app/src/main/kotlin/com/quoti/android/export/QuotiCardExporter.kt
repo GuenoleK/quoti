@@ -6,17 +6,34 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.media.Image
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
 import android.net.Uri
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLExt
+import android.opengl.EGLSurface
+import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.os.Build
 import android.provider.MediaStore
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
+import android.view.Surface
 import androidx.core.content.FileProvider
 import com.quoti.android.core.model.CardContentMode
 import com.quoti.android.core.model.CardTone
@@ -27,6 +44,9 @@ import com.quoti.android.core.model.hasMedia
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -35,12 +55,15 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val PngMimeType = "image/png"
+private const val Mp4MimeType = "video/mp4"
 private const val ExportDirectory = "quoti_exports"
 private const val PicturesRelativePath = "Pictures/Quoti"
+private const val MoviesRelativePath = "Movies/Quoti"
 private const val ExportBitmapWidth = 1080
 private const val CardPadding = 72f
 private const val HeaderHeight = 88f
@@ -50,6 +73,16 @@ private const val RelatedPadding = 34f
 private const val MinMediaHeight = 260f
 private const val PlaceholderMediaAspectRatio = 1.85f
 private const val MediaGridGap = 6f
+private const val VideoExportBitmapWidth = 720
+private const val VideoExportSourceVariantMaxLongEdge = 1280
+internal const val VideoExportFrameRate = 30
+private const val VideoExportSourceFrameMaxLongEdge = 720
+internal const val VideoExportMaxDurationMs = 60_000L
+private const val VideoExportMinBitRate = 8_000_000L
+private const val VideoExportMaxBitRate = 24_000_000L
+private const val VideoExportBitsPerPixelFrame = 0.22
+private const val VideoEncoderTimeoutUs = 10_000L
+private const val VideoCodecMaxStalledPolls = 1_000
 
 object QuotiCardExporter {
     suspend fun writeCachePng(
@@ -133,6 +166,34 @@ object QuotiCardExporter {
         }
     }
 
+    suspend fun writeMoviesMp4(
+        context: Context,
+        post: QuotiPost,
+        cardTone: CardTone,
+        contentMode: CardContentMode,
+    ): Uri {
+        val fileName = quotiVideoFileName(post.id)
+        val output =
+            withContext(Dispatchers.IO) {
+                val exportDir = File(context.cacheDir, ExportDirectory)
+                exportDir.mkdirs()
+                File(exportDir, fileName)
+            }
+
+        renderVideoCardMp4(
+            output = output,
+            post = post,
+            cardTone = cardTone,
+            contentMode = contentMode,
+        )
+
+        return writeCacheVideoToMovies(
+            context = context,
+            cacheFile = output,
+            fileName = fileName,
+        )
+    }
+
     private suspend fun renderCardBitmap(
         post: QuotiPost,
         cardTone: CardTone,
@@ -188,6 +249,870 @@ object QuotiCardExporter {
                 }
             }.getOrNull()
         }
+
+    private suspend fun renderVideoCardMp4(
+        output: File,
+        post: QuotiPost,
+        cardTone: CardTone,
+        contentMode: CardContentMode,
+    ) {
+        val mediaSources = post.exportMediaSources().take(4)
+        val videoSource = mediaSources.firstOrNull { source -> source.playableVideoUrl != null }
+            ?: error("No playable MP4 video source is available for this Quoti card.")
+        val mediaSlots =
+            mediaSources.map { source ->
+                if (source === videoSource) {
+                    ExportVideoMediaSlot.DynamicVideo
+                } else {
+                    ExportVideoMediaSlot.StaticBitmap(
+                        bitmap = fetchRemoteBitmap(source.url),
+                        isVideo = source.isVideo,
+                    )
+                }
+            }
+
+        val localVideoSource = downloadVideoSource(videoSource.playableVideoUrl ?: error("Missing playable video URL."), output)
+
+        try {
+            withContext(Dispatchers.Default) {
+                renderVideoCardMp4(
+                    output = output,
+                    videoPath = localVideoSource.absolutePath,
+                    post = post,
+                    cardTone = cardTone,
+                    contentMode = contentMode,
+                    mediaSlots = mediaSlots,
+                )
+            }
+        } finally {
+            localVideoSource.delete()
+            mediaSlots.forEach { slot ->
+                if (slot is ExportVideoMediaSlot.StaticBitmap) {
+                    slot.bitmap?.recycle()
+                }
+            }
+        }
+    }
+
+    private fun renderVideoCardMp4(
+        output: File,
+        videoPath: String,
+        post: QuotiPost,
+        cardTone: CardTone,
+        contentMode: CardContentMode,
+        mediaSlots: List<ExportVideoMediaSlot>,
+    ) {
+        var encoder: AvcBitmapEncoder? = null
+
+        try {
+            val sourceDurationMs = videoDurationMs(videoPath)
+            val exportDurationMs = min(sourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
+            val exportDurationUs = exportDurationMs * 1_000L
+            val audioFormat = findAudioTrackFormat(videoPath)
+            val frameCount = max(1, ceil(exportDurationMs / 1_000.0 * VideoExportFrameRate).toInt())
+            val frameIntervalUs = 1_000_000L / VideoExportFrameRate
+
+            decodeVideoFrames(
+                videoPath = videoPath,
+                frameCount = frameCount,
+                frameIntervalUs = frameIntervalUs,
+                maxDurationUs = exportDurationUs,
+            ) { frame, presentationTimeUs ->
+                val mediaBitmaps = mediaSlots.toMediaBitmaps(frame)
+                val cardBitmap =
+                    QuotiCardBitmapRenderer.render(
+                        post = post,
+                        cardTone = cardTone,
+                        contentMode = contentMode,
+                        mediaBitmaps = mediaBitmaps,
+                    ).scaleForVideoExport().ensureEvenSize()
+
+                try {
+                    val activeEncoder =
+                        encoder
+                            ?: AvcBitmapEncoder(
+                                output = output,
+                                width = cardBitmap.width,
+                                height = cardBitmap.height,
+                                frameRate = VideoExportFrameRate,
+                                audioSourcePath = videoPath,
+                                audioFormat = audioFormat,
+                                maxDurationUs = exportDurationUs,
+                            ).also { createdEncoder ->
+                                encoder = createdEncoder
+                            }
+                    activeEncoder.encode(cardBitmap, presentationTimeUs)
+                } finally {
+                    cardBitmap.recycle()
+                }
+            }
+            encoder?.finish()
+        } finally {
+            encoder?.release()
+        }
+    }
+
+    private fun videoDurationMs(videoPath: String): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(videoPath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.takeIf { duration -> duration > 0L }
+                ?: 1_000L
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private suspend fun downloadVideoSource(
+        videoUrl: String,
+        output: File,
+    ): File =
+        withContext(Dispatchers.IO) {
+            val sourceFile = File(output.parentFile, "${output.nameWithoutExtension}-source.mp4")
+            val connection = URL(videoUrl).openConnection() as HttpURLConnection
+            try {
+                connection.instanceFollowRedirects = true
+                connection.connectTimeout = 8_000
+                connection.readTimeout = 20_000
+                connection.setRequestProperty("User-Agent", "Quoti Android")
+
+                if (connection.responseCode !in 200..299) {
+                    error("Video request failed with HTTP ${connection.responseCode}.")
+                }
+
+                connection.inputStream.use { input ->
+                    sourceFile.outputStream().use { outputStream ->
+                        input.copyTo(outputStream)
+                    }
+                }
+                sourceFile
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private suspend fun writeCacheVideoToMovies(
+        context: Context,
+        cacheFile: File,
+        fileName: String,
+    ): Uri =
+        withContext(Dispatchers.IO) {
+            val resolver = context.contentResolver
+            val values =
+                ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Video.Media.MIME_TYPE, Mp4MimeType)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.Video.Media.RELATIVE_PATH, MoviesRelativePath)
+                        put(MediaStore.Video.Media.IS_PENDING, 1)
+                    }
+                }
+
+            val uri =
+                resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Unable to create a MediaStore entry for the Quoti video.")
+
+            runCatching {
+                resolver.openOutputStream(uri)?.use { output ->
+                    cacheFile.inputStream().use { input -> input.copyTo(output) }
+                } ?: error("Unable to open MediaStore output stream.")
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(MediaStore.Video.Media.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                }
+            }.onFailure {
+                resolver.delete(uri, null, null)
+            }.getOrThrow()
+
+            uri
+        }
+}
+
+private sealed interface ExportVideoMediaSlot {
+    data object DynamicVideo : ExportVideoMediaSlot
+
+    data class StaticBitmap(
+        val bitmap: Bitmap?,
+        val isVideo: Boolean,
+    ) : ExportVideoMediaSlot
+}
+
+private fun List<ExportVideoMediaSlot>.toMediaBitmaps(videoFrame: Bitmap): List<ExportMediaBitmap> {
+    return mapNotNull { slot ->
+        when (slot) {
+            ExportVideoMediaSlot.DynamicVideo ->
+                ExportMediaBitmap(
+                    bitmap = videoFrame,
+                    isVideo = false,
+                )
+            is ExportVideoMediaSlot.StaticBitmap ->
+                slot.bitmap?.let { bitmap ->
+                    ExportMediaBitmap(
+                        bitmap = bitmap,
+                        isVideo = slot.isVideo,
+                    )
+                }
+        }
+    }
+}
+
+private fun decodeVideoFrames(
+    videoPath: String,
+    frameCount: Int,
+    frameIntervalUs: Long,
+    maxDurationUs: Long,
+    onFrame: (Bitmap, Long) -> Unit,
+) {
+    val extractor = MediaExtractor()
+    var decoder: MediaCodec? = null
+    var lastFrame: Bitmap? = null
+
+    try {
+        extractor.setDataSource(videoPath)
+        val videoTrackIndex = extractor.firstTrackIndex("video/")
+        if (videoTrackIndex < 0) {
+            error("No video track is available in the source video.")
+        }
+
+        extractor.selectTrack(videoTrackIndex)
+        val format = extractor.getTrackFormat(videoTrackIndex)
+        val mime = format.getString(MediaFormat.KEY_MIME)
+            ?: error("Video track MIME type is unavailable.")
+        val rotationDegrees = format.getIntegerOrDefault(MediaFormat.KEY_ROTATION, 0)
+        val activeDecoder =
+            MediaCodec.createDecoderByType(mime).also { createdDecoder ->
+                decoder = createdDecoder
+                createdDecoder.configure(format, null, null, 0)
+                createdDecoder.start()
+            }
+
+        val bufferInfo = MediaCodec.BufferInfo()
+        var inputDone = false
+        var outputDone = false
+        var nextFrameIndex = 0
+        var stalledPolls = 0
+
+        fun emitFramesUpTo(
+            bitmap: Bitmap,
+            decodedPresentationTimeUs: Long,
+        ) {
+            while (nextFrameIndex < frameCount && nextFrameIndex * frameIntervalUs <= decodedPresentationTimeUs) {
+                val presentationTimeUs = nextFrameIndex * frameIntervalUs
+                onFrame(bitmap, presentationTimeUs)
+                nextFrameIndex++
+                if (presentationTimeUs + frameIntervalUs > maxDurationUs) {
+                    break
+                }
+            }
+        }
+
+        fun fillTrailingFrames() {
+            val fallback = lastFrame ?: error("Unable to decode a frame from the source video.")
+            while (nextFrameIndex < frameCount) {
+                onFrame(fallback, nextFrameIndex * frameIntervalUs)
+                nextFrameIndex++
+            }
+        }
+
+        while (!outputDone && nextFrameIndex < frameCount) {
+            if (!inputDone) {
+                val inputBufferIndex = activeDecoder.dequeueInputBuffer(VideoEncoderTimeoutUs)
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = activeDecoder.getInputBuffer(inputBufferIndex)
+                        ?: error("Video decoder input buffer is unavailable.")
+                    val sampleTimeUs = extractor.sampleTime
+                    if (sampleTimeUs < 0L || sampleTimeUs >= maxDurationUs) {
+                        activeDecoder.queueInputBuffer(
+                            inputBufferIndex,
+                            0,
+                            0,
+                            0L,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                        )
+                        inputDone = true
+                    } else {
+                        inputBuffer.clear()
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize < 0) {
+                            activeDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                0,
+                                0L,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                            )
+                            inputDone = true
+                        } else {
+                            activeDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                sampleSize,
+                                sampleTimeUs,
+                                extractor.sampleFlags,
+                            )
+                            extractor.advance()
+                            stalledPolls = 0
+                        }
+                    }
+                }
+            }
+
+            when (val outputBufferIndex = activeDecoder.dequeueOutputBuffer(bufferInfo, VideoEncoderTimeoutUs)) {
+                MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    stalledPolls++
+                    check(stalledPolls <= VideoCodecMaxStalledPolls) {
+                        "Timed out while decoding the source video."
+                    }
+                }
+                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    stalledPolls = 0
+                }
+                else -> {
+                    if (outputBufferIndex >= 0) {
+                        stalledPolls = 0
+                        val isEndOfStream = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        if (bufferInfo.size > 0 && bufferInfo.presentationTimeUs >= nextFrameIndex * frameIntervalUs) {
+                            val decodedFrame =
+                                activeDecoder.getOutputImage(outputBufferIndex)?.toVideoBitmap(rotationDegrees)
+                                    ?: error("Video decoder output image is unavailable.")
+
+                            try {
+                                emitFramesUpTo(decodedFrame, bufferInfo.presentationTimeUs)
+                                lastFrame?.recycle()
+                                lastFrame = decodedFrame.copy(Bitmap.Config.ARGB_8888, false)
+                            } finally {
+                                decodedFrame.recycle()
+                            }
+                        }
+
+                        activeDecoder.releaseOutputBuffer(outputBufferIndex, false)
+                        if (isEndOfStream) {
+                            outputDone = true
+                        }
+                    }
+                }
+            }
+        }
+
+        if (nextFrameIndex < frameCount) {
+            fillTrailingFrames()
+        }
+    } finally {
+        lastFrame?.recycle()
+        decoder?.runCatchingStop()
+        decoder?.release()
+        extractor.release()
+    }
+}
+
+private fun MediaCodec.runCatchingStop() {
+    runCatching { stop() }
+}
+
+private fun Image.toVideoBitmap(rotationDegrees: Int): Bitmap {
+    return try {
+        val crop = cropRect
+        val outputWidth = crop.width()
+        val outputHeight = crop.height()
+        val pixels = IntArray(outputWidth * outputHeight)
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+
+        for (row in 0 until outputHeight) {
+            val imageY = crop.top + row
+            for (column in 0 until outputWidth) {
+                val imageX = crop.left + column
+                val y = yBuffer.get(imageY * yPlane.rowStride + imageX * yPlane.pixelStride).toInt() and 0xff
+                val chromaX = imageX / 2
+                val chromaY = imageY / 2
+                val u = uBuffer.get(chromaY * uPlane.rowStride + chromaX * uPlane.pixelStride).toInt() and 0xff
+                val v = vBuffer.get(chromaY * vPlane.rowStride + chromaX * vPlane.pixelStride).toInt() and 0xff
+                pixels[row * outputWidth + column] = yuvToArgb(y, u, v)
+            }
+        }
+
+        Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+            .scaleLongEdgeTo(VideoExportSourceFrameMaxLongEdge)
+            .rotate(rotationDegrees)
+    } finally {
+        close()
+    }
+}
+
+private fun yuvToArgb(
+    y: Int,
+    u: Int,
+    v: Int,
+): Int {
+    val clampedY = (y - 16).coerceAtLeast(0)
+    val shiftedU = u - 128
+    val shiftedV = v - 128
+    val red = ((298 * clampedY + 409 * shiftedV + 128) shr 8).coerceIn(0, 255)
+    val green = ((298 * clampedY - 100 * shiftedU - 208 * shiftedV + 128) shr 8).coerceIn(0, 255)
+    val blue = ((298 * clampedY + 516 * shiftedU + 128) shr 8).coerceIn(0, 255)
+    return AndroidColor.rgb(red, green, blue)
+}
+
+private fun Bitmap.scaleLongEdgeTo(maxLongEdge: Int): Bitmap {
+    val longEdge = max(width, height)
+    if (longEdge <= maxLongEdge) {
+        return this
+    }
+
+    val scale = maxLongEdge.toFloat() / longEdge.toFloat()
+    val scaledWidth = max(2, (width * scale).roundToInt())
+    val scaledHeight = max(2, (height * scale).roundToInt())
+    val output = Bitmap.createScaledBitmap(this, scaledWidth, scaledHeight, true)
+    recycle()
+    return output
+}
+
+private fun Bitmap.rotate(rotationDegrees: Int): Bitmap {
+    val normalizedDegrees = ((rotationDegrees % 360) + 360) % 360
+    if (normalizedDegrees == 0) {
+        return this
+    }
+
+    val matrix = Matrix().apply { postRotate(normalizedDegrees.toFloat()) }
+    val output = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
+    recycle()
+    return output
+}
+
+private class AvcBitmapEncoder(
+    output: File,
+    private val width: Int,
+    private val height: Int,
+    frameRate: Int,
+    private val audioSourcePath: String,
+    private val audioFormat: MediaFormat?,
+    private val maxDurationUs: Long,
+) {
+    private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+    private val bufferInfo = MediaCodec.BufferInfo()
+    private val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private val inputSurface: EncoderInputSurface
+    private var muxerStarted = false
+    private var videoTrackIndex = -1
+    private var audioTrackIndex = -1
+    private var released = false
+
+    init {
+        val format =
+            MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, videoBitRate(width, height, frameRate))
+                setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
+
+        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        inputSurface = EncoderInputSurface(codec.createInputSurface(), width, height)
+        codec.start()
+    }
+
+    fun encode(
+        bitmap: Bitmap,
+        presentationTimeUs: Long,
+    ) {
+        inputSurface.drawBitmap(bitmap, presentationTimeUs)
+        drain(endOfStream = false)
+    }
+
+    fun finish() {
+        codec.signalEndOfInputStream()
+        drain(endOfStream = true)
+        copyAudioTrack()
+    }
+
+    fun release() {
+        if (released) {
+            return
+        }
+
+        released = true
+        runCatching { inputSurface.release() }
+        runCatching { codec.stop() }
+        codec.release()
+        runCatching { muxer.stop() }
+        muxer.release()
+    }
+
+    private fun drain(endOfStream: Boolean) {
+        var stalledPolls = 0
+        while (true) {
+            val outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, VideoEncoderTimeoutUs)
+            when {
+                outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (!endOfStream) {
+                        return
+                    }
+                    stalledPolls++
+                    check(stalledPolls <= VideoCodecMaxStalledPolls) {
+                        "Timed out while finishing the video encoder."
+                    }
+                }
+                outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    stalledPolls = 0
+                    check(!muxerStarted) { "Video encoder output format changed twice." }
+                    videoTrackIndex = muxer.addTrack(codec.outputFormat)
+                    if (audioFormat != null) {
+                        audioTrackIndex = muxer.addTrack(audioFormat)
+                    }
+                    muxer.start()
+                    muxerStarted = true
+                }
+                outputBufferIndex >= 0 -> {
+                    stalledPolls = 0
+                    writeEncodedOutput(outputBufferIndex)
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    private fun writeEncodedOutput(outputBufferIndex: Int) {
+        val encodedData: ByteBuffer = codec.getOutputBuffer(outputBufferIndex)
+            ?: error("Video encoder output buffer is unavailable.")
+
+        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            bufferInfo.size = 0
+        }
+
+        if (bufferInfo.size > 0) {
+            check(muxerStarted) { "Video muxer has not started." }
+            encodedData.position(bufferInfo.offset)
+            encodedData.limit(bufferInfo.offset + bufferInfo.size)
+            muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+        }
+
+        codec.releaseOutputBuffer(outputBufferIndex, false)
+    }
+
+    private fun copyAudioTrack() {
+        if (audioFormat == null || audioTrackIndex < 0) {
+            return
+        }
+
+        check(muxerStarted) { "Video muxer has not started." }
+        copyAudioTrackToMuxer(
+            sourcePath = audioSourcePath,
+            muxer = muxer,
+            muxerAudioTrackIndex = audioTrackIndex,
+            maxDurationUs = maxDurationUs,
+        )
+    }
+}
+
+private class EncoderInputSurface(
+    private val surface: Surface,
+    private val width: Int,
+    private val height: Int,
+) {
+    private val vertexBuffer: FloatBuffer =
+        ByteBuffer
+            .allocateDirect(FullFrameVertices.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .apply {
+                put(FullFrameVertices)
+                position(0)
+            }
+    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var program = 0
+    private var textureId = 0
+    private var positionHandle = 0
+    private var textureCoordinateHandle = 0
+    private var textureUniformHandle = 0
+    private var released = false
+
+    init {
+        setupEgl()
+        setupGl()
+    }
+
+    fun drawBitmap(
+        bitmap: Bitmap,
+        presentationTimeUs: Long,
+    ) {
+        check(!released) { "Encoder input surface has already been released." }
+        checkEgl(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            "Unable to make the encoder EGL context current."
+        }
+
+        GLES20.glViewport(0, 0, width, height)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glUseProgram(program)
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        GLES20.glUniform1i(textureUniformHandle, 0)
+
+        vertexBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(positionHandle)
+        GLES20.glVertexAttribPointer(
+            positionHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            FullFrameVertexStrideBytes,
+            vertexBuffer,
+        )
+
+        vertexBuffer.position(2)
+        GLES20.glEnableVertexAttribArray(textureCoordinateHandle)
+        GLES20.glVertexAttribPointer(
+            textureCoordinateHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            FullFrameVertexStrideBytes,
+            vertexBuffer,
+        )
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(positionHandle)
+        GLES20.glDisableVertexAttribArray(textureCoordinateHandle)
+        checkGlError("draw frame")
+
+        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, presentationTimeUs * 1_000L)
+        checkEgl(EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
+            "Unable to swap the encoder EGL buffers."
+        }
+    }
+
+    fun release() {
+        if (released) {
+            return
+        }
+
+        released = true
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            EGL14.eglMakeCurrent(
+                eglDisplay,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_CONTEXT,
+            )
+            if (eglSurface != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(eglDisplay, eglSurface)
+            }
+            if (eglContext != EGL14.EGL_NO_CONTEXT) {
+                EGL14.eglDestroyContext(eglDisplay, eglContext)
+            }
+            EGL14.eglReleaseThread()
+            EGL14.eglTerminate(eglDisplay)
+        }
+        surface.release()
+        eglDisplay = EGL14.EGL_NO_DISPLAY
+        eglContext = EGL14.EGL_NO_CONTEXT
+        eglSurface = EGL14.EGL_NO_SURFACE
+    }
+
+    private fun setupEgl() {
+        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+        check(eglDisplay != EGL14.EGL_NO_DISPLAY) { "Unable to get the default EGL display." }
+
+        val version = IntArray(2)
+        checkEgl(EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
+            "Unable to initialize EGL."
+        }
+
+        val configs = arrayOfNulls<EGLConfig>(1)
+        val configCount = IntArray(1)
+        val configAttributes =
+            intArrayOf(
+                EGL14.EGL_RED_SIZE,
+                8,
+                EGL14.EGL_GREEN_SIZE,
+                8,
+                EGL14.EGL_BLUE_SIZE,
+                8,
+                EGL14.EGL_ALPHA_SIZE,
+                8,
+                EGL14.EGL_RENDERABLE_TYPE,
+                EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE,
+                EGL14.EGL_WINDOW_BIT,
+                EGL14.EGL_NONE,
+            )
+        checkEgl(
+            EGL14.eglChooseConfig(
+                eglDisplay,
+                configAttributes,
+                0,
+                configs,
+                0,
+                configs.size,
+                configCount,
+                0,
+            ),
+        ) {
+            "Unable to choose an EGL config."
+        }
+        val eglConfig = configs[0] ?: error("EGL did not return a config.")
+
+        eglContext =
+            EGL14.eglCreateContext(
+                eglDisplay,
+                eglConfig,
+                EGL14.EGL_NO_CONTEXT,
+                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE),
+                0,
+            )
+        checkEgl(eglContext != EGL14.EGL_NO_CONTEXT) { "Unable to create an EGL context." }
+
+        eglSurface =
+            EGL14.eglCreateWindowSurface(
+                eglDisplay,
+                eglConfig,
+                surface,
+                intArrayOf(EGL14.EGL_NONE),
+                0,
+            )
+        checkEgl(eglSurface != EGL14.EGL_NO_SURFACE) { "Unable to create an EGL window surface." }
+        checkEgl(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            "Unable to make the initial EGL context current."
+        }
+    }
+
+    private fun setupGl() {
+        program = createProgram(VertexShader, FragmentShader)
+        positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
+        textureCoordinateHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
+        textureUniformHandle = GLES20.glGetUniformLocation(program, "uTexture")
+        check(positionHandle >= 0 && textureCoordinateHandle >= 0 && textureUniformHandle >= 0) {
+            "Unable to resolve GL shader handles."
+        }
+
+        val textures = IntArray(1)
+        GLES20.glGenTextures(1, textures, 0)
+        textureId = textures[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        checkGlError("set up encoder texture")
+    }
+
+    private fun createProgram(
+        vertexSource: String,
+        fragmentSource: String,
+    ): Int {
+        val vertexShader = compileShader(GLES20.GL_VERTEX_SHADER, vertexSource)
+        val fragmentShader = compileShader(GLES20.GL_FRAGMENT_SHADER, fragmentSource)
+        val createdProgram = GLES20.glCreateProgram()
+        GLES20.glAttachShader(createdProgram, vertexShader)
+        GLES20.glAttachShader(createdProgram, fragmentShader)
+        GLES20.glLinkProgram(createdProgram)
+
+        val linkStatus = IntArray(1)
+        GLES20.glGetProgramiv(createdProgram, GLES20.GL_LINK_STATUS, linkStatus, 0)
+        if (linkStatus[0] == 0) {
+            val info = GLES20.glGetProgramInfoLog(createdProgram)
+            GLES20.glDeleteProgram(createdProgram)
+            error("Unable to link encoder GL program: $info")
+        }
+
+        GLES20.glDeleteShader(vertexShader)
+        GLES20.glDeleteShader(fragmentShader)
+        return createdProgram
+    }
+
+    private fun compileShader(
+        shaderType: Int,
+        source: String,
+    ): Int {
+        val shader = GLES20.glCreateShader(shaderType)
+        GLES20.glShaderSource(shader, source)
+        GLES20.glCompileShader(shader)
+
+        val compileStatus = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compileStatus, 0)
+        if (compileStatus[0] == 0) {
+            val info = GLES20.glGetShaderInfoLog(shader)
+            GLES20.glDeleteShader(shader)
+            error("Unable to compile encoder GL shader: $info")
+        }
+
+        return shader
+    }
+
+    private fun checkEgl(
+        condition: Boolean,
+        message: () -> String,
+    ) {
+        val error = EGL14.eglGetError()
+        check(condition && error == EGL14.EGL_SUCCESS) {
+            "${message()} EGL error 0x${Integer.toHexString(error)}."
+        }
+    }
+
+    private fun checkGlError(label: String) {
+        val error = GLES20.glGetError()
+        check(error == GLES20.GL_NO_ERROR) {
+            "OpenGL error during $label: 0x${Integer.toHexString(error)}."
+        }
+    }
+
+    private companion object {
+        private const val FullFrameVertexStrideBytes = 4 * Float.SIZE_BYTES
+        private val FullFrameVertices =
+            floatArrayOf(
+                -1f,
+                -1f,
+                0f,
+                1f,
+                1f,
+                -1f,
+                1f,
+                1f,
+                -1f,
+                1f,
+                0f,
+                0f,
+                1f,
+                1f,
+                1f,
+                0f,
+            )
+        private const val VertexShader =
+            """
+            attribute vec4 aPosition;
+            attribute vec2 aTexCoord;
+            varying vec2 vTexCoord;
+
+            void main() {
+                gl_Position = aPosition;
+                vTexCoord = aTexCoord;
+            }
+            """
+        private const val FragmentShader =
+            """
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexture;
+
+            void main() {
+                gl_FragColor = texture2D(uTexture, vTexCoord);
+            }
+            """
+    }
 }
 
 private object QuotiCardBitmapRenderer {
@@ -585,6 +1510,7 @@ private data class ExportMediaBitmap(
 private data class ExportMediaSource(
     val url: String,
     val isVideo: Boolean,
+    val playableVideoUrl: String? = null,
 )
 
 private fun textPaint(
@@ -629,10 +1555,233 @@ private fun QuotiPost.exportMediaSources(): List<ExportMediaSource> {
 private fun PostMedia.exportSource(): ExportMediaSource? {
     return when (this) {
         is PostMedia.Image -> ExportMediaSource(url = url, isVideo = false)
-        is PostMedia.Video ->
-            (posterUrl ?: url ?: variants.firstOrNull())
-                ?.let { previewUrl -> ExportMediaSource(url = previewUrl, isVideo = true) }
+        is PostMedia.Video -> {
+            val playableUrl = playableVideoUrl()
+            (posterUrl ?: playableUrl ?: url ?: variants.firstOrNull())
+                ?.let { previewUrl ->
+                    ExportMediaSource(
+                        url = previewUrl,
+                        isVideo = true,
+                        playableVideoUrl = playableUrl,
+                    )
+                }
+        }
     }
+}
+
+private fun PostMedia.Video.playableVideoUrl(): String? {
+    val candidates = listOfNotNull(url) + variants
+    return selectExportVideoUrl(candidates)
+}
+
+internal fun selectExportVideoUrl(candidates: List<String>): String? {
+    val directMp4Urls = candidates.distinct().filter { candidate -> candidate.isDirectMp4VideoUrl() }
+    return directMp4Urls
+        .filter { url -> url.videoResolution()?.longEdge()?.let { it <= VideoExportSourceVariantMaxLongEdge } ?: false }
+        .maxByOrNull { url -> url.videoResolution()?.area ?: 0 }
+        ?: directMp4Urls.minByOrNull { url -> url.videoResolution()?.longEdge() ?: Int.MAX_VALUE }
+}
+
+private fun String.isDirectMp4VideoUrl(): Boolean {
+    return startsWith("https://") &&
+        ".mp4" in this &&
+        !contains("/pl/") &&
+        !contains("/seg/")
+}
+
+private data class VideoResolution(
+    val width: Int,
+    val height: Int,
+) {
+    val area: Int = width * height
+
+    fun longEdge(): Int = max(width, height)
+}
+
+private fun String.videoResolution(): VideoResolution? {
+    return Regex("""/(\d+)x(\d+)/""")
+        .find(this)
+        ?.let { match ->
+            VideoResolution(
+                width = match.groupValues[1].toInt(),
+                height = match.groupValues[2].toInt(),
+            )
+        }
+}
+
+private fun findAudioTrackFormat(sourcePath: String): MediaFormat? {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setDataSource(sourcePath)
+        val trackIndex = extractor.firstTrackIndex("audio/")
+        if (trackIndex >= 0) {
+            extractor.getTrackFormat(trackIndex)
+        } else {
+            null
+        }
+    } finally {
+        extractor.release()
+    }
+}
+
+private fun copyAudioTrackToMuxer(
+    sourcePath: String,
+    muxer: MediaMuxer,
+    muxerAudioTrackIndex: Int,
+    maxDurationUs: Long,
+) {
+    val extractor = MediaExtractor()
+    val bufferInfo = MediaCodec.BufferInfo()
+    try {
+        extractor.setDataSource(sourcePath)
+        val sourceAudioTrackIndex = extractor.firstTrackIndex("audio/")
+        if (sourceAudioTrackIndex < 0) {
+            return
+        }
+
+        val sourceFormat = extractor.getTrackFormat(sourceAudioTrackIndex)
+        val maxInputSize =
+            sourceFormat
+                .getIntegerOrDefault(MediaFormat.KEY_MAX_INPUT_SIZE, 256 * 1024)
+                .coerceAtLeast(64 * 1024)
+        val audioBuffer = ByteBuffer.allocate(maxInputSize)
+        var firstSampleTimeUs = -1L
+
+        extractor.selectTrack(sourceAudioTrackIndex)
+        while (true) {
+            val sampleTimeUs = extractor.sampleTime
+            if (sampleTimeUs < 0L) {
+                break
+            }
+            if (firstSampleTimeUs < 0L) {
+                firstSampleTimeUs = sampleTimeUs
+            }
+
+            val presentationTimeUs = sampleTimeUs - firstSampleTimeUs
+            if (presentationTimeUs >= maxDurationUs) {
+                break
+            }
+
+            audioBuffer.clear()
+            val sampleSize = extractor.readSampleData(audioBuffer, 0)
+            if (sampleSize <= 0) {
+                break
+            }
+
+            audioBuffer.position(0)
+            audioBuffer.limit(sampleSize)
+            bufferInfo.set(0, sampleSize, presentationTimeUs, extractor.sampleFlags)
+            muxer.writeSampleData(muxerAudioTrackIndex, audioBuffer, bufferInfo)
+            extractor.advance()
+        }
+    } finally {
+        extractor.release()
+    }
+}
+
+private fun MediaExtractor.firstTrackIndex(mimePrefix: String): Int {
+    for (trackIndex in 0 until trackCount) {
+        val mime = getTrackFormat(trackIndex).getString(MediaFormat.KEY_MIME).orEmpty()
+        if (mime.startsWith(mimePrefix)) {
+            return trackIndex
+        }
+    }
+    return -1
+}
+
+private fun MediaFormat.getIntegerOrDefault(
+    key: String,
+    defaultValue: Int,
+): Int = if (containsKey(key)) getInteger(key) else defaultValue
+
+private fun videoBitRate(
+    width: Int,
+    height: Int,
+    frameRate: Int,
+): Int {
+    val pixelsPerSecond = width.toLong() * height.toLong() * frameRate.toLong()
+    return (pixelsPerSecond * VideoExportBitsPerPixelFrame)
+        .roundToLong()
+        .coerceIn(VideoExportMinBitRate, VideoExportMaxBitRate)
+        .toInt()
+}
+
+private fun Bitmap.scaleForVideoExport(): Bitmap {
+    if (width <= VideoExportBitmapWidth) {
+        return this
+    }
+
+    val scale = VideoExportBitmapWidth.toFloat() / width.toFloat()
+    val scaledHeight = max(2, (height * scale).roundToInt()).makeEven()
+    val output = Bitmap.createScaledBitmap(this, VideoExportBitmapWidth, scaledHeight, true)
+    recycle()
+    return output
+}
+
+private fun Bitmap.ensureEvenSize(): Bitmap {
+    val evenWidth = width.makeEven()
+    val evenHeight = height.makeEven()
+    if (evenWidth == width && evenHeight == height) {
+        return this
+    }
+
+    val output = Bitmap.createBitmap(evenWidth, evenHeight, Bitmap.Config.ARGB_8888)
+    Canvas(output).drawBitmap(this, 0f, 0f, null)
+    recycle()
+    return output
+}
+
+private fun Int.makeEven(): Int = if (this % 2 == 0) this else this - 1
+
+private fun Bitmap.copyToYuv420(
+    image: Image,
+    pixels: IntArray,
+) {
+    check(this.width == image.width && this.height == image.height) {
+        "Bitmap size ${this.width}x${this.height} does not match encoder size ${image.width}x${image.height}."
+    }
+
+    getPixels(pixels, 0, width, 0, 0, width, height)
+    image.planes[0].buffer.fill(16.toByte())
+    image.planes[1].buffer.fill(128.toByte())
+    image.planes[2].buffer.fill(128.toByte())
+
+    val yPlane = image.planes[0]
+    val uPlane = image.planes[1]
+    val vPlane = image.planes[2]
+    val yBuffer = yPlane.buffer
+    val uBuffer = uPlane.buffer
+    val vBuffer = vPlane.buffer
+
+    for (row in 0 until height) {
+        for (column in 0 until width) {
+            val color = pixels[row * width + column]
+            val red = (color shr 16) and 0xff
+            val green = (color shr 8) and 0xff
+            val blue = color and 0xff
+            val y = ((66 * red + 129 * green + 25 * blue + 128) shr 8) + 16
+            val u = ((-38 * red - 74 * green + 112 * blue + 128) shr 8) + 128
+            val v = ((112 * red - 94 * green - 18 * blue + 128) shr 8) + 128
+
+            yBuffer.put(row * yPlane.rowStride + column * yPlane.pixelStride, y.clampedByte())
+            if (row % 2 == 0 && column % 2 == 0) {
+                val chromaRow = row / 2
+                val chromaColumn = column / 2
+                uBuffer.put(chromaRow * uPlane.rowStride + chromaColumn * uPlane.pixelStride, u.clampedByte())
+                vBuffer.put(chromaRow * vPlane.rowStride + chromaColumn * vPlane.pixelStride, v.clampedByte())
+            }
+        }
+    }
+}
+
+private fun ByteBuffer.fill(value: Byte) {
+    for (index in 0 until capacity()) {
+        put(index, value)
+    }
+}
+
+private fun Int.clampedByte(): Byte {
+    return coerceIn(0, 255).toByte()
 }
 
 private fun withAlpha(
@@ -666,4 +1815,18 @@ internal fun quotiCardFileName(
             .ifBlank { "card" }
 
     return "quoti-$safeId-$timestampMillis.png"
+}
+
+internal fun quotiVideoFileName(
+    postId: String,
+    timestampMillis: Long = System.currentTimeMillis(),
+): String {
+    val safeId =
+        postId
+            .lowercase()
+            .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+            .take(40)
+            .ifBlank { "card" }
+
+    return "quoti-$safeId-$timestampMillis.mp4"
 }

@@ -42,6 +42,31 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun usesPostImageAsVideoPosterWhenVideoThumbIsMissing() {
+        val html =
+            """
+            {
+              "image":"https://pbs.twimg.com/media/HK9DARsXcAA85qp.png",
+              "variant_low":"https://video.twimg.com/amplify_video/2066944321085980673/vid/avc1/320x320/bEUytEjThxvW3vmH.mp4?tag=14",
+              "variant_high":"https://video.twimg.com/amplify_video/2066944321085980673/vid/avc1/720x720/FkCzBBNOi21_mqBy.mp4?tag=14"
+            }
+            """.trimIndent()
+
+        val media = XPostPageParser.extractMedia(html)
+
+        assertEquals(1, media.size)
+        assertTrue(media[0] is PostMedia.Video)
+        assertEquals(
+            "https://pbs.twimg.com/media/HK9DARsXcAA85qp.png",
+            (media[0] as PostMedia.Video).posterUrl,
+        )
+        assertEquals(
+            "https://video.twimg.com/amplify_video/2066944321085980673/vid/avc1/720x720/FkCzBBNOi21_mqBy.mp4?tag=14",
+            (media[0] as PostMedia.Video).url,
+        )
+    }
+
+    @Test
     fun extractsRelatedStatusUrlFromQuotedTweetReference() {
         val html =
             """

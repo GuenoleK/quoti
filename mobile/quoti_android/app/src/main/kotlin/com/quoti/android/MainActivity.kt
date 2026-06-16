@@ -33,7 +33,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             QuotiTheme {
-                QuotiApp(shareState = shareState)
+                QuotiApp(
+                    shareState = shareState,
+                    onClear = ::clearShare,
+                )
             }
         }
     }
@@ -45,7 +48,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingShare(intent: Intent?) {
-        val draft = IncomingShareReader.fromIntent(intent)?.let(shareNormalizer::normalize) ?: return
+        val payload = IncomingShareReader.fromIntent(intent)
+        if (payload == null) {
+            if (intent?.action == Intent.ACTION_MAIN) {
+                clearShare()
+            }
+            return
+        }
+
+        val draft = shareNormalizer.normalize(payload) ?: return
         val shareKey = draft.post.sourceUrl ?: draft.rawText
         activeShareKey = shareKey
 
@@ -66,6 +77,15 @@ class MainActivity : ComponentActivity() {
                 shareState = enrichedDraft.toShareState()
             }
         }
+    }
+
+    private fun clearShare() {
+        activeShareKey = null
+        shareState = QuotiShareState.Empty
+        setIntent(
+            Intent(Intent.ACTION_MAIN)
+                .setClass(this, MainActivity::class.java),
+        )
     }
 }
 

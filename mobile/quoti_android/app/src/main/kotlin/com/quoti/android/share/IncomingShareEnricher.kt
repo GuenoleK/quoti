@@ -239,9 +239,12 @@ internal object XPostPageParser {
                 .distinct()
                 .take(2)
                 .toList()
-                .ifEmpty { fallbackPosters.take(1) }
 
-        if (posters.isEmpty() && variants.isEmpty()) {
+        if (variants.isEmpty()) {
+            return emptyList()
+        }
+
+        if (posters.isEmpty() && fallbackPosters.isNotEmpty()) {
             return emptyList()
         }
 

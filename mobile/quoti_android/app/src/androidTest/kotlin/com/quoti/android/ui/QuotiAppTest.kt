@@ -10,6 +10,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
@@ -136,6 +139,27 @@ class QuotiAppTest {
         composeRule.onAllNodesWithText("Captured text").onFirst().assertIsDisplayed()
         composeRule.onAllNodesWithText("Edit card").assertCountEquals(0)
         composeRule.onAllNodesWithText("Post text").assertCountEquals(0)
+    }
+
+    @Test
+    fun clearPostReturnsToEmptyState() {
+        composeRule.setContent {
+            var shareState by mutableStateOf<QuotiShareState>(
+                QuotiShareState.Ready(capturedDraft()),
+            )
+            QuotiTheme {
+                QuotiApp(
+                    shareState = shareState,
+                    onClear = { shareState = QuotiShareState.Empty },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More actions").performClick()
+        composeRule.onNodeWithText("Clear post").performClick()
+
+        composeRule.onNodeWithText("No post captured").assertIsDisplayed()
+        composeRule.onAllNodesWithContentDescription("Copy image").assertCountEquals(0)
     }
 
     private fun capturedDraft(

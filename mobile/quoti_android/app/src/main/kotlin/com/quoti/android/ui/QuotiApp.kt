@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
@@ -167,17 +168,24 @@ sealed interface QuotiShareState {
 }
 
 @Composable
-fun QuotiApp(incomingDraft: IncomingShareDraft?) {
+fun QuotiApp(
+    incomingDraft: IncomingShareDraft?,
+    onClear: () -> Unit = {},
+) {
     QuotiApp(
         shareState =
             incomingDraft
                 ?.let(QuotiShareState::Ready)
                 ?: QuotiShareState.Empty,
+        onClear = onClear,
     )
 }
 
 @Composable
-fun QuotiApp(shareState: QuotiShareState) {
+fun QuotiApp(
+    shareState: QuotiShareState,
+    onClear: () -> Unit = {},
+) {
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val uriHandler = LocalUriHandler.current
@@ -415,6 +423,12 @@ fun QuotiApp(shareState: QuotiShareState) {
                 val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
                 uriHandler.openUri(sourceUrl)
             },
+            onClear = {
+                onClear()
+                scope.launch {
+                    snackbarHostState.showSnackbar("Post cleared")
+                }
+            },
             onRefresh = {
                 scope.launch {
                     snackbarHostState.showSnackbar("Refresh will reprocess the next shared post")
@@ -482,6 +496,7 @@ private fun QuotiCaptureScreen(
     onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
+    onClear: () -> Unit,
     onRefresh: () -> Unit,
     contentPadding: PaddingValues,
 ) {
@@ -504,6 +519,7 @@ private fun QuotiCaptureScreen(
                 onCopyText = onCopyText,
                 onCopySource = onCopySource,
                 onOpenSource = onOpenSource,
+                onClear = onClear,
                 onRefresh = onRefresh,
                 modifier =
                     Modifier
@@ -993,6 +1009,7 @@ private fun RemoteMedia(
     val sources = media.mapNotNull(PostMedia::previewSource).take(4)
     val mediaKey = sources.joinToString("|") { source -> source.url }
     val loadedMedia by produceState<List<LoadedRemoteMedia>>(initialValue = emptyList(), mediaKey) {
+        value = emptyList()
         value =
             sources.mapNotNull { source ->
                 loadRemoteBitmap(source.url)?.let { bitmap ->
@@ -1380,6 +1397,7 @@ private fun QuotiActionToolbar(
     onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
+    onClear: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1518,6 +1536,19 @@ private fun QuotiActionToolbar(
                         },
                     )
                     DropdownMenuItem(
+                        text = { Text("Clear post") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            overflowExpanded = false
+                            onClear()
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Refresh preview") },
                         leadingIcon = {
                             Icon(
@@ -1541,24 +1572,11 @@ private fun PrimaryActionIcon(
     hasVideo: Boolean,
     contentDescription: String,
 ) {
-    Box(
-        modifier = Modifier.size(30.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = if (hasVideo) Icons.Outlined.Movie else Icons.Outlined.Image,
-            contentDescription = contentDescription,
-            modifier = Modifier.size(26.dp),
-        )
-        Icon(
-            imageVector = if (hasVideo) Icons.Outlined.Download else Icons.Outlined.ContentCopy,
-            contentDescription = null,
-            modifier =
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(14.dp),
-        )
-    }
+    Icon(
+        imageVector = if (hasVideo) Icons.Outlined.Download else Icons.Outlined.ContentCopy,
+        contentDescription = contentDescription,
+        modifier = Modifier.size(28.dp),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

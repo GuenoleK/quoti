@@ -42,7 +42,7 @@ class XPostPageParserTest {
     }
 
     @Test
-    fun usesPostImageAsVideoPosterWhenVideoThumbIsMissing() {
+    fun ignoresDetachedVideoVariantWhenOnlyPostImagesArePresent() {
         val html =
             """
             {
@@ -55,14 +55,10 @@ class XPostPageParserTest {
         val media = XPostPageParser.extractMedia(html)
 
         assertEquals(1, media.size)
-        assertTrue(media[0] is PostMedia.Video)
+        assertTrue(media[0] is PostMedia.Image)
         assertEquals(
             "https://pbs.twimg.com/media/HK9DARsXcAA85qp.png",
-            (media[0] as PostMedia.Video).posterUrl,
-        )
-        assertEquals(
-            "https://video.twimg.com/amplify_video/2066944321085980673/vid/avc1/720x720/FkCzBBNOi21_mqBy.mp4?tag=14",
-            (media[0] as PostMedia.Video).url,
+            (media[0] as PostMedia.Image).url,
         )
     }
 

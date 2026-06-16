@@ -12,7 +12,7 @@ The product exists to make conversations portable across platforms without losin
 - Export as PNG before adding advanced workflows.
 - Keep the core extension browser-local by default.
 - For video rendering, prefer a bundled FFmpeg WASM renderer first, then an optional Native Messaging renderer for faster local exports.
-- Phase 3 is the mobile companion app direction: Flutter, Android first, iOS next, adaptive platform UI, and Quoti as a system share target.
+- Phase 3 is the mobile companion app direction: native Android first with Kotlin, Jetpack Compose, and Material 3; iOS later when macOS/Xcode and iPhone testing are available; Quoti should appear as a system share target.
 
 ## Agent Operating Principles
 
@@ -25,5 +25,5 @@ The product exists to make conversations portable across platforms without losin
 - Treat DESIGN.md as the design source of truth.
 - Use docs/design/editorial-craft.md as narrative context for design taste and product feeling.
 - Keep new decisions explicit in docs/decisions.
-- Use agents/skills for recurring workflows.
+- Use `.skills/` for recurring workflows.
 - Prefer small, reversible changes.

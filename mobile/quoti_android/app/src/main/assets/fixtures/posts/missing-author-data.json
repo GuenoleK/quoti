@@ -1,0 +1,11 @@
+{
+  "id": "fixture-missing-author-data",
+  "platform": "linkedin",
+  "authorName": "",
+  "authorHandle": "",
+  "content": "Shared content can arrive with partial metadata on mobile. Quoti should still produce a readable draft instead of blocking the workflow.",
+  "publishedAt": "2026-06-12T07:45:00.000Z",
+  "sourceUrl": "https://www.linkedin.com/feed/update/urn:li:activity:1006",
+  "media": [],
+  "capturedAt": "2026-06-15T10:00:00.000Z"
+}

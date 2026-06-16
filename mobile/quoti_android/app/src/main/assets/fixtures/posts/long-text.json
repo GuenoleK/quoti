@@ -1,0 +1,11 @@
+{
+  "id": "fixture-long-text",
+  "platform": "threads",
+  "authorName": "Jonas Mercier",
+  "authorHandle": "@jonas",
+  "content": "The hard part of cross-platform conversation is not posting everywhere. It is preserving enough context that people can understand why the reply matters without forcing them to chase a link, decode a screenshot, or reconstruct the original thread.",
+  "publishedAt": "2026-06-09T16:40:00.000Z",
+  "sourceUrl": "https://www.threads.net/@jonas/post/1002",
+  "media": [],
+  "capturedAt": "2026-06-15T10:00:00.000Z"
+}

@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quoti.local/contracts/post.schema.json",
+  "title": "Quoti extracted post",
+  "description": "Language-neutral contract for a captured social post that can be rendered as a Quoti context card.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "platform",
+    "authorName",
+    "authorHandle",
+    "content",
+    "media",
+    "capturedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier assigned by the capturing surface."
+    },
+    "platform": {
+      "$ref": "#/$defs/socialPlatform"
+    },
+    "authorName": {
+      "type": "string"
+    },
+    "authorHandle": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "relatedPost": {
+      "$ref": "#/$defs/relatedPost"
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/postMedia"
+      }
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "socialPlatform": {
+      "type": "string",
+      "enum": [
+        "x",
+        "threads",
+        "bluesky",
+        "linkedin"
+      ]
+    },
+    "cardTheme": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark"
+      ]
+    },
+    "cardContentMode": {
+      "type": "string",
+      "enum": [
+        "text-only",
+        "with-media"
+      ]
+    },
+    "exportFormat": {
+      "type": "string",
+      "enum": [
+        "png",
+        "jpg",
+        "mp4"
+      ]
+    },
+    "postMedia": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/imagePostMedia"
+        },
+        {
+          "$ref": "#/$defs/videoPostMedia"
+        }
+      ]
+    },
+    "imagePostMedia": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "alt": {
+          "type": "string"
+        }
+      }
+    },
+    "videoPostMedia": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "video"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "posterUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "uniqueItems": true
+        },
+        "alt": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "relatedPost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "authorHandle": {
+          "type": "string"
+        },
+        "authorName": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/postMedia"
+          }
+        },
+        "sourceUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    }
+  }
+}

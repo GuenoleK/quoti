@@ -9,6 +9,7 @@ Before making any modification, read the following documents.
 ## Architecture
 
 - docs/architecture/frontend-architecture.md
+- docs/architecture/mobile-app-architecture.md
 - docs/architecture/service-architecture.md
 
 ## Roadmap
@@ -41,15 +42,10 @@ For any UI, generated card, theme token, layout, typography, visual hierarchy, o
 
 ## Agent Skills
 
-- agents/skills/chrome-extension-development.md
-- agents/skills/create-component.md
-- agents/skills/create-theme-token.md
-- agents/skills/extract-social-post.md
-- agents/skills/fix-bug.md
-- agents/skills/generate-context-card.md
-- agents/skills/implement-feature.md
-- agents/skills/refactor-code.md
-- agents/skills/review-code.md
-- agents/skills/support-new-platform.md
+All project skills live under `.skills/`.
+
+- .skills/README.md
+- .skills/quoti/
+- .skills/android/
 
 Always follow the instructions defined in these documents.

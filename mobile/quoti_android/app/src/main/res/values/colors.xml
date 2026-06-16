@@ -1,0 +1,5 @@
+<resources>
+    <color name="quoti_icon_background">#211A16</color>
+    <color name="quoti_icon_foreground">#FFF8EF</color>
+    <color name="quoti_background">#F8F1E8</color>
+</resources>

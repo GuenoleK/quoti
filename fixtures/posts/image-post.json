@@ -1,0 +1,17 @@
+{
+  "id": "fixture-image-post",
+  "platform": "x",
+  "authorName": "Nadia Bell",
+  "authorHandle": "@nadiabell",
+  "content": "A product screenshot should not explain itself twice. The interface, caption, and export all need to tell the same story.",
+  "publishedAt": "2026-06-11T12:05:00.000Z",
+  "sourceUrl": "https://x.com/nadiabell/status/1004",
+  "media": [
+    {
+      "type": "image",
+      "url": "https://example.com/quoti/fixtures/editorial-desk.jpg",
+      "alt": "Notebook, phone, and marked-up product notes on a desk."
+    }
+  ],
+  "capturedAt": "2026-06-15T10:00:00.000Z"
+}

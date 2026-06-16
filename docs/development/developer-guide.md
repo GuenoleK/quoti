@@ -268,6 +268,44 @@ native/quoti-renderer/
 
 The native renderer is intentionally separate from `src/` because it runs outside the browser extension.
 
+## Phase 3 Mobile Development
+
+Phase 3 adds a native Android mobile companion app. iOS remains a future follow-up, but it is not active until a macOS/Xcode and iPhone testing environment is available.
+
+The mobile app is intentionally separate from the browser extension runtime:
+
+```text
+mobile/quoti_android/
+```
+
+Shared product data lives in:
+
+```text
+contracts/post.schema.json
+fixtures/posts/
+```
+
+Do not import TypeScript implementation code into Android. The Kotlin app should implement its own models from the shared contract and use the fixtures for development gallery states and tests.
+
+Additional tools for Phase 3:
+
+- Android Studio or equivalent Android SDK tooling.
+- Android emulator or physical Android device for Sharesheet validation.
+- macOS, Xcode, and iPhone access later for iOS Share Extension work.
+
+Project agent skills live under `.skills/`. Quoti-specific workflows are under `.skills/quoti`, and official Android agent skills are vendored under `.skills/android` for Android CLI workflows, Compose edge-to-edge behavior, Android testing setup, and experimental Compose Styles API guidance.
+
+Run native Android checks from the app folder:
+
+```powershell
+cd mobile/quoti_android
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:installDebug
+```
+
+Keep generated build outputs out of version control and update `docs/roadmap/mobile-app-phase-3.md` when mobile milestones move.
+
 ## Debugging
 
 ### Popup

@@ -1,0 +1,22 @@
+{
+  "id": "fixture-video-poster",
+  "platform": "x",
+  "authorName": "Robin Stahl",
+  "authorHandle": "@robinstahl",
+  "content": "Motion should add evidence, not noise. The card still has to read well before the video starts.",
+  "publishedAt": "2026-06-13T14:10:00.000Z",
+  "sourceUrl": "https://x.com/robinstahl/status/1005",
+  "media": [
+    {
+      "type": "video",
+      "posterUrl": "https://example.com/quoti/fixtures/video-poster.jpg",
+      "variants": [
+        "https://example.com/quoti/fixtures/video-720p.mp4",
+        "https://example.com/quoti/fixtures/video-480p.mp4"
+      ],
+      "alt": "Short product demo clip with a visible poster frame.",
+      "duration": 18.4
+    }
+  ],
+  "capturedAt": "2026-06-15T10:00:00.000Z"
+}

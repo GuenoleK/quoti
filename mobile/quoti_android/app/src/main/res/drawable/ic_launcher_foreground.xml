@@ -1,0 +1,9 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/quoti_icon_foreground"
+        android:pathData="M54,18C34.1,18 18,34.1 18,54C18,73.9 34.1,90 54,90C60.5,90 66.6,88.3 71.8,85.2L84.8,90L79.9,77.3C86.2,70.9 90,62.7 90,54C90,34.1 73.9,18 54,18ZM54,29C67.8,29 79,40.2 79,54C79,60.5 76.5,66.5 72.4,71L69.8,73.8L71.7,78.8L66.4,76.8L63.9,78.2C60.9,79.9 57.5,80.8 54,80.8C40.2,80.8 29,69.6 29,55.8V54C29,40.2 40.2,29 54,29Z" />
+</vector>

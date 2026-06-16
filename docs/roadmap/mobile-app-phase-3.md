@@ -1,6 +1,6 @@
 # Mobile App Phase 3 Roadmap
 
-This roadmap captures the Phase 3 direction for bringing Quoti to mobile, starting with Android and keeping iOS as a first-class follow-up target.
+This roadmap captures the Phase 3 direction for bringing Quoti to mobile, starting with native Android. iOS remains a future follow-up target, deferred until a macOS/Xcode and iPhone testing environment is available.
 
 The product goal is simple: Quoti should appear as a share target on mobile, receive a post link or shared content, open a native-feeling Quoti experience, and generate the same kind of elegant context card users already know from the browser extension.
 
@@ -29,7 +29,16 @@ The mobile app should preserve the same product promise as the extension:
 - Quoti remains backend-free by default.
 - Social platform APIs should not be required for the mobile MVP.
 - Mobile import starts from the system share flow, not from DOM extraction.
-- Android comes first, then iOS.
+- Android comes first. iOS comes later when the project has the right Apple development and testing environment.
+
+## Roadmap Status
+
+Status legend:
+
+- `Planned`: documented but not started.
+- `In progress`: actively being implemented.
+- `Blocked`: needs a decision, dependency, or technical proof.
+- `Done`: shipped or committed for the current milestone.
 
 ## Recommended Repository Strategy
 
@@ -40,7 +49,7 @@ quoti/
   src/                    # Current browser extension
   native/                 # Current optional native renderer helper
   mobile/
-    quoti_mobile/         # Flutter app
+    quoti_android/        # Native Android app: Kotlin, Compose, Material 3
   contracts/
     post.schema.json      # Language-neutral shared Quoti post contract
 ```
@@ -51,15 +60,17 @@ A separate repository can be revisited if the mobile app gets its own release cy
 
 ## Recommended Stack
 
-Use Flutter for the mobile app.
+Use native Android first, with Kotlin, Jetpack Compose, and Material 3.
 
 Reasons:
 
-- one product codebase for Android and iOS;
-- fast UI iteration through hot reload;
-- strong support for Material Design on Android;
-- Cupertino widgets and iOS-aware patterns for Apple platforms;
-- unit, widget, and integration testing are first-class Flutter workflows.
+- Android is the first mobile release target;
+- the core workflow depends on native Android Sharesheet and intents;
+- Material 3 is a product requirement, not just a styling preference;
+- Compose gives direct access to Material 3 components, dynamic color, previews, and Android Studio tooling;
+- native Android keeps export, sharing, storage, and system integration straightforward.
+
+The earlier Flutter prototype has been removed. Keep the mobile workspace focused on the native Android app until there is a concrete iOS implementation path.
 
 ## Platform Design Direction
 
@@ -71,7 +82,7 @@ Quoti should keep one product identity, one editorial visual language, and one b
 
 Android should use Material 3 patterns.
 
-Use Material navigation, controls, sheets, buttons, menus, typography scale, state layers, and system sharing conventions where they match the product.
+Use Material navigation, controls, sheets, buttons, segmented controls, menus, typography scale, state layers, dynamic color, and system sharing conventions where they match the product.
 
 ### iOS
 
@@ -93,39 +104,30 @@ Use the existing Quoti preference for:
 controller -> service -> adapter
 ```
 
-Recommended Flutter feature shape:
+Recommended native Android feature shape:
 
 ```text
-lib/
+app/src/main/kotlin/com/quoti/android/
   app/
-    quoti_app.dart
-    router.dart
-    theme/
   core/
     models/
-    result/
-    platform/
+  data/
   features/
     incoming_share/
-      incoming_share.controller.dart
-      incoming_share.service.dart
-      adapters/
-        android_share_intent.adapter.dart
-        ios_share_extension.adapter.dart
     card_editor/
     card_preview/
     export/
     share/
     library/
-  dev/
-    gallery/
+  ui/
+    theme/
 ```
 
-The UI should call controllers or view models. It should not know Android intent details, iOS share extension constraints, image encoding internals, or platform storage details.
+The UI should call controllers, view models, or state holders. It should not know Android intent details, image encoding internals, or platform storage details.
 
 ## Shared Contract Strategy
 
-Flutter should not try to directly reuse TypeScript implementation code.
+The Android app should not try to directly reuse TypeScript implementation code.
 
 Instead, share product contracts and fixtures:
 
@@ -134,7 +136,12 @@ contracts/post.schema.json
 fixtures/posts/
 ```
 
-The TypeScript extension and the Dart app can each implement their own typed models from the same contract.
+Current baseline:
+
+- `contracts/post.schema.json` defines the initial language-neutral post contract.
+- `fixtures/posts/` contains the first development gallery inputs.
+
+The TypeScript extension and the Kotlin app can each implement their own typed models from the same contract.
 
 Initial shared concepts:
 
@@ -209,7 +216,6 @@ This gallery lets the team see the mobile UI at work without depending on a real
 
 Recommended manual preview targets:
 
-- Flutter desktop or web for quick UI iteration;
 - Android emulator for realistic Android behavior;
 - physical Android device for real Sharesheet behavior;
 - iOS simulator for visual review once macOS/Xcode is available;
@@ -217,11 +223,11 @@ Recommended manual preview targets:
 
 ## Automated Testing Strategy
 
-Use Flutter's standard testing layers:
+Use Android's standard testing layers:
 
-- unit tests for models, parsing, formatting, and card export requests;
-- widget tests for card preview, editor states, theme controls, and empty states;
-- integration tests for import, edit, preview, export, and share flows.
+- JVM unit tests for models, parsing, formatting, and card export requests;
+- Compose UI tests for preview, editor states, theme controls, and empty states;
+- Android instrumentation tests for import, edit, preview, export, and share flows.
 
 The first mobile test suite should focus on the product core:
 
@@ -235,15 +241,16 @@ The first mobile test suite should focus on the product core:
 
 | Step | Status | Notes |
 | --- | --- | --- |
-| Confirm Flutter as the mobile app stack | Planned | Android first, iOS second, adaptive UI from the start. |
-| Add language-neutral post contract | Planned | Start with `contracts/post.schema.json`. |
-| Create Flutter app under `mobile/quoti_mobile` | Planned | Keep the first prototype in the existing repo. |
-| Create mobile app architecture document | Planned | Document feature boundaries and controller/service/adapter usage. |
-| Build dev gallery with post fixtures | Planned | Enables visual QA without real share integrations. |
-| Implement Android incoming share prototype | Planned | Receive text and URLs from Android Sharesheet. |
-| Implement first card editor and preview | Planned | Use Quoti identity, with adaptive platform shell. |
+| Pivot Android app stack to Kotlin + Compose + Material 3 | Done | Native Android is now the primary app path. |
+| Add language-neutral post contract | Done | Initial schema lives in `contracts/post.schema.json`. |
+| Remove Flutter prototype | Done | `mobile/quoti_mobile` was removed to keep Phase 3 focused on native Android. |
+| Create native Android app under `mobile/quoti_android` | Done | Kotlin, Jetpack Compose, Material 3, own Gradle wrapper. |
+| Create mobile app architecture document | Done | See `docs/architecture/mobile-app-architecture.md`. |
+| Build dev gallery with post fixtures | Done | Fixtures exist and feed the mobile preview; fixture selection is not exposed in the default product shell. |
+| Implement Android incoming share prototype | Done | Receive shared text and URLs from Android Sharesheet into the Compose app. |
+| Implement first card editor and preview | In progress | First Compose card preview exists; editable fields still need implementation. |
 | Add export image prototype | Planned | Generate a shareable image from the card. |
-| Add Flutter unit and widget tests | Planned | Cover core normalization and UI states. |
+| Add Android unit and Compose tests | In progress | JVM test covers incoming share normalization; Compose UI tests still need implementation. |
 | Validate on Android emulator and physical device | Planned | Sharesheet behavior must be tested on a real device. |
 | Plan iOS Share Extension implementation | Planned | Account for App Groups and extension limitations. |
 
@@ -271,11 +278,9 @@ The first mobile test suite should focus on the product core:
 
 ## References
 
-- Flutter app architecture: https://docs.flutter.dev/app-architecture
-- Flutter testing overview: https://docs.flutter.dev/testing/overview
-- Flutter integration tests: https://docs.flutter.dev/testing/integration-tests
-- Flutter Material Design: https://docs.flutter.dev/ui/design/material
-- Flutter Cupertino widgets: https://docs.flutter.dev/ui/widgets/cupertino
+- Material 3 in Jetpack Compose: https://developer.android.com/develop/ui/compose/designsystems/material3
+- Set up Compose dependencies and compiler: https://developer.android.com/develop/ui/compose/setup-compose-dependencies-and-compiler
+- Jetpack Compose testing: https://developer.android.com/develop/ui/compose/testing
 - Android receiving shared data: https://developer.android.com/training/sharing/receive
 - Android sending shared data: https://developer.android.com/training/sharing/send
 - Apple Human Interface Guidelines: https://developer.apple.com/design/human-interface-guidelines

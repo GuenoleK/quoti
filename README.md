@@ -41,9 +41,11 @@ Developer documentation lives separately from user installation notes:
 
 - [Developer guide](docs/development/developer-guide.md)
 - [Frontend architecture](docs/architecture/frontend-architecture.md)
+- [Mobile app architecture](docs/architecture/mobile-app-architecture.md)
 - [Service architecture](docs/architecture/service-architecture.md)
 - [Video rendering roadmap](docs/roadmap/video-rendering-roadmap.md)
 - [Mobile app Phase 3 roadmap](docs/roadmap/mobile-app-phase-3.md)
+- [Shared post contract](contracts/post.schema.json)
 
 Install dependencies:
 

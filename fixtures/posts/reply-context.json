@@ -1,0 +1,17 @@
+{
+  "id": "fixture-reply-context",
+  "platform": "x",
+  "authorName": "Amira Chen",
+  "authorHandle": "@amirachen",
+  "content": "Exactly. A quote card works when the response and the source stay visually connected without turning into a wall of screenshots.",
+  "relatedPost": {
+    "authorName": "Theo Martin",
+    "authorHandle": "@theomartin",
+    "content": "Context is not decoration. It is part of the argument.",
+    "sourceUrl": "https://x.com/theomartin/status/1003-parent"
+  },
+  "publishedAt": "2026-06-10T19:22:00.000Z",
+  "sourceUrl": "https://x.com/amirachen/status/1003",
+  "media": [],
+  "capturedAt": "2026-06-15T10:00:00.000Z"
+}

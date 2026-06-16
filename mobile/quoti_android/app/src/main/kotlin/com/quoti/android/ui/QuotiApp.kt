@@ -4,9 +4,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Rect
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Toast
+import android.widget.VideoView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,10 +19,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,6 +55,7 @@ import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,36 +95,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import com.quoti.android.BuildConfig
 import com.quoti.android.core.model.CardContentMode
 import com.quoti.android.core.model.CardTone
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
-import com.quoti.android.core.model.SocialPlatform
-import com.quoti.android.core.model.hasMedia
-import com.quoti.android.data.GalleryFixtureRepository
 import com.quoti.android.export.QuotiCardExporter
 import com.quoti.android.share.IncomingShareDraft
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.ceil
-import kotlin.math.floor
-import kotlinx.coroutines.launch
 
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
@@ -124,54 +131,35 @@ data class QuotiUiSettings(
     val sourceActionsEnabled: Boolean = true,
 )
 
-private sealed interface GalleryLoadState {
-    data class Ready(val posts: List<QuotiPost>) : GalleryLoadState
-    data class Failed(val message: String) : GalleryLoadState
-}
+sealed interface QuotiShareState {
+    data object Empty : QuotiShareState
 
-private val FallbackPreviewPost =
-    QuotiPost(
-        id = "fallback-preview",
-        platform = SocialPlatform.X,
-        authorName = "Maya Laurent",
-        authorHandle = "@maya_laurent",
-        content =
-            "The best product moments are quiet: the user brings the context, and the tool makes it travel cleanly.",
-        relatedPost =
-            RelatedPost(
-                authorName = "Dexerto",
-                authorHandle = "@Dexerto",
-                content =
-                    "Viral dopamine sites are letting users shop without actually spending money.",
-            ),
-        publishedAt = "2026-06-16T10:00:00Z",
-        sourceUrl = "https://x.com/dexerto/status/123",
-        capturedAt = "2026-06-16T10:00:00Z",
-    )
+    data class Loading(
+        val sourceUrl: String? = null,
+    ) : QuotiShareState
+
+    data class Ready(
+        val draft: IncomingShareDraft,
+    ) : QuotiShareState
+}
 
 @Composable
 fun QuotiApp(incomingDraft: IncomingShareDraft?) {
+    QuotiApp(
+        shareState =
+            incomingDraft
+                ?.let(QuotiShareState::Ready)
+                ?: QuotiShareState.Empty,
+    )
+}
+
+@Composable
+fun QuotiApp(shareState: QuotiShareState) {
     val context = LocalContext.current
-    val rootView = LocalView.current
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var cardBounds by remember { mutableStateOf<Rect?>(null) }
-    val galleryState by produceState<GalleryLoadState>(
-        initialValue = GalleryLoadState.Ready(listOf(FallbackPreviewPost)),
-    ) {
-        value =
-            runCatching { GalleryFixtureRepository(context.assets).loadPosts() }
-                .fold(
-                    onSuccess = { posts ->
-                        GalleryLoadState.Ready(posts.ifEmpty { listOf(FallbackPreviewPost) })
-                    },
-                    onFailure = { error ->
-                        GalleryLoadState.Failed(error.message ?: "Gallery unavailable")
-                    },
-                )
-    }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var cardTone by rememberSaveable { mutableStateOf(CardTone.Light) }
     var contentMode by rememberSaveable { mutableStateOf(CardContentMode.WithMedia) }
@@ -182,15 +170,10 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
             contentMode = contentMode,
             sourceActionsEnabled = sourceActionsEnabled,
         )
-    val galleryPost =
-        when (val state = galleryState) {
-            is GalleryLoadState.Ready -> selectPreviewPost(state.posts) ?: FallbackPreviewPost
-            is GalleryLoadState.Failed -> FallbackPreviewPost
-        }
-    val post = incomingDraft?.post ?: galleryPost
+    val post = (shareState as? QuotiShareState.Ready)?.draft?.post
 
-    LaunchedEffect(incomingDraft?.post?.id) {
-        if (incomingDraft != null) {
+    LaunchedEffect(post?.id) {
+        if (post != null) {
             snackbarHostState.showSnackbar("Shared post captured")
         }
     }
@@ -200,25 +183,25 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         QuotiCaptureScreen(
-            post = post,
+            shareState = shareState,
             settings = settings,
             onCardToneChange = { cardTone = it },
             onContentModeChange = { contentMode = it },
             onSettingsClick = { showSettings = true },
             onCopyImage = {
+                val activePost = post ?: return@QuotiCaptureScreen
                 scope.launch {
                     runCatching {
                         copyCardImage(
                             context = context,
                             clipboard = clipboard,
-                            rootView = rootView,
-                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
-                            post = post,
+                            post = activePost,
+                            settings = settings,
                         )
                     }.fold(
                         onSuccess = {
                             snackbarHostState.showSnackbar(
-                                if (post.sourceUrl == null) {
+                                if (activePost.sourceUrl == null) {
                                     "Image copied"
                                 } else {
                                     "Image and source link copied"
@@ -233,17 +216,18 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
             },
             onDownloadVideo = {
                 scope.launch {
-                    snackbarHostState.showSnackbar("Video download is next")
+                    snackbarHostState.showSnackbar("Video export is not ready yet")
                 }
             },
             onDownloadPng = {
+                val activePost = post ?: return@QuotiCaptureScreen
                 scope.launch {
                     runCatching {
                         QuotiCardExporter.writePicturesPng(
                             context = context,
-                            rootView = rootView,
-                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
-                            postId = post.id,
+                            post = activePost,
+                            cardTone = settings.cardTone,
+                            contentMode = settings.contentMode,
                         )
                     }.fold(
                         onSuccess = {
@@ -256,13 +240,13 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
                 }
             },
             onShareImage = {
+                val activePost = post ?: return@QuotiCaptureScreen
                 scope.launch {
                     runCatching {
                         shareCardImage(
                             context = context,
-                            rootView = rootView,
-                            cardBounds = requireNotNull(cardBounds) { "Card is not laid out yet." },
-                            post = post,
+                            post = activePost,
+                            settings = settings,
                         )
                     }.onFailure {
                         snackbarHostState.showSnackbar("Unable to share image")
@@ -270,13 +254,14 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
                 }
             },
             onCopyText = {
-                clipboard.setPrimaryClip(ClipData.newPlainText("Quoti text", post.content))
+                val activePost = post ?: return@QuotiCaptureScreen
+                clipboard.setPrimaryClip(ClipData.newPlainText("Quoti text", activePost.content))
                 scope.launch {
                     snackbarHostState.showSnackbar("Text copied")
                 }
             },
             onCopySource = {
-                val sourceUrl = post.sourceUrl
+                val sourceUrl = post?.sourceUrl
                 if (sourceUrl == null) {
                     scope.launch {
                         snackbarHostState.showSnackbar("No source URL")
@@ -289,7 +274,7 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
                 }
             },
             onOpenSource = {
-                val sourceUrl = post.sourceUrl
+                val sourceUrl = post?.sourceUrl
                 if (sourceUrl == null) {
                     scope.launch {
                         snackbarHostState.showSnackbar("No source URL")
@@ -305,7 +290,6 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
                     Toast.LENGTH_SHORT,
                 ).show()
             },
-            onCardBoundsChange = { cardBounds = it },
             contentPadding = innerPadding,
         )
     }
@@ -327,7 +311,7 @@ fun QuotiApp(incomingDraft: IncomingShareDraft?) {
 
 @Composable
 private fun QuotiCaptureScreen(
-    post: QuotiPost,
+    shareState: QuotiShareState,
     settings: QuotiUiSettings,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
@@ -340,33 +324,36 @@ private fun QuotiCaptureScreen(
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onRefresh: () -> Unit,
-    onCardBoundsChange: (Rect) -> Unit,
     contentPadding: PaddingValues,
 ) {
+    val readyPost = (shareState as? QuotiShareState.Ready)?.draft?.post
+
     Box(
         modifier =
             Modifier
                 .fillMaxSize()
                 .padding(contentPadding),
     ) {
-        QuotiActionToolbar(
-            post = post,
-            sourceActionsEnabled = settings.sourceActionsEnabled,
-            onCopyImage = onCopyImage,
-            onDownloadVideo = onDownloadVideo,
-            onDownloadPng = onDownloadPng,
-            onShareImage = onShareImage,
-            onCopyText = onCopyText,
-            onCopySource = onCopySource,
-            onOpenSource = onOpenSource,
-            onRefresh = onRefresh,
-            modifier =
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 18.dp)
-                    .zIndex(1f),
-        )
+        readyPost?.let { post ->
+            QuotiActionToolbar(
+                post = post,
+                sourceActionsEnabled = settings.sourceActionsEnabled,
+                onCopyImage = onCopyImage,
+                onDownloadVideo = onDownloadVideo,
+                onDownloadPng = onDownloadPng,
+                onShareImage = onShareImage,
+                onCopyText = onCopyText,
+                onCopySource = onCopySource,
+                onOpenSource = onOpenSource,
+                onRefresh = onRefresh,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 18.dp)
+                        .zIndex(1f),
+            )
+        }
 
         Column(
             modifier =
@@ -380,31 +367,94 @@ private fun QuotiCaptureScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Header(onSettingsClick = onSettingsClick)
-            PreviewFrame(
-                post = post,
-                cardTone = settings.cardTone,
-                contentMode = settings.contentMode,
-                onCardBoundsChange = onCardBoundsChange,
-            )
-            ExpressiveChoiceGroup(
-                value = settings.cardTone,
-                options =
-                    listOf(
-                        SegmentOption(CardTone.Light, "Light"),
-                        SegmentOption(CardTone.Dark, "Dark"),
-                    ),
-                onValueChange = onCardToneChange,
-            )
-            ExpressiveChoiceGroup(
-                value = settings.contentMode,
-                options =
-                    listOf(
-                        SegmentOption(CardContentMode.TextOnly, "Text only"),
-                        SegmentOption(CardContentMode.WithMedia, "With media"),
-                    ),
-                onValueChange = onContentModeChange,
-            )
+            when (shareState) {
+                QuotiShareState.Empty -> EmptyCaptureState()
+                is QuotiShareState.Loading -> LoadingCaptureState()
+                is QuotiShareState.Ready -> {
+                    PreviewFrame(
+                        post = shareState.draft.post,
+                        cardTone = settings.cardTone,
+                        contentMode = settings.contentMode,
+                    )
+                    ExpressiveChoiceGroup(
+                        value = settings.cardTone,
+                        options =
+                            listOf(
+                                SegmentOption(CardTone.Light, "Light"),
+                                SegmentOption(CardTone.Dark, "Dark"),
+                            ),
+                        onValueChange = onCardToneChange,
+                    )
+                    ExpressiveChoiceGroup(
+                        value = settings.contentMode,
+                        options =
+                            listOf(
+                                SegmentOption(CardContentMode.TextOnly, "Text only"),
+                                SegmentOption(CardContentMode.WithMedia, "With media"),
+                            ),
+                        onValueChange = onContentModeChange,
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun EmptyCaptureState() {
+    StateFrame {
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.Article,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(34.dp),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "No post captured",
+            style = MaterialTheme.typography.titleMediumEmphasized,
+        )
+        Text(
+            text = "Waiting for a shared post.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun LoadingCaptureState() {
+    StateFrame {
+        CircularProgressIndicator(
+            modifier = Modifier.size(42.dp),
+            strokeWidth = 4.dp,
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            text = "Preparing post",
+            style = MaterialTheme.typography.titleMediumEmphasized,
+        )
+    }
+}
+
+@Composable
+private fun StateFrame(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 260.dp)
+                    .padding(horizontal = 28.dp, vertical = 34.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            content = content,
+        )
     }
 }
 
@@ -454,7 +504,6 @@ private fun PreviewFrame(
     post: QuotiPost,
     cardTone: CardTone,
     contentMode: CardContentMode,
-    onCardBoundsChange: (Rect) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -467,10 +516,6 @@ private fun PreviewFrame(
                 post = post,
                 cardTone = cardTone,
                 contentMode = contentMode,
-                modifier =
-                    Modifier.onGloballyPositioned { coordinates ->
-                        onCardBoundsChange(coordinates.boundsInRoot().toAndroidRect())
-                    },
             )
         }
     }
@@ -537,13 +582,15 @@ private fun QuotiCardPreview(
             post.relatedPost?.let { relatedPost ->
                 RelatedPostBlock(
                     relatedPost = relatedPost,
+                    showMedia = contentMode == CardContentMode.WithMedia,
                     contentColor = contentColor,
                     mutedColor = mutedColor,
                 )
             }
 
-            if (contentMode == CardContentMode.WithMedia && post.hasMedia) {
-                MediaPlaceholder(
+            if (contentMode == CardContentMode.WithMedia && post.media.isNotEmpty()) {
+                RemoteMedia(
+                    media = post.media,
                     contentColor = contentColor,
                     mutedColor = mutedColor,
                 )
@@ -581,17 +628,10 @@ private fun QuotiCardPreview(
     }
 }
 
-private fun ComposeRect.toAndroidRect(): Rect =
-    Rect(
-        floor(left).toInt(),
-        floor(top).toInt(),
-        ceil(right).toInt(),
-        ceil(bottom).toInt(),
-    )
-
 @Composable
 private fun RelatedPostBlock(
     relatedPost: RelatedPost,
+    showMedia: Boolean,
     contentColor: Color,
     mutedColor: Color,
 ) {
@@ -612,7 +652,7 @@ private fun RelatedPostBlock(
                 .joinToString("  ")
                 .ifBlank { "Original post" }
         Text(
-            text = author,
+            text = "Répond à $author",
             style = MaterialTheme.typography.labelLarge,
             color = mutedColor,
         )
@@ -621,7 +661,255 @@ private fun RelatedPostBlock(
             style = MaterialTheme.typography.bodyLarge,
             color = contentColor,
         )
+        if (showMedia && relatedPost.media.isNotEmpty()) {
+            RemoteMedia(
+                media = relatedPost.media,
+                contentColor = contentColor,
+                mutedColor = mutedColor,
+            )
+        }
     }
+}
+
+@Composable
+private fun RemoteMedia(
+    media: List<PostMedia>,
+    contentColor: Color,
+    mutedColor: Color,
+) {
+    val sources = media.mapNotNull(PostMedia::previewSource).take(4)
+    val mediaKey = sources.joinToString("|") { source -> source.url }
+    val loadedMedia by produceState<List<LoadedRemoteMedia>>(initialValue = emptyList(), mediaKey) {
+        value =
+            sources.mapNotNull { source ->
+                loadRemoteBitmap(source.url)?.let { bitmap ->
+                    LoadedRemoteMedia(
+                        bitmap = bitmap,
+                        isVideo = source.isVideo,
+                        playableVideoUrl = source.playableVideoUrl,
+                    )
+                }
+            }
+    }
+
+    if (sources.isEmpty() || loadedMedia.isEmpty()) {
+        MediaPlaceholder(
+            contentColor = contentColor,
+            mutedColor = mutedColor,
+        )
+        return
+    }
+
+    if (loadedMedia.size == 1) {
+        SingleRemoteMedia(
+            media = loadedMedia.first(),
+            contentColor = contentColor,
+        )
+    } else {
+        RemoteMediaGrid(
+            media = loadedMedia,
+            contentColor = contentColor,
+        )
+    }
+}
+
+@Composable
+private fun SingleRemoteMedia(
+    media: LoadedRemoteMedia,
+    contentColor: Color,
+) {
+    val aspectRatio = media.aspectRatio.coerceIn(0.62f, 2.35f)
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(aspectRatio)
+                .clip(RoundedCornerShape(18.dp))
+                .background(contentColor.copy(alpha = 0.08f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (media.isVideo && media.playableVideoUrl != null) {
+            VideoPlayer(
+                videoUrl = media.playableVideoUrl,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Image(
+                bitmap = media.bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (media.isVideo) {
+                VideoBadge()
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoPlayer(
+    videoUrl: String,
+    modifier: Modifier = Modifier,
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            VideoView(context).apply {
+                layoutParams =
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                setOnPreparedListener { player ->
+                    player.isLooping = true
+                    player.setVolume(0f, 0f)
+                    start()
+                }
+                setOnErrorListener { _, _, _ -> true }
+                tag = videoUrl
+                setVideoURI(Uri.parse(videoUrl))
+            }
+        },
+        update = { view ->
+            if (view.tag != videoUrl) {
+                view.tag = videoUrl
+                view.setVideoURI(Uri.parse(videoUrl))
+            }
+            if (!view.isPlaying) {
+                view.start()
+            }
+        },
+    )
+}
+
+@Composable
+private fun RemoteMediaGrid(
+    media: List<LoadedRemoteMedia>,
+    contentColor: Color,
+) {
+    val visibleMedia = media.take(4)
+    val rows = visibleMedia.chunked(2)
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (visibleMedia.size == 2) 2f else 1f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(contentColor.copy(alpha = 0.08f)),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        rows.forEach { rowMedia ->
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                rowMedia.forEach { item ->
+                    MediaGridCell(
+                        media = item,
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                    )
+                }
+                if (rowMedia.size == 1 && visibleMedia.size > 1) {
+                    Spacer(
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaGridCell(
+    media: LoadedRemoteMedia,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.background(Color.Black.copy(alpha = 0.08f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            bitmap = media.bitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (media.isVideo) {
+            VideoBadge()
+        }
+    }
+}
+
+@Composable
+private fun VideoBadge() {
+    Surface(
+        modifier =
+            Modifier
+                .size(48.dp),
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = 0.62f),
+        contentColor = Color.White,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Outlined.Movie,
+                contentDescription = "Video",
+                modifier = Modifier.size(24.dp),
+            )
+        }
+    }
+}
+
+private data class LoadedRemoteMedia(
+    val bitmap: Bitmap,
+    val isVideo: Boolean,
+    val playableVideoUrl: String?,
+) {
+    val aspectRatio: Float
+        get() = bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
+}
+
+private data class MediaPreviewSource(
+    val url: String,
+    val isVideo: Boolean,
+    val playableVideoUrl: String? = null,
+)
+
+private fun PostMedia.previewSource(): MediaPreviewSource? {
+    return when (this) {
+        is PostMedia.Image -> MediaPreviewSource(url = url, isVideo = false)
+        is PostMedia.Video -> {
+            val playableUrl = playableVideoUrl()
+            (posterUrl ?: playableUrl ?: url ?: variants.firstOrNull())
+                ?.let { previewUrl ->
+                    MediaPreviewSource(
+                        url = previewUrl,
+                        isVideo = true,
+                        playableVideoUrl = playableUrl,
+                    )
+                }
+        }
+    }
+}
+
+private fun PostMedia.Video.playableVideoUrl(): String? {
+    val candidates = listOfNotNull(url) + variants
+    return candidates.firstOrNull { candidate -> candidate.isPlayableVideoUrl(".mp4") }
+        ?: candidates.firstOrNull { candidate -> candidate.isPlayableVideoUrl(".m3u8") }
+}
+
+private fun String.isPlayableVideoUrl(extension: String): Boolean {
+    return startsWith("https://") && contains(extension)
 }
 
 @Composable
@@ -670,9 +958,8 @@ private fun QuotiActionToolbar(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val hasVideo = post.containsVideo()
-    val primaryActionLabel = if (hasVideo) "Download video" else "Copy image"
-    val primaryAction = if (hasVideo) onDownloadVideo else onCopyImage
+    val primaryActionLabel = "Copy image"
+    val primaryAction = onCopyImage
     var overflowExpanded by remember { mutableStateOf(false) }
 
     Box(
@@ -691,7 +978,6 @@ private fun QuotiActionToolbar(
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                 ) {
                     PrimaryActionIcon(
-                        hasVideo = hasVideo,
                         contentDescription = primaryActionLabel,
                     )
                 }
@@ -798,7 +1084,6 @@ private fun QuotiActionToolbar(
 
 @Composable
 private fun PrimaryActionIcon(
-    hasVideo: Boolean,
     contentDescription: String,
 ) {
     Box(
@@ -806,12 +1091,12 @@ private fun PrimaryActionIcon(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = if (hasVideo) Icons.Outlined.Movie else Icons.Outlined.Image,
+            imageVector = Icons.Outlined.Image,
             contentDescription = contentDescription,
             modifier = Modifier.size(26.dp),
         )
         Icon(
-            imageVector = if (hasVideo) Icons.Outlined.Download else Icons.Outlined.ContentCopy,
+            imageVector = Icons.Outlined.ContentCopy,
             contentDescription = null,
             modifier =
                 Modifier
@@ -958,6 +1243,12 @@ private fun SettingsSheet(
             ) {
                 Text("Reset")
             }
+            Text(
+                text = "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                modifier = Modifier.align(Alignment.End),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(modifier = Modifier.height(12.dp))
         }
     }
@@ -967,24 +1258,39 @@ private fun selectPreviewPost(posts: List<QuotiPost>): QuotiPost? {
     return posts.firstOrNull { it.relatedPost != null } ?: posts.firstOrNull()
 }
 
-private fun QuotiPost.containsVideo(): Boolean {
-    return media.any { it is PostMedia.Video } ||
-        relatedPost?.media?.any { it is PostMedia.Video } == true
-}
+private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = URL(imageUrl).openConnection() as HttpURLConnection
+            try {
+                connection.instanceFollowRedirects = true
+                connection.connectTimeout = 5_000
+                connection.readTimeout = 7_000
+                connection.setRequestProperty("User-Agent", "Quoti Android")
+
+                if (connection.responseCode !in 200..299) {
+                    return@runCatching null
+                }
+
+                connection.inputStream.use(BitmapFactory::decodeStream)
+            } finally {
+                connection.disconnect()
+            }
+        }.getOrNull()
+    }
 
 private suspend fun copyCardImage(
     context: Context,
     clipboard: ClipboardManager,
-    rootView: android.view.View,
-    cardBounds: Rect,
     post: QuotiPost,
+    settings: QuotiUiSettings,
 ) {
     val uri =
         QuotiCardExporter.writeCachePng(
             context = context,
-            rootView = rootView,
-            cardBounds = cardBounds,
-            postId = post.id,
+            post = post,
+            cardTone = settings.cardTone,
+            contentMode = settings.contentMode,
         )
     val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
     post.sourceUrl?.let { sourceUrl ->
@@ -995,16 +1301,15 @@ private suspend fun copyCardImage(
 
 private suspend fun shareCardImage(
     context: Context,
-    rootView: android.view.View,
-    cardBounds: Rect,
     post: QuotiPost,
+    settings: QuotiUiSettings,
 ) {
     val uri: Uri =
         QuotiCardExporter.writeCachePng(
             context = context,
-            rootView = rootView,
-            cardBounds = cardBounds,
-            postId = post.id,
+            post = post,
+            cardTone = settings.cardTone,
+            contentMode = settings.contentMode,
         )
     val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
     val shareIntent =

@@ -15,7 +15,7 @@ Open a post
   -> Share
      -> Quoti
         -> Quoti opens with the shared context
-           -> Edit, preview, export, or share the card
+           -> Preview, export, or share the card
 ```
 
 The mobile app should preserve the same product promise as the extension:
@@ -114,7 +114,6 @@ app/src/main/kotlin/com/quoti/android/
   data/
   features/
     incoming_share/
-    card_editor/
     card_preview/
     export/
     share/
@@ -170,7 +169,7 @@ User taps Share in another app
      -> User selects Quoti
         -> Quoti app opens
            -> Shared text or URL is parsed
-              -> Card editor is prefilled
+              -> Card preview is prefilled
 ```
 
 Android implementation will likely use `ACTION_SEND` and intent filters for text, URLs, and later image or video inputs.
@@ -187,7 +186,7 @@ User taps Share in another app
      -> User selects Quoti
         -> Quoti Share Extension receives the content
            -> Shared content is stored as a draft
-              -> Main app can continue editing the Quoti card
+              -> Main app can preview and export the Quoti card
 ```
 
 iOS has stricter extension boundaries than Android. The share extension and containing app should communicate through the platform-supported shared container approach when needed.
@@ -226,14 +225,14 @@ Recommended manual preview targets:
 Use Android's standard testing layers:
 
 - JVM unit tests for models, parsing, formatting, and card export requests;
-- Compose UI tests for preview, editor states, theme controls, and empty states;
-- Android instrumentation tests for import, edit, preview, export, and share flows.
+- Compose UI tests for preview, theme controls, and empty states;
+- Android instrumentation tests for import, preview, export, and share flows.
 
 The first mobile test suite should focus on the product core:
 
 - parse incoming share payload;
 - normalize into Quoti post data;
-- render expected editor state;
+- render expected preview state;
 - switch theme and content mode;
 - create an export request.
 
@@ -248,7 +247,7 @@ The first mobile test suite should focus on the product core:
 | Create mobile app architecture document | Done | See `docs/architecture/mobile-app-architecture.md`. |
 | Build dev gallery with post fixtures | Done | Fixtures exist and feed the mobile preview; fixture selection is not exposed in the default product shell. |
 | Implement Android incoming share prototype | Done | Receive shared text and URLs from Android Sharesheet into the Compose app. |
-| Implement first card editor and preview | In progress | First Compose card preview exists; editable fields still need implementation. |
+| Implement first card preview | Done | Compose card preview is backed by normalized incoming-share data. The MVP does not allow editing shared post content. |
 | Add export image prototype | Done | PNG export, image clipboard, source URL clipboard item, and Android image share intent are implemented. |
 | Add Android unit and Compose tests | In progress | JVM tests cover incoming share normalization and export naming; Compose instrumentation covers the primary controls. |
 | Validate on Android emulator and physical device | In progress | Emulator validation passes; physical Pixel 9 Pro APK install and real Sharesheet behavior still need product-path validation. |
@@ -263,8 +262,21 @@ The next work should turn the current functional prototype into the smallest rel
 - Validate the real flow from X/Twitter: share a post to Quoti, parse the incoming Android payload, show a correct card preview, then copy, share, or download it.
 - Replace fixture-driven preview data with real incoming shared data wherever the Android share payload provides enough information.
 - Identify what X/Twitter actually sends on Android: text, URL, author, source handle, media, or only a link.
-- Add a simple edit surface for missing metadata, because mobile share payloads may be incomplete.
+- Do not add an edit surface in the first MVP; when payloads are incomplete, keep the shared data honest and avoid altering tweet content.
 - Stabilize card export beyond visible-screen capture by adding an offscreen card renderer for long cards.
+
+Current implementation notes:
+
+- Incoming Android text shares now drive the default card state when present; no-share launches use an explicit empty state.
+- X/Twitter URLs infer platform and handle from `/handle/status/id`; subject/title text is used when the sender provides richer metadata.
+- The no-share app state is now an explicit empty state instead of a fixture card.
+- URL-only X/Twitter shares, including Android X `/i/status/...` links, show a loading state while they are enriched through public oEmbed/page metadata when available.
+- The app does not expose an edit surface; when public metadata is unavailable, X/Twitter shares remain source-only instead of inventing tweet text or media.
+- Public X page enrichment now imports multiple image media, playable video variants, and reliable reply/quoted-post metadata when exposed by X.
+- Compose preview and offscreen PNG export preserve media aspect ratio instead of cropping into a fixed landscape frame.
+- Copy image, share image, and download PNG use an offscreen model-driven renderer instead of visible-screen capture.
+- Video previews play muted looping MP4 variants when X exposes one; MP4 video-card export remains a follow-up, and PNG exports still use the poster image.
+- Physical X/Twitter app validation still needs a device pass to record the exact payload variants sent by the installed X app version.
 
 ### Priority 2: Product Completeness
 
@@ -290,7 +302,7 @@ The next work should turn the current functional prototype into the smallest rel
 - The Android UI follows Material 3 expectations.
 - The iOS architecture plan accounts for Share Extension constraints.
 - A development gallery exists for visual review of core card states.
-- Unit and widget tests cover the core post normalization and editor states.
+- Unit and widget tests cover the core post normalization and preview states.
 - The browser extension remains unaffected.
 
 ## Risks And Constraints

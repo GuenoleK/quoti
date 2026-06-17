@@ -38,6 +38,10 @@
   --card-export-width: 600px;
 }
 
+.context-card[data-card-layout="compact"] {
+  --card-export-width: 500px;
+}
+
 .context-card[data-card-layout="square"] {
   --card-export-width: 690px;
 }
@@ -90,6 +94,15 @@
 
 .context-card[data-card-layout="square"] .context-card__quote {
   font-size: clamp(var(--font-size-lg), 3vw, var(--font-size-xl));
+}
+
+.context-card[data-card-layout="compact"] .context-card__inner {
+  gap: var(--space-6);
+  padding: var(--space-8);
+}
+
+.context-card[data-card-layout="compact"] .context-card__quote {
+  font-size: clamp(var(--font-size-xl), 4vw, 2.15rem);
 }
 
 .context-card[data-card-layout="wide"] .context-card__inner {

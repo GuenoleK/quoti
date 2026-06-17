@@ -18,7 +18,7 @@ type MediaSize = {
   width: number;
 };
 
-type CardLayout = "portrait" | "square" | "wide";
+type CardLayout = "compact" | "portrait" | "square" | "wide";
 
 export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: PostCardPreviewProps) {
   const isMountedRef = useRef(true);
@@ -523,15 +523,16 @@ function isLetterboxRow(pixels: Uint8ClampedArray, width: number, row: number): 
 }
 
 function resolveCardLayout(content: string, media: PostMedia | undefined, mediaSize: MediaSize | null): CardLayout {
+  const estimatedLineCount = estimateRenderedLineCount(content);
+
   if (!media) {
-    return "portrait";
+    return estimatedLineCount <= 3 ? "compact" : "portrait";
   }
 
   if (media.type === "image") {
     return "portrait";
   }
 
-  const estimatedLineCount = estimateRenderedLineCount(content);
   const isLongText = estimatedLineCount > 3;
 
   if (!mediaSize) {

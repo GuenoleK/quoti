@@ -213,6 +213,10 @@ function getExportWidth(node: HTMLElement): number {
     return 820;
   }
 
+  if (layout === "compact") {
+    return 500;
+  }
+
   return 720;
 }
 

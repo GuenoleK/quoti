@@ -15,7 +15,8 @@
 
 .post-card-preview__card {
   contain: layout paint;
-  width: 100%;
+  justify-self: center;
+  width: min(100%, var(--card-export-width));
   max-width: 100%;
   box-shadow: var(--shadow-sm);
 }

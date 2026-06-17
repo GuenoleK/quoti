@@ -21,6 +21,9 @@ const inlineButtonInsertedClassName = "quoti-inline-button-inserted";
 const settingsStorageKey = "quoti-settings";
 const inlineButtonPreferenceVersion = 1;
 const maxLocalObservedVideoUrls = 120;
+const avatarImageSelector =
+  '[data-testid="Tweet-User-Avatar"] img, [data-testid^="UserAvatar-Container"] img, [data-testid="UserAvatar-Container-unknown"] img, img[src*="/profile_images/"], img[srcset*="/profile_images/"]';
+const avatarContainerSelector = '[data-testid="Tweet-User-Avatar"], [data-testid^="UserAvatar-Container"], [data-testid="UserAvatar-Container-unknown"]';
 const defaultContentScriptSettings: ContentScriptSettings = {
   hoverCaptureEnabled: true,
   contextMenuEnabled: true,
@@ -466,6 +469,7 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
   const authorName = readAuthorName(authorBlock);
   const authorHandle = readAuthorHandle(authorBlock);
   const { content, relatedContainer, relatedPost } = readPostContent(article, observedVideoUrls);
+  const authorAvatarUrl = readAuthorAvatarUrl(article, authorBlock, authorHandle, relatedContainer);
   const time = article.querySelector<HTMLTimeElement>("time");
   const sourceUrl = readSourceUrl(time);
   const media = readPostMedia(article, observedVideoUrls, relatedContainer);
@@ -475,6 +479,7 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
     platform: "x",
     authorName,
     authorHandle,
+    authorAvatarUrl,
     content,
     relatedPost,
     publishedAt: time?.dateTime,
@@ -503,6 +508,104 @@ function readAuthorHandle(authorBlock: HTMLElement | null): string {
     .find((text) => text.startsWith("@"));
 
   return handle ?? "";
+}
+
+function readAuthorAvatarUrl(
+  root: HTMLElement,
+  authorBlock: HTMLElement | null,
+  authorHandle?: string,
+  excludedContainer?: HTMLElement | null
+): string | undefined {
+  if (!authorBlock) {
+    return undefined;
+  }
+
+  const candidates = readAuthorAvatarCandidates(root, authorBlock, authorHandle, excludedContainer);
+
+  if (candidates.length === 0 && authorHandle) {
+    candidates.push(...readAuthorAvatarCandidates(document.body, authorBlock, authorHandle, excludedContainer, true));
+  }
+
+  return candidates[0]?.url;
+}
+
+function readAuthorAvatarCandidates(
+  root: HTMLElement,
+  authorBlock: HTMLElement,
+  authorHandle?: string,
+  excludedContainer?: HTMLElement | null,
+  requireHandleMatch = false
+): Array<{ image: HTMLImageElement; score: number; url: string }> {
+  const expectedHandle = normalizeHandle(authorHandle);
+
+  return Array.from(root.querySelectorAll<HTMLImageElement>(avatarImageSelector))
+    .filter((image) => !isInsideExcludedContainer(image, excludedContainer))
+    .filter((image) => !requireHandleMatch || readAvatarLinkHandle(image) === expectedHandle)
+    .map((image) => ({
+      image,
+      score: scoreAuthorAvatarCandidate(image, authorBlock, authorHandle),
+      url: normalizeAuthorAvatarUrl(readImageSourceUrl(image))
+    }))
+    .filter((candidate): candidate is { image: HTMLImageElement; score: number; url: string } => Boolean(candidate.url))
+    .sort((left, right) => right.score - left.score);
+}
+
+function scoreAuthorAvatarCandidate(image: HTMLImageElement, authorBlock: HTMLElement, authorHandle?: string): number {
+  const expectedHandle = normalizeHandle(authorHandle);
+  const imageHandle = readAvatarLinkHandle(image);
+  const imageRect = image.getBoundingClientRect();
+  const authorRect = authorBlock.getBoundingClientRect();
+  let score = 0;
+
+  if (image.closest(avatarContainerSelector)) {
+    score += 100;
+  }
+
+  if (expectedHandle && imageHandle === expectedHandle) {
+    score += 1000;
+  } else if (expectedHandle && imageHandle) {
+    score -= 300;
+  }
+
+  if (imageRect.width > 0 && imageRect.height > 0 && authorRect.width > 0 && authorRect.height > 0) {
+    const imageCenterY = imageRect.top + imageRect.height / 2;
+    const authorCenterY = authorRect.top + authorRect.height / 2;
+
+    score -= Math.min(500, Math.abs(imageCenterY - authorCenterY));
+
+    if (imageRect.right <= authorRect.left + 16) {
+      score += 40;
+    }
+  }
+
+  return score;
+}
+
+function readAvatarLinkHandle(image: HTMLImageElement): string | undefined {
+  const href = image.closest<HTMLAnchorElement>("a[href]")?.getAttribute("href");
+
+  if (!href) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(href, window.location.origin);
+    const handle = url.pathname.split("/").filter(Boolean)[0];
+
+    if (!handle || ["home", "i", "intent", "search", "settings"].includes(handle)) {
+      return undefined;
+    }
+
+    return normalizeHandle(handle);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeHandle(handle: string | undefined): string | undefined {
+  const normalized = handle?.replace(/^@/, "").trim().toLowerCase();
+
+  return normalized || undefined;
 }
 
 function readPostContent(
@@ -555,6 +658,8 @@ function readRelatedPost(
 
   const relatedContainer = findRelatedPostContainer(article, relatedBlock.block, primaryBlock);
   const authorBlock = relatedContainer?.querySelector<HTMLElement>('[data-testid="User-Name"]') ?? null;
+  const authorName = authorBlock ? readAuthorName(authorBlock) : undefined;
+  const authorHandle = authorBlock ? readAuthorHandle(authorBlock) : undefined;
   const media = relatedContainer ? readPostMedia(relatedContainer, observedVideoUrls) : [];
   const content = readBestRelatedPostContent(relatedBlock.content, relatedContainer, article);
   const sourceUrl = relatedContainer ? readRelatedPostSourceUrl(relatedContainer) : undefined;
@@ -562,8 +667,9 @@ function readRelatedPost(
   return {
     container: relatedContainer,
     post: {
-      authorName: authorBlock ? readAuthorName(authorBlock) : undefined,
-      authorHandle: authorBlock ? readAuthorHandle(authorBlock) : undefined,
+      authorName,
+      authorHandle,
+      authorAvatarUrl: relatedContainer ? readAuthorAvatarUrl(relatedContainer, authorBlock, authorHandle) : undefined,
       content,
       media,
       sourceUrl
@@ -941,7 +1047,7 @@ function readPostImages(root: HTMLElement, excludedContainer?: HTMLElement | nul
 }
 
 function isLikelyPostImage(image: HTMLImageElement): boolean {
-  if (image.closest('[data-testid^="UserAvatar-Container"], [data-testid="UserAvatar-Container-unknown"]')) {
+  if (image.closest(avatarContainerSelector)) {
     return false;
   }
 
@@ -1207,6 +1313,26 @@ function normalizePostImageUrl(value: string | undefined): string | null {
     allowCardImage: true,
     allowVideoThumb: false
   });
+}
+
+function normalizeAuthorAvatarUrl(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (!url.hostname.endsWith("twimg.com") || !url.pathname.includes("/profile_images/")) {
+    return null;
+  }
+
+  return url.toString();
 }
 
 function normalizeTwitterImageUrl(

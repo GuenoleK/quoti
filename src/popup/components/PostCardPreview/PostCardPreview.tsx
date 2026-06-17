@@ -115,9 +115,12 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
             ) : null}
 
             <footer className="context-card__footer">
-              <div className="context-card__author">
-                <span className="context-card__author-name">{post.authorName}</span>
-                {post.authorHandle ? <span className="context-card__author-handle">{post.authorHandle}</span> : null}
+              <div className="context-card__author-group">
+                <PostAvatar avatarUrl={post.authorAvatarUrl} label={post.authorName} variant="author" />
+                <div className="context-card__author">
+                  <span className="context-card__author-name">{post.authorName}</span>
+                  {post.authorHandle ? <span className="context-card__author-handle">{post.authorHandle}</span> : null}
+                </div>
               </div>
               <span className="context-card__mark">Quoti</span>
             </footer>
@@ -170,9 +173,12 @@ function RelatedPostCard({
   return (
     <aside className="context-card__related-post" aria-label="Post auquel l'auteur répond">
       <div className="context-card__related-meta">
-        <span className="context-card__related-label">Répond à</span>
-        {relatedPost.authorName ? <span className="context-card__related-author">{relatedPost.authorName}</span> : null}
-        {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
+        <PostAvatar avatarUrl={relatedPost.authorAvatarUrl} label={relatedPost.authorName ?? relatedPost.authorHandle ?? ""} variant="related" />
+        <div className="context-card__related-copy">
+          <span className="context-card__related-label">Répond à</span>
+          {relatedPost.authorName ? <span className="context-card__related-author">{relatedPost.authorName}</span> : null}
+          {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
+        </div>
       </div>
       <p className="context-card__related-content">
         <EmojiText text={relatedPost.content} />
@@ -188,6 +194,55 @@ function RelatedPostCard({
         </figure>
       ) : null}
     </aside>
+  );
+}
+
+function PostAvatar({ avatarUrl, label, variant }: { avatarUrl?: string; label: string; variant: "author" | "related" }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [avatarUrl]);
+
+  if (!avatarUrl || failed) {
+    if (!avatarUrl) {
+      return null;
+    }
+
+    return (
+      <span className={`context-card__avatar context-card__avatar--${variant}`} aria-label={label ? `Photo de profil de ${label}` : undefined}>
+        <span className="context-card__avatar-fallback" aria-hidden="true">
+          {getAvatarInitials(label)}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span className={`context-card__avatar context-card__avatar--${variant}`}>
+      <img
+        className="context-card__avatar-image"
+        data-export-src={avatarUrl}
+        decoding="async"
+        loading="eager"
+        referrerPolicy="no-referrer"
+        src={avatarUrl}
+        alt={label ? `Photo de profil de ${label}` : ""}
+        onError={() => setFailed(true)}
+      />
+    </span>
+  );
+}
+
+function getAvatarInitials(label: string): string {
+  return (
+    label
+      .replace("@", "")
+      .split(/[\s_.-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "?"
   );
 }
 

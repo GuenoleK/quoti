@@ -944,6 +944,7 @@ function mergeRecoveredPostMedia(basePost: ExtractedPost, recoveredPost: Extract
 
   return {
     ...basePost,
+    authorAvatarUrl: recoveredPost.authorAvatarUrl ?? basePost.authorAvatarUrl,
     media: mergePostMedia(recoveredPost.media, basePost.media),
     relatedPost: mergeRelatedPostMedia(recoveredPost.relatedPost, basePost.relatedPost)
   };
@@ -1025,6 +1026,7 @@ function mergeRelatedPostMedia(recoveredPost: ExtractedPost["relatedPost"], base
 
   return {
     ...relatedPost,
+    authorAvatarUrl: recoveredPost?.authorAvatarUrl ?? basePost?.authorAvatarUrl,
     media: mergePostMedia(recoveredPost?.media ?? [], basePost?.media ?? [])
   };
 }

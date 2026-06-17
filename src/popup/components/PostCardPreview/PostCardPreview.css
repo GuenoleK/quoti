@@ -38,6 +38,16 @@
   font-size: var(--font-size-md);
 }
 
+.post-card-preview .context-card__avatar--author {
+  width: 36px;
+  height: 36px;
+}
+
+.post-card-preview .context-card__avatar--related {
+  width: 24px;
+  height: 24px;
+}
+
 .post-card-preview .context-card[data-card-layout="wide"] .context-card__inner {
   grid-template-columns: 1fr;
   grid-template-areas:

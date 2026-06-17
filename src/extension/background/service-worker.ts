@@ -274,6 +274,7 @@ function mergeHydratedRelatedPost(
       ...relatedPost,
       authorHandle: extractedPost.authorHandle || relatedPost.authorHandle,
       authorName: extractedPost.authorName || relatedPost.authorName,
+      authorAvatarUrl: extractedPost.authorAvatarUrl || relatedPost.authorAvatarUrl,
       content: extractedPost.content || relatedPost.content,
       media: extractedPost.media.length > 0 ? extractedPost.media : relatedPost.media,
       sourceUrl: extractedPost.sourceUrl ?? relatedSourceUrl

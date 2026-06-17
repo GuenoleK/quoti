@@ -42,10 +42,16 @@ For any UI, generated card, theme token, layout, typography, visual hierarchy, o
 
 ## Agent Skills
 
-All project skills live under `.skills/`.
+Project skill organization:
 
-- .skills/README.md
-- .skills/quoti/
-- .skills/android/
+- New Quoti-owned skills created for this repository live under `skills/quoti/<skill-name>/`.
+- Keep each skill in the standard `SKILL.md` directory format, with optional `agents/openai.yaml`, `references/`, `scripts/`, or `assets/` only when useful.
+- Do not install project skills in the user-level Codex directory (`%USERPROFILE%\.codex\skills`) when they are meant to travel with the repo.
+- Do not create `.codex`, `.codex-*`, or `.codex/skills` inside this repository.
+- Existing skills under `.skills/` are the historical/vendored skill catalog for Quoti and Android. Read `.skills/README.md` when you need those existing workflows, but place newly authored Quoti project skills under `skills/quoti/`.
+
+Current repo-owned Quoti skills:
+
+- skills/quoti/quoti-android-release/
 
 Always follow the instructions defined in these documents.

@@ -38,6 +38,7 @@ private fun JSONObject.toQuotiPost(): QuotiPost {
         platform = SocialPlatform.fromJson(getString("platform")),
         authorName = getString("authorName"),
         authorHandle = getString("authorHandle"),
+        authorAvatarUrl = optionalString("authorAvatarUrl"),
         content = getString("content"),
         relatedPost = optionalObject("relatedPost")?.toRelatedPost(),
         publishedAt = optionalString("publishedAt"),
@@ -51,6 +52,7 @@ private fun JSONObject.toRelatedPost(): RelatedPost {
     return RelatedPost(
         authorName = optionalString("authorName"),
         authorHandle = optionalString("authorHandle"),
+        authorAvatarUrl = optionalString("authorAvatarUrl"),
         content = getString("content"),
         sourceUrl = optionalString("sourceUrl"),
         media = optionalArray("media").toPostMediaList(),

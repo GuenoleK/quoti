@@ -32,6 +32,7 @@ data class QuotiPost(
     val platform: SocialPlatform,
     val authorName: String,
     val authorHandle: String,
+    val authorAvatarUrl: String? = null,
     val content: String,
     val relatedPost: RelatedPost? = null,
     val publishedAt: String? = null,
@@ -45,6 +46,7 @@ data class RelatedPost(
     val media: List<PostMedia> = emptyList(),
     val authorHandle: String? = null,
     val authorName: String? = null,
+    val authorAvatarUrl: String? = null,
     val sourceUrl: String? = null,
 )
 

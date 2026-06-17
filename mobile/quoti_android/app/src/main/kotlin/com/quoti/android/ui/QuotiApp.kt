@@ -115,10 +115,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
@@ -126,12 +129,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.quoti.android.R
 import com.quoti.android.BuildConfig
 import com.quoti.android.core.model.CardContentMode
 import com.quoti.android.core.model.CardTone
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
+import com.quoti.android.core.model.SocialPlatform
 import com.quoti.android.export.QuotiExportType
 import com.quoti.android.export.QuotiExportWork
 import com.quoti.android.export.QuotiCardExporter
@@ -148,6 +153,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
@@ -795,15 +802,16 @@ private fun Header(onSettingsClick: () -> Unit) {
     ) {
         Surface(
             modifier = Modifier.size(42.dp),
-            color = MaterialTheme.colorScheme.onSurface,
-            contentColor = MaterialTheme.colorScheme.surface,
+            color = colorResource(id = R.color.quoti_icon_background),
+            contentColor = colorResource(id = R.color.quoti_icon_foreground),
             shape = RoundedCornerShape(12.dp),
             tonalElevation = 2.dp,
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = "Q",
-                    style = MaterialTheme.typography.headlineSmallEmphasized,
+                Image(
+                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.size(38.dp),
                 )
             }
         }
@@ -887,12 +895,10 @@ private fun QuotiCardPreview(
                     color = contentColor.copy(alpha = 0.12f),
                     contentColor = contentColor,
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = post.platform.label,
-                            style = MaterialTheme.typography.titleMediumEmphasized,
-                        )
-                    }
+                    PlatformBadge(
+                        platform = post.platform,
+                        contentColor = contentColor,
+                    )
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
@@ -931,6 +937,15 @@ private fun QuotiCardPreview(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                post.authorAvatarUrl?.let { avatarUrl ->
+                    RemoteAvatar(
+                        avatarUrl = avatarUrl,
+                        fallbackLabel = post.authorName,
+                        contentColor = contentColor,
+                        size = 40.dp,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = post.authorName,
@@ -958,6 +973,28 @@ private fun QuotiCardPreview(
 }
 
 @Composable
+private fun PlatformBadge(
+    platform: SocialPlatform,
+    contentColor: Color,
+) {
+    Box(contentAlignment = Alignment.Center) {
+        if (platform == SocialPlatform.X) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_x_logo),
+                contentDescription = platform.label,
+                modifier = Modifier.size(17.dp),
+                tint = contentColor,
+            )
+        } else {
+            Text(
+                text = platform.label,
+                style = MaterialTheme.typography.titleMediumEmphasized,
+            )
+        }
+    }
+}
+
+@Composable
 private fun RelatedPostBlock(
     relatedPost: RelatedPost,
     showMedia: Boolean,
@@ -980,11 +1017,28 @@ private fun RelatedPostBlock(
             listOfNotNull(relatedPost.authorName, relatedPost.authorHandle)
                 .joinToString("  ")
                 .ifBlank { "Original post" }
-        Text(
-            text = "Répond à $author",
-            style = MaterialTheme.typography.labelLarge,
-            color = mutedColor,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            relatedPost.authorAvatarUrl?.let { avatarUrl ->
+                RemoteAvatar(
+                    avatarUrl = avatarUrl,
+                    fallbackLabel = author,
+                    contentColor = contentColor,
+                    size = 28.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = "$ReplyRelationshipLabel $author",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLarge,
+                color = mutedColor,
+            )
+        }
         Text(
             text = relatedPost.content,
             style = MaterialTheme.typography.bodyLarge,
@@ -995,6 +1049,43 @@ private fun RelatedPostBlock(
                 media = relatedPost.media,
                 contentColor = contentColor,
                 mutedColor = mutedColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RemoteAvatar(
+    avatarUrl: String,
+    fallbackLabel: String,
+    contentColor: Color,
+    size: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val avatar by produceState<Bitmap?>(initialValue = null, avatarUrl) {
+        value = loadRemoteBitmap(avatarUrl)
+    }
+
+    Box(
+        modifier =
+            modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(contentColor.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (avatar != null) {
+            Image(
+                bitmap = avatar!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Text(
+                text = avatarInitials(fallbackLabel),
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor.copy(alpha = 0.72f),
             )
         }
     }
@@ -1729,6 +1820,20 @@ private fun SettingsSheet(
 
 private fun selectPreviewPost(posts: List<QuotiPost>): QuotiPost? {
     return posts.firstOrNull { it.relatedPost != null } ?: posts.firstOrNull()
+}
+
+private fun avatarInitials(label: String): String {
+    val parts =
+        label
+            .replace("@", "")
+            .split(Regex("""[\s_.-]+"""))
+            .filter { part -> part.isNotBlank() }
+
+    return parts
+        .take(2)
+        .mapNotNull { part -> part.firstOrNull()?.uppercaseChar()?.toString() }
+        .joinToString("")
+        .ifBlank { "?" }
 }
 
 private fun QuotiPost.containsVideo(): Boolean {

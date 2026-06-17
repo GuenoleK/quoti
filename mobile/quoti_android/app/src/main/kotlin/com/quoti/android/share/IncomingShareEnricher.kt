@@ -27,6 +27,7 @@ class IncomingShareEnricher(
                 draft.post.copy(
                     authorName = enrichment.authorName ?: draft.post.authorName,
                     authorHandle = enrichment.authorHandle ?: draft.post.authorHandle,
+                    authorAvatarUrl = enrichment.authorAvatarUrl ?: draft.post.authorAvatarUrl,
                     content = enrichment.content ?: draft.post.content,
                     sourceUrl = enrichment.canonicalUrl ?: draft.post.sourceUrl,
                     media = enrichment.media.ifEmpty { draft.post.media },
@@ -59,6 +60,9 @@ class XPostEnrichmentAdapter {
         val authorHandle = authorUrl?.toAuthorHandle() ?: canonicalUrl?.toAuthorHandle()
         val content = XPostOEmbedParser.extractTweetText(oEmbed.optString("html"))
         val html = canonicalUrl?.let(::fetchText)
+        val authorAvatarUrl = html?.let { pageHtml ->
+            XPostPageParser.extractAuthorAvatarUrl(pageHtml, authorHandle = authorHandle)
+        }
         val pageMedia = html?.let(XPostPageParser::extractMedia).orEmpty()
         val relatedPost =
             if (includeRelatedPost && html != null) {
@@ -74,6 +78,7 @@ class XPostEnrichmentAdapter {
             canonicalUrl = canonicalUrl,
             authorName = oEmbed.optString("author_name").takeIf { it.isNotBlank() },
             authorHandle = authorHandle,
+            authorAvatarUrl = authorAvatarUrl,
             content = content,
             media = media,
             relatedPost = relatedPost,
@@ -110,6 +115,7 @@ data class XPostEnrichment(
     val canonicalUrl: String?,
     val authorName: String?,
     val authorHandle: String?,
+    val authorAvatarUrl: String?,
     val content: String?,
     val media: List<PostMedia>,
     val relatedPost: RelatedPost?,
@@ -119,6 +125,7 @@ data class XPostEnrichment(
         return RelatedPost(
             authorHandle = authorHandle,
             authorName = authorName,
+            authorAvatarUrl = authorAvatarUrl,
             content = relatedContent,
             media = media,
             sourceUrl = canonicalUrl,
@@ -151,6 +158,8 @@ internal object XPostOEmbedParser {
 internal object XPostPageParser {
     private val imageUrlPattern =
         Regex("""https://pbs\.twimg\.com/media/[^"'<\s]+""")
+    private val profileImageUrlPattern =
+        Regex("""https://pbs\.twimg\.com/profile_images/[^"'<\s]+""")
     private val videoPosterPattern =
         Regex("""https://pbs\.twimg\.com/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)/[^"'<\s]+""")
     private val videoVariantPattern =
@@ -179,6 +188,53 @@ internal object XPostPageParser {
                 .toList()
 
         return (videos + images).take(4)
+    }
+
+    fun extractAuthorAvatarUrl(
+        html: String,
+        authorHandle: String?,
+    ): String? {
+        val normalized = html.normalizedHtml()
+        val profileImageMatches = profileImageUrlPattern.findAll(normalized).toList()
+        if (profileImageMatches.isEmpty()) {
+            return null
+        }
+
+        val handle = authorHandle
+            ?.removePrefix("@")
+            ?.takeIf { it.isNotBlank() }
+        val selected =
+            handle?.let { author ->
+                val handleRanges =
+                    Regex(Regex.escape(author), RegexOption.IGNORE_CASE)
+                        .findAll(normalized)
+                        .map { match -> match.range }
+                        .toList()
+                val afterHandleMatch =
+                    profileImageMatches
+                        .mapNotNull { match ->
+                            handleRanges
+                                .filter { range -> match.range.first >= range.last }
+                                .minOfOrNull { range -> match.range.first - range.last }
+                                ?.takeIf { distance -> distance <= 1_200 }
+                                ?.let { distance -> match to distance }
+                        }
+                        .minByOrNull { (_, distance) -> distance }
+                        ?.first
+
+                afterHandleMatch
+                    ?: profileImageMatches
+                        .mapNotNull { match ->
+                            handleRanges
+                                .minOfOrNull { range -> match.range.distanceTo(range) }
+                                ?.takeIf { distance -> distance <= 1_200 }
+                                ?.let { distance -> match to distance }
+                        }
+                        .minByOrNull { (_, distance) -> distance }
+                        ?.first
+            } ?: profileImageMatches.firstOrNull()
+
+        return selected?.value?.normalizedProfileImageUrl()
     }
 
     fun extractRelatedStatusUrl(
@@ -325,6 +381,14 @@ private fun String.normalizedMediaUrl(): String {
         .replace(Regex(""":(?:small|medium|large|orig)$"""), ":large")
 }
 
+private fun String.normalizedProfileImageUrl(): String {
+    return normalizedMediaUrl()
+        .replace(
+            Regex("""_normal(\.(?:jpg|jpeg|png|webp))""", RegexOption.IGNORE_CASE),
+            "_400x400$1",
+        )
+}
+
 private fun String.mediaIdentity(): String {
     val path = runCatching { URI(this).path }.getOrNull().orEmpty()
     val fileName = path.substringAfterLast("/")
@@ -332,6 +396,14 @@ private fun String.mediaIdentity(): String {
         .substringBefore("?")
         .substringBefore(":")
         .substringBeforeLast(".", fileName)
+}
+
+private fun IntRange.distanceTo(other: IntRange): Int {
+    return when {
+        last < other.first -> other.first - last
+        other.last < first -> first - other.last
+        else -> 0
+    }
 }
 
 private fun String.isReservedXPathSegment(): Boolean {

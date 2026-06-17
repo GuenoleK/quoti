@@ -13,12 +13,14 @@ class QuotiPostJsonTest {
                 platform = SocialPlatform.X,
                 authorName = "Author",
                 authorHandle = "@author",
+                authorAvatarUrl = "https://pbs.twimg.com/profile_images/author_400x400.jpg",
                 content = "Main post",
                 relatedPost =
                     RelatedPost(
                         content = "Related post",
                         authorName = "Source",
                         authorHandle = "@source",
+                        authorAvatarUrl = "https://pbs.twimg.com/profile_images/source_400x400.jpg",
                         sourceUrl = "https://x.com/source/status/456",
                         media =
                             listOf(

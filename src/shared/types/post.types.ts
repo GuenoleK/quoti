@@ -23,6 +23,7 @@ export type PostMedia = ImagePostMedia | VideoPostMedia;
 export type RelatedPost = {
   authorHandle?: string;
   authorName?: string;
+  authorAvatarUrl?: string;
   content: string;
   media?: PostMedia[];
   sourceUrl?: string;
@@ -33,6 +34,7 @@ export type ExtractedPost = {
   platform: SocialPlatform;
   authorName: string;
   authorHandle: string;
+  authorAvatarUrl?: string;
   content: string;
   relatedPost?: RelatedPost;
   publishedAt?: string;

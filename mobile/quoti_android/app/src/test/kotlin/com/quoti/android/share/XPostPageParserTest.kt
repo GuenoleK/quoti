@@ -63,6 +63,39 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun extractsAuthorAvatarNearHandleFromXPageHtml() {
+        val html =
+            """
+            {
+              "other_user":"other",
+              "other_avatar":"https:\/\/pbs.twimg.com\/profile_images\/1\/other_normal.jpg",
+              "screen_name":"maya_laurent",
+              "profile_image_url_https":"https:\/\/pbs.twimg.com\/profile_images\/2\/maya_normal.jpg"
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "https://pbs.twimg.com/profile_images/2/maya_400x400.jpg",
+            XPostPageParser.extractAuthorAvatarUrl(html, authorHandle = "@maya_laurent"),
+        )
+    }
+
+    @Test
+    fun fallsBackToFirstProfileImageWhenHandleIsUnavailable() {
+        val html =
+            """
+            {
+              "profile_image_url_https":"https:\/\/pbs.twimg.com\/profile_images\/1\/fallback_normal.png"
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "https://pbs.twimg.com/profile_images/1/fallback_400x400.png",
+            XPostPageParser.extractAuthorAvatarUrl(html, authorHandle = null),
+        )
+    }
+
+    @Test
     fun extractsRelatedStatusUrlFromQuotedTweetReference() {
         val html =
             """

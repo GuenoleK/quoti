@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.1.11-clear-and-media-fix"
+        versionCode = 14
+        versionName = "0.1.13-logo-contrast"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

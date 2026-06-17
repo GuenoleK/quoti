@@ -1,12 +1,14 @@
 # Project Skills
 
-This folder is the single entry point for Quoti agent skills.
+This folder contains the historical/vendored Quoti agent skills.
 
 Skills follow the `SKILL.md` directory format used by the open agent skills standard. Each skill lives in its own directory and may include `references/`, `scripts/`, or `assets/` as needed.
 
+New Quoti-owned skills authored for this repository should live under `skills/quoti/<skill-name>/`, not in the user-level Codex skills directory and not in a `.codex` folder inside the repo.
+
 ## Quoti Skills
 
-Project-specific workflows live under `.skills/quoti/`.
+Existing project-specific workflows live under `.skills/quoti/`.
 
 - `chrome-extension-development`: Chrome Extension runtime behavior, Manifest V3, popup, service worker, content scripts, and messaging.
 - `create-component`: React component creation with colocated CSS, BEM naming, and theme tokens.

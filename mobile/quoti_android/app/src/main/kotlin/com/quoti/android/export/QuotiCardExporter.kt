@@ -35,11 +35,13 @@ import android.text.TextPaint
 import android.text.TextUtils
 import android.view.Surface
 import androidx.core.content.FileProvider
+import androidx.core.graphics.PathParser
 import com.quoti.android.core.model.CardContentMode
 import com.quoti.android.core.model.CardTone
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
+import com.quoti.android.core.model.SocialPlatform
 import com.quoti.android.core.model.hasMedia
 import java.io.File
 import java.net.HttpURLConnection
@@ -70,6 +72,9 @@ private const val HeaderHeight = 88f
 private const val SectionGap = 48f
 private const val SmallGap = 20f
 private const val RelatedPadding = 34f
+private const val AuthorAvatarSize = 64f
+private const val RelatedAvatarSize = 48f
+private const val AvatarGap = 20f
 private const val MinMediaHeight = 260f
 private const val PlaceholderMediaAspectRatio = 1.85f
 private const val MediaGridGap = 6f
@@ -83,6 +88,9 @@ private const val VideoExportMaxBitRate = 24_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
+private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
+private const val XLogoPathData =
+    "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932L18.901 1.153zM17.61 20.644h2.039L6.486 3.24H4.298L17.61 20.644z"
 
 object QuotiCardExporter {
     suspend fun writeCachePng(
@@ -220,6 +228,11 @@ object QuotiCardExporter {
             } else {
                 emptyList()
             }
+        val avatarBitmaps =
+            ExportAvatarBitmaps(
+                author = post.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
+                related = post.relatedPost?.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
+            )
 
         return try {
             withContext(Dispatchers.Default) {
@@ -228,9 +241,11 @@ object QuotiCardExporter {
                     cardTone = cardTone,
                     contentMode = contentMode,
                     mediaBitmaps = mediaBitmaps,
+                    avatarBitmaps = avatarBitmaps,
                 )
             }
         } finally {
+            avatarBitmaps.recycle()
             mediaBitmaps.forEach { media -> media.bitmap.recycle() }
         }
     }
@@ -277,6 +292,11 @@ object QuotiCardExporter {
                     )
                 }
             }
+        val avatarBitmaps =
+            ExportAvatarBitmaps(
+                author = post.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
+                related = post.relatedPost?.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
+            )
 
         val localVideoSource = downloadVideoSource(videoSource.playableVideoUrl ?: error("Missing playable video URL."), output)
 
@@ -289,11 +309,13 @@ object QuotiCardExporter {
                     cardTone = cardTone,
                     contentMode = contentMode,
                     mediaSlots = mediaSlots,
+                    avatarBitmaps = avatarBitmaps,
                     onProgress = onProgress,
                 )
             }
         } finally {
             localVideoSource.delete()
+            avatarBitmaps.recycle()
             mediaSlots.forEach { slot ->
                 if (slot is ExportVideoMediaSlot.StaticBitmap) {
                     slot.bitmap?.recycle()
@@ -309,6 +331,7 @@ object QuotiCardExporter {
         cardTone: CardTone,
         contentMode: CardContentMode,
         mediaSlots: List<ExportVideoMediaSlot>,
+        avatarBitmaps: ExportAvatarBitmaps,
         onProgress: (Int) -> Unit,
     ) {
         var encoder: AvcBitmapEncoder? = null
@@ -338,6 +361,7 @@ object QuotiCardExporter {
                             cardTone = cardTone,
                             contentMode = contentMode,
                             mediaBitmaps = mediaBitmaps,
+                            avatarBitmaps = avatarBitmaps,
                         ).also { preparedRenderer ->
                             frameRenderer = preparedRenderer
                         }).render(mediaBitmaps)
@@ -1142,9 +1166,10 @@ private object QuotiCardBitmapRenderer {
         cardTone: CardTone,
         contentMode: CardContentMode,
         mediaBitmaps: List<ExportMediaBitmap>,
+        avatarBitmaps: ExportAvatarBitmaps,
     ): Bitmap {
         val palette = RenderPalette.from(cardTone)
-        val measure = measure(post, palette, contentMode, mediaBitmaps)
+        val measure = measure(post, palette, contentMode, mediaBitmaps, avatarBitmaps)
         val bitmap = Bitmap.createBitmap(ExportBitmapWidth, measure.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
@@ -1159,9 +1184,10 @@ private object QuotiCardBitmapRenderer {
         cardTone: CardTone,
         contentMode: CardContentMode,
         mediaBitmaps: List<ExportMediaBitmap>,
+        avatarBitmaps: ExportAvatarBitmaps,
     ): VideoFrameRenderer {
         val palette = RenderPalette.from(cardTone)
-        val measure = measure(post, palette, contentMode, mediaBitmaps)
+        val measure = measure(post, palette, contentMode, mediaBitmaps, avatarBitmaps)
         val staticBase = Bitmap.createBitmap(ExportBitmapWidth, measure.height, Bitmap.Config.ARGB_8888)
         val staticCanvas = Canvas(staticBase)
 
@@ -1234,9 +1260,11 @@ private object QuotiCardBitmapRenderer {
         palette: RenderPalette,
         contentMode: CardContentMode,
         mediaBitmaps: List<ExportMediaBitmap>,
+        avatarBitmaps: ExportAvatarBitmaps,
     ): MeasuredCard {
         val contentWidth = ExportBitmapWidth - (CardPadding * 2).roundToInt()
-        val authorWidth = (contentWidth - 220).coerceAtLeast(360)
+        val authorAvatarSlot = if (avatarBitmaps.author != null) AuthorAvatarSize + AvatarGap else 0f
+        val authorWidth = (contentWidth - 220 - authorAvatarSlot).roundToInt().coerceAtLeast(360)
         val contentPaint = textPaint(palette.textPrimary, 54f, Typeface.SERIF)
         val metadataPaint = textPaint(palette.textSecondary, 32f, Typeface.SANS_SERIF)
         val authorPaint = textPaint(palette.textPrimary, 34f, Typeface.SANS_SERIF, bold = true)
@@ -1244,13 +1272,16 @@ private object QuotiCardBitmapRenderer {
         val brandPaint = textPaint(palette.brand, 40f, Typeface.SERIF, bold = true)
 
         val related = post.relatedPost?.let { relatedPost ->
+            val relatedAvatarSlot = if (avatarBitmaps.related != null) RelatedAvatarSize + AvatarGap else 0f
             val relatedContentWidth = (contentWidth - RelatedPadding * 2).roundToInt()
+            val relatedAuthorWidth = (relatedContentWidth - relatedAvatarSlot).roundToInt().coerceAtLeast(240)
             MeasuredRelatedPost(
+                authorAvatar = avatarBitmaps.related,
                 authorLayout =
                     textLayout(
                         text = relatedPost.authorLabel(),
                         paint = metadataPaint,
-                        width = relatedContentWidth,
+                        width = relatedAuthorWidth,
                         maxLines = 1,
                     ),
                 contentLayout =
@@ -1289,6 +1320,12 @@ private object QuotiCardBitmapRenderer {
                 alignment = Layout.Alignment.ALIGN_OPPOSITE,
                 maxLines = 1,
             )
+        val authorStackHeight = authorNameLayout.height + 10f + authorHandleLayout.height
+        val footerHeight =
+            max(
+                max(authorStackHeight, markLayout.height.toFloat()),
+                if (avatarBitmaps.author != null) AuthorAvatarSize else 0f,
+            )
 
         var height = CardPadding + HeaderHeight + SectionGap
         height += textLayout(post.content, contentPaint, contentWidth).height
@@ -1303,7 +1340,7 @@ private object QuotiCardBitmapRenderer {
         height += SectionGap
         height += 2f
         height += SmallGap
-        height += max(authorNameLayout.height + 10 + authorHandleLayout.height, markLayout.height)
+        height += footerHeight
         height += CardPadding
 
         return MeasuredCard(
@@ -1318,9 +1355,11 @@ private object QuotiCardBitmapRenderer {
             contentLayout = textLayout(post.content, contentPaint, contentWidth),
             relatedPost = related,
             mediaHeight = mediaHeight,
+            authorAvatar = avatarBitmaps.author,
             authorNameLayout = authorNameLayout,
             authorHandleLayout = authorHandleLayout,
             markLayout = markLayout,
+            footerHeight = footerHeight,
             height = ceil(height).toInt(),
         )
     }
@@ -1345,12 +1384,11 @@ private object QuotiCardBitmapRenderer {
 
         fillPaint.color = withAlpha(palette.textPrimary, 0.12f)
         canvas.drawOval(RectF(CardPadding, y, CardPadding + 72f, y + 72f), fillPaint)
-        drawCenteredText(
+        drawPlatformMark(
             canvas = canvas,
-            text = post.platform.label,
-            centerX = CardPadding + 36f,
-            centerY = y + 36f,
-            paint = textPaint(palette.textPrimary, 33f, Typeface.SANS_SERIF, bold = true),
+            platform = post.platform,
+            rect = RectF(CardPadding + 20f, y + 20f, CardPadding + 52f, y + 52f),
+            color = palette.textPrimary,
         )
         drawLayout(
             canvas = canvas,
@@ -1370,8 +1408,28 @@ private object QuotiCardBitmapRenderer {
             strokePaint.color = withAlpha(palette.textPrimary, 0.14f)
             canvas.drawRoundRect(relatedRect, 34f, 34f, strokePaint)
             var relatedY = y + RelatedPadding
-            drawLayout(canvas, relatedPost.authorLayout, CardPadding + RelatedPadding, relatedY)
-            relatedY += relatedPost.authorLayout.height + SmallGap
+            val relatedX = CardPadding + RelatedPadding
+            relatedPost.authorAvatar?.let { avatar ->
+                val avatarTop = relatedY + ((relatedPost.headerHeight - RelatedAvatarSize) / 2f)
+                drawCircularImage(
+                    canvas = canvas,
+                    bitmap = avatar,
+                    rect = RectF(relatedX, avatarTop, relatedX + RelatedAvatarSize, avatarTop + RelatedAvatarSize),
+                )
+            }
+            val relatedAuthorX =
+                if (relatedPost.authorAvatar != null) {
+                    relatedX + RelatedAvatarSize + AvatarGap
+                } else {
+                    relatedX
+                }
+            drawLayout(
+                canvas = canvas,
+                layout = relatedPost.authorLayout,
+                x = relatedAuthorX,
+                y = relatedY + ((relatedPost.headerHeight - relatedPost.authorLayout.height) / 2f),
+            )
+            relatedY += relatedPost.headerHeight + SmallGap
             drawLayout(canvas, relatedPost.contentLayout, CardPadding + RelatedPadding, relatedY)
             y += relatedHeight
         }
@@ -1390,18 +1448,36 @@ private object QuotiCardBitmapRenderer {
         canvas.drawLine(CardPadding, y, CardPadding + contentWidth, y, strokePaint)
         y += SmallGap
 
-        drawLayout(canvas, measure.authorNameLayout, CardPadding, y)
+        val footerTop = y
+        val authorStackHeight = measure.authorNameLayout.height + 10f + measure.authorHandleLayout.height
+        val authorTextY = footerTop + ((measure.footerHeight - authorStackHeight) / 2f)
+        val authorTextX =
+            if (measure.authorAvatar != null) {
+                CardPadding + AuthorAvatarSize + AvatarGap
+            } else {
+                CardPadding
+            }
+
+        measure.authorAvatar?.let { avatar ->
+            val avatarTop = footerTop + ((measure.footerHeight - AuthorAvatarSize) / 2f)
+            drawCircularImage(
+                canvas = canvas,
+                bitmap = avatar,
+                rect = RectF(CardPadding, avatarTop, CardPadding + AuthorAvatarSize, avatarTop + AuthorAvatarSize),
+            )
+        }
+        drawLayout(canvas, measure.authorNameLayout, authorTextX, authorTextY)
         drawLayout(
             canvas = canvas,
             layout = measure.authorHandleLayout,
-            x = CardPadding,
-            y = y + measure.authorNameLayout.height + 10f,
+            x = authorTextX,
+            y = authorTextY + measure.authorNameLayout.height + 10f,
         )
         drawLayout(
             canvas = canvas,
             layout = measure.markLayout,
             x = ExportBitmapWidth - CardPadding - measure.markLayout.width,
-            y = y,
+            y = footerTop + ((measure.footerHeight - measure.markLayout.height) / 2f),
         )
     }
 
@@ -1464,6 +1540,53 @@ private object QuotiCardBitmapRenderer {
         }
     }
 
+    private fun drawPlatformMark(
+        canvas: Canvas,
+        platform: SocialPlatform,
+        rect: RectF,
+        color: Int,
+    ) {
+        if (platform == SocialPlatform.X) {
+            drawXLogo(canvas, rect, color)
+            return
+        }
+
+        drawCenteredText(
+            canvas = canvas,
+            text = platform.label,
+            centerX = rect.centerX(),
+            centerY = rect.centerY(),
+            paint = textPaint(color, 33f, Typeface.SANS_SERIF, bold = true),
+        )
+    }
+
+    private fun drawXLogo(
+        canvas: Canvas,
+        rect: RectF,
+        color: Int,
+    ) {
+        val path = PathParser.createPathFromPathData(XLogoPathData)
+        val scale = min(rect.width(), rect.height()) / 24f
+        val width = 24f * scale
+        val height = 24f * scale
+        val matrix =
+            Matrix().apply {
+                postScale(scale, scale)
+                postTranslate(
+                    rect.left + ((rect.width() - width) / 2f),
+                    rect.top + ((rect.height() - height) / 2f),
+                )
+            }
+        val paint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                this.color = color
+            }
+
+        path.transform(matrix)
+        canvas.drawPath(path, paint)
+    }
+
     private fun drawMedia(
         canvas: Canvas,
         mediaBitmaps: List<ExportMediaBitmap>,
@@ -1516,6 +1639,21 @@ private object QuotiCardBitmapRenderer {
         canvas.drawRoundRect(rect, 42f, 42f, strokePaint)
     }
 
+    private fun drawCircularImage(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        rect: RectF,
+    ) {
+        canvas.save()
+        canvas.clipPath(
+            Path().apply {
+                addOval(rect, Path.Direction.CW)
+            },
+        )
+        drawImageCover(canvas, bitmap, rect)
+        canvas.restore()
+    }
+
     private fun drawMediaGrid(
         canvas: Canvas,
         mediaBitmaps: List<ExportMediaBitmap>,
@@ -1536,6 +1674,22 @@ private object QuotiCardBitmapRenderer {
                 }
             }
         }
+    }
+
+    private fun drawImageCover(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        rect: RectF,
+    ) {
+        val scale = max(rect.width() / bitmap.width, rect.height() / bitmap.height)
+        val width = bitmap.width * scale
+        val height = bitmap.height * scale
+        val left = rect.left + ((rect.width() - width) / 2f)
+        val top = rect.top + ((rect.height() - height) / 2f)
+        val destination = RectF(left, top, left + width, top + height)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+        canvas.drawBitmap(bitmap, null, destination, paint)
     }
 
     private fun drawImageFit(
@@ -1599,18 +1753,24 @@ private data class MeasuredCard(
     val contentLayout: StaticLayout,
     val relatedPost: MeasuredRelatedPost?,
     val mediaHeight: Float,
+    val authorAvatar: Bitmap?,
     val authorNameLayout: StaticLayout,
     val authorHandleLayout: StaticLayout,
     val markLayout: StaticLayout,
+    val footerHeight: Float,
     val height: Int,
 )
 
 private data class MeasuredRelatedPost(
+    val authorAvatar: Bitmap?,
     val authorLayout: StaticLayout,
     val contentLayout: StaticLayout,
 ) {
+    val headerHeight: Float
+        get() = max(authorLayout.height.toFloat(), if (authorAvatar != null) RelatedAvatarSize else 0f)
+
     val height: Float
-        get() = RelatedPadding + authorLayout.height + SmallGap + contentLayout.height + RelatedPadding
+        get() = RelatedPadding + headerHeight + SmallGap + contentLayout.height + RelatedPadding
 }
 
 private data class RenderPalette(
@@ -1643,6 +1803,16 @@ private data class ExportMediaBitmap(
     val bitmap: Bitmap,
     val isVideo: Boolean,
 )
+
+private data class ExportAvatarBitmaps(
+    val author: Bitmap?,
+    val related: Bitmap?,
+) {
+    fun recycle() {
+        author?.recycle()
+        related?.recycle()
+    }
+}
 
 private data class VideoExportSize(
     val width: Int,
@@ -1685,7 +1855,7 @@ private fun textLayout(
         .build()
 
 private fun RelatedPost.authorLabel(): String =
-    "Répond à " + listOfNotNull(authorName, authorHandle)
+    "$ReplyRelationshipLabel " + listOfNotNull(authorName, authorHandle)
         .joinToString("  ")
         .ifBlank { "Original post" }
 

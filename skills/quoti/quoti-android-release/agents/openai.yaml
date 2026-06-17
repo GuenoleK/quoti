@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quoti Android Release"
+  short_description: "Build and publish Quoti APKs"
+  default_prompt: "Use $quoti-android-release after changing the Quoti Android app to build, test, upload, and report a versioned APK."

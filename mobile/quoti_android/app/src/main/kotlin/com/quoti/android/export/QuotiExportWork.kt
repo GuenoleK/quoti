@@ -26,6 +26,7 @@ import com.quoti.android.core.model.quotiPostFromJsonString
 import com.quoti.android.core.model.toJsonString
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -47,6 +48,7 @@ object QuotiExportWork {
         exportType: QuotiExportType,
         cardTone: CardTone,
         contentMode: CardContentMode,
+        selectedVideoSourceId: String? = null,
     ): UUID =
         withContext(Dispatchers.IO) {
             val applicationContext = context.applicationContext
@@ -55,18 +57,24 @@ object QuotiExportWork {
                 .also(File::mkdirs)
                 .resolve("$jobId.json")
             jsonFile.writeText(post.toJsonString())
+            val inputData =
+                mutableListOf<Pair<String, Any?>>(
+                    InputJobId to jobId,
+                    InputPostJsonPath to jsonFile.absolutePath,
+                    InputExportType to exportType.name,
+                    InputCardTone to cardTone.name,
+                    InputContentMode to contentMode.name,
+                    InputNotificationId to stableNotificationId(jobId),
+                ).apply {
+                    if (selectedVideoSourceId != null) {
+                        add(InputSelectedVideoSourceId to selectedVideoSourceId)
+                    }
+                }
 
             val request =
                 OneTimeWorkRequestBuilder<QuotiExportWorker>()
                     .setInputData(
-                        workDataOf(
-                            InputJobId to jobId,
-                            InputPostJsonPath to jsonFile.absolutePath,
-                            InputExportType to exportType.name,
-                            InputCardTone to cardTone.name,
-                            InputContentMode to contentMode.name,
-                            InputNotificationId to stableNotificationId(jobId),
-                        ),
+                        workDataOf(*inputData.toTypedArray()),
                     )
                     .addTag(ExportWorkTag)
                     .build()
@@ -98,10 +106,11 @@ class QuotiExportWorker(
         val jsonPath = inputData.getString(InputPostJsonPath) ?: return Result.failure()
         val jsonFile = File(jsonPath)
         val notificationId = inputData.getInt(InputNotificationId, stableNotificationId(id.toString()))
+        val selectedVideoSourceId = inputData.getString(InputSelectedVideoSourceId)
         val outputMimeType = exportType.outputMimeType
 
         notifications.ensureChannel()
-        setForeground(notifications.foregroundInfo(exportType, notificationId))
+        setForeground(notifications.foregroundInfo(exportType, notificationId, id))
         setProgressPercent(0)
 
         return try {
@@ -126,6 +135,7 @@ class QuotiExportWorker(
                             post = post,
                             cardTone = cardTone,
                             contentMode = CardContentMode.WithMedia,
+                            selectedVideoSourceId = selectedVideoSourceId,
                             onProgress = ::setProgressPercent,
                         )
                 }
@@ -140,6 +150,8 @@ class QuotiExportWorker(
                     QuotiExportWork.OutputFailureMessage to exportType.openFailureMessage,
                 ),
             )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (throwable: Throwable) {
             notifications.showFailed(exportType, notificationId + 2)
             Result.failure(
@@ -187,7 +199,9 @@ private class QuotiExportNotifications(
     fun foregroundInfo(
         exportType: QuotiExportType,
         notificationId: Int,
+        workId: UUID,
     ): ForegroundInfo {
+        val cancelIntent = WorkManager.getInstance(context).createCancelPendingIntent(workId)
         val notification =
             baseBuilder()
                 .setContentTitle(exportType.processingTitle)
@@ -196,6 +210,7 @@ private class QuotiExportNotifications(
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setProgress(0, 0, true)
+                .addAction(R.drawable.ic_notification_quoti, "Stop", cancelIntent)
                 .build()
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -342,3 +357,4 @@ private const val InputExportType = "export_type"
 private const val InputCardTone = "card_tone"
 private const val InputContentMode = "content_mode"
 private const val InputNotificationId = "notification_id"
+private const val InputSelectedVideoSourceId = "selected_video_source_id"

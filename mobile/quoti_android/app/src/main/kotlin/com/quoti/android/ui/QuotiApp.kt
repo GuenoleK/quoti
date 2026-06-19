@@ -6,19 +6,22 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.SurfaceTexture
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.view.ContextThemeWrapper
-import android.view.Surface
-import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -27,6 +30,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -50,8 +54,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.automirrored.outlined.VolumeOff
-import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Image
@@ -59,9 +61,11 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
@@ -82,6 +86,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -104,6 +109,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -112,6 +118,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -123,10 +130,19 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.quoti.android.R
@@ -140,12 +156,14 @@ import com.quoti.android.core.model.SocialPlatform
 import com.quoti.android.export.QuotiExportType
 import com.quoti.android.export.QuotiExportWork
 import com.quoti.android.export.QuotiCardExporter
+import com.quoti.android.export.selectExportVideoUrl
 import com.quoti.android.share.IncomingShareDraft
 import com.google.android.material.loadingindicator.LoadingIndicator
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -155,6 +173,8 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
+private const val TwoMediaGridAspectRatio = 2f
+private const val MultiMediaGridAspectRatio = 1.7777778f
 
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
@@ -206,6 +226,9 @@ fun QuotiApp(
     var activeExportId by rememberSaveable { mutableStateOf<String?>(null) }
     var activeExportTypeName by rememberSaveable { mutableStateOf<String?>(null) }
     var activeExportInfo by remember { mutableStateOf<WorkInfo?>(null) }
+    var pendingVideoExportPost by remember { mutableStateOf<QuotiPost?>(null) }
+    var selectedVideoExportSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeMediaViewer by remember { mutableStateOf<MediaViewerRequest?>(null) }
     val activeExportType =
         activeExportTypeName
             ?.let { typeName -> runCatching { QuotiExportType.valueOf(typeName) }.getOrNull() }
@@ -234,6 +257,9 @@ fun QuotiApp(
     val post = (shareState as? QuotiShareState.Ready)?.draft?.post
 
     LaunchedEffect(post?.id) {
+        pendingVideoExportPost = null
+        selectedVideoExportSourceId = null
+        activeMediaViewer = null
         if (post != null) {
             snackbarHostState.showSnackbar("Shared post captured")
         }
@@ -308,6 +334,7 @@ fun QuotiApp(
         activePost: QuotiPost,
         exportType: QuotiExportType,
         exportContentMode: CardContentMode,
+        selectedVideoSourceId: String? = null,
     ) {
         if (isExportProcessing) {
             return
@@ -322,6 +349,7 @@ fun QuotiApp(
                     exportType = exportType,
                     cardTone = settings.cardTone,
                     contentMode = exportContentMode,
+                    selectedVideoSourceId = selectedVideoSourceId,
                 )
             }.fold(
                 onSuccess = { workId ->
@@ -331,6 +359,50 @@ fun QuotiApp(
                 },
                 onFailure = {
                     snackbarHostState.showSnackbar(exportType.failedSnackbarMessage)
+                },
+            )
+        }
+    }
+
+    fun requestVideoExport(activePost: QuotiPost) {
+        if (isExportProcessing) {
+            return
+        }
+
+        val choices = activePost.videoExportChoices()
+        when (choices.size) {
+            0 -> startExport(activePost, QuotiExportType.Video, CardContentMode.WithMedia)
+            1 -> startExport(
+                activePost = activePost,
+                exportType = QuotiExportType.Video,
+                exportContentMode = CardContentMode.WithMedia,
+                selectedVideoSourceId = choices.first().sourceId,
+            )
+
+            else -> {
+                pendingVideoExportPost = activePost
+                selectedVideoExportSourceId = choices.first().sourceId
+            }
+        }
+    }
+
+    fun cancelActiveExport() {
+        val workId =
+            activeExportId
+                ?.let { id -> runCatching { UUID.fromString(id) }.getOrNull() }
+        val exportType = activeExportType
+        if (workId != null) {
+            workManager.cancelWorkById(workId)
+        }
+        activeExportId = null
+        activeExportTypeName = null
+        activeExportInfo = null
+        scope.launch {
+            snackbarHostState.showSnackbar(
+                if (exportType == QuotiExportType.Video) {
+                    "Video processing stopped"
+                } else {
+                    "Export stopped"
                 },
             )
         }
@@ -351,6 +423,8 @@ fun QuotiApp(
             isExportProcessing = isExportProcessing,
             activeExportType = activeExportType,
             activeExportProgress = activeExportProgress,
+            onCancelExport = ::cancelActiveExport,
+            onOpenMedia = { request -> activeMediaViewer = request },
             onCardToneChange = { cardTone = it },
             onContentModeChange = { contentMode = it },
             onSettingsClick = { showSettings = true },
@@ -382,7 +456,7 @@ fun QuotiApp(
             },
             onDownloadVideo = {
                 val activePost = post ?: return@QuotiCaptureScreen
-                startExport(activePost, QuotiExportType.Video, CardContentMode.WithMedia)
+                requestVideoExport(activePost)
             },
             onDownloadPng = {
                 val activePost = post ?: return@QuotiCaptureScreen
@@ -445,6 +519,39 @@ fun QuotiApp(
         )
     }
 
+    activeMediaViewer?.let { request ->
+        MediaViewerOverlay(
+            request = request,
+            onDismiss = { activeMediaViewer = null },
+        )
+    }
+
+    pendingVideoExportPost?.let { videoExportPost ->
+        val choices = videoExportPost.videoExportChoices()
+        if (choices.size > 1) {
+            val selectedSourceId = selectedVideoExportSourceId ?: choices.first().sourceId
+            VideoSourcePickerDialog(
+                choices = choices,
+                selectedSourceId = selectedSourceId,
+                onSelect = { sourceId -> selectedVideoExportSourceId = sourceId },
+                onDismiss = {
+                    pendingVideoExportPost = null
+                    selectedVideoExportSourceId = null
+                },
+                onConfirm = {
+                    pendingVideoExportPost = null
+                    selectedVideoExportSourceId = null
+                    startExport(
+                        activePost = videoExportPost,
+                        exportType = QuotiExportType.Video,
+                        exportContentMode = CardContentMode.WithMedia,
+                        selectedVideoSourceId = selectedSourceId,
+                    )
+                },
+            )
+        }
+    }
+
     if (showSettings) {
         SettingsSheet(
             settings = settings,
@@ -487,12 +594,265 @@ private fun QuotiSnackbarHost(
 }
 
 @Composable
+private fun VideoSourcePickerDialog(
+    choices: List<VideoExportChoice>,
+    selectedSourceId: String,
+    onSelect: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = "Choose video") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                choices.forEach { choice ->
+                    val selected = choice.sourceId == selectedSourceId
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelect(choice.sourceId) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = { onSelect(choice.sourceId) },
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = choice.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = choice.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(text = "Use video")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = "Cancel")
+            }
+        },
+    )
+}
+
+private data class VideoExportChoice(
+    val sourceId: String,
+    val title: String,
+    val subtitle: String,
+)
+
+private fun QuotiPost.videoExportChoices(): List<VideoExportChoice> {
+    return buildList {
+        addVideoExportChoices(label = "Main post", media = media)
+        relatedPost?.let { related ->
+            addVideoExportChoices(label = "Quoted post", media = related.media)
+        }
+    }.distinctBy { choice -> choice.sourceId }
+}
+
+private fun MutableList<VideoExportChoice>.addVideoExportChoices(
+    label: String,
+    media: List<PostMedia>,
+) {
+    var videoIndex = 0
+    media.forEach { item ->
+        val video = item as? PostMedia.Video ?: return@forEach
+        val sourceId = video.exportVideoSourceId() ?: return@forEach
+        videoIndex += 1
+        add(
+            VideoExportChoice(
+                sourceId = sourceId,
+                title = "$label video $videoIndex",
+                subtitle = sourceId,
+            ),
+        )
+    }
+}
+
+private fun PostMedia.Video.exportVideoSourceId(): String? {
+    val candidates = listOfNotNull(url) + variants
+    return selectExportVideoUrl(candidates)
+}
+
+private data class MediaViewerRequest(
+    val videoUrl: String? = null,
+    val bitmap: Bitmap?,
+    val aspectRatio: Float,
+) {
+    val isVideo: Boolean
+        get() = videoUrl != null
+
+    val key: String
+        get() = videoUrl ?: "image-${bitmap?.generationId ?: 0}"
+}
+
+@Composable
+private fun MediaViewerOverlay(
+    request: MediaViewerRequest,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var visible by remember(request.key) { mutableStateOf(false) }
+    var playbackState by remember(request.key) {
+        mutableStateOf(if (request.isVideo) VideoPlaybackState.Loading else VideoPlaybackState.Playing)
+    }
+
+    fun close() {
+        scope.launch {
+            visible = false
+            delay(140)
+            onDismiss()
+        }
+    }
+
+    BackHandler(onBack = ::close)
+
+    LaunchedEffect(request.key) {
+        playbackState = if (request.isVideo) VideoPlaybackState.Loading else VideoPlaybackState.Playing
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .zIndex(20f),
+        enter =
+            fadeIn(animationSpec = tween(120)) +
+                scaleIn(
+                    animationSpec = tween(190),
+                    initialScale = 0.82f,
+                ),
+        exit =
+            fadeOut(animationSpec = tween(110)) +
+                scaleOut(
+                    animationSpec = tween(130),
+                    targetScale = 0.9f,
+                ),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.Black,
+            contentColor = Color.White,
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .navigationBarsPadding(),
+                contentAlignment = Alignment.Center,
+            ) {
+                request.bitmap?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(request.aspectRatio.coerceIn(0.56f, 2.35f)),
+                    )
+                }
+
+                request.videoUrl?.let { videoUrl ->
+                    VideoPlayer(
+                        videoUrl = videoUrl,
+                        muted = false,
+                        onFirstFrame = { playbackState = VideoPlaybackState.Playing },
+                        onError = { playbackState = VideoPlaybackState.Error },
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    alpha = if (playbackState == VideoPlaybackState.Playing) 1f else 0f
+                                },
+                    )
+                }
+
+                if (request.isVideo && playbackState == VideoPlaybackState.Error) {
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "Unable to play this video here",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                        )
+                        TextButton(onClick = { request.videoUrl?.let(context::openVideoExternally) }) {
+                            Text(text = "Open externally")
+                        }
+                    }
+                }
+
+                IconButton(
+                    onClick = ::close,
+                    modifier =
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "Close media",
+                        tint = Color.White,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Context.openVideoExternally(videoUrl: String) {
+    val uri = Uri.parse(videoUrl)
+    val videoIntent =
+        Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "video/*")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    runCatching {
+        startActivity(videoIntent)
+    }.recoverCatching {
+        startActivity(
+            Intent(Intent.ACTION_VIEW, uri)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+}
+
+@Composable
 private fun QuotiCaptureScreen(
     shareState: QuotiShareState,
     settings: QuotiUiSettings,
     isExportProcessing: Boolean,
     activeExportType: QuotiExportType,
     activeExportProgress: Int,
+    onCancelExport: () -> Unit,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
     onSettingsClick: () -> Unit,
@@ -557,6 +917,7 @@ private fun QuotiCaptureScreen(
                         post = shareState.draft.post,
                         cardTone = settings.cardTone,
                         contentMode = settings.contentMode,
+                        onOpenMedia = onOpenMedia,
                     )
                     ExpressiveChoiceGroup(
                         value = settings.cardTone,
@@ -596,6 +957,7 @@ private fun QuotiCaptureScreen(
                 ExportProcessingState(
                     exportType = activeExportType,
                     progressPercent = activeExportProgress,
+                    onCancel = onCancelExport,
                     modifier =
                         Modifier
                             .widthIn(max = 440.dp)
@@ -648,6 +1010,7 @@ private fun LoadingCaptureState() {
 private fun ExportProcessingState(
     exportType: QuotiExportType,
     progressPercent: Int,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     StateFrame(modifier = modifier) {
@@ -681,6 +1044,16 @@ private fun ExportProcessingState(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(modifier = Modifier.height(16.dp))
+        TextButton(onClick = onCancel) {
+            Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = if (exportType == QuotiExportType.Video) "Stop processing" else "Cancel export")
+        }
     }
 }
 
@@ -841,6 +1214,7 @@ private fun PreviewFrame(
     post: QuotiPost,
     cardTone: CardTone,
     contentMode: CardContentMode,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -848,11 +1222,12 @@ private fun PreviewFrame(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
     ) {
-        Box(modifier = Modifier.padding(12.dp)) {
+        Box(modifier = Modifier.padding(8.dp)) {
             QuotiCardPreview(
                 post = post,
                 cardTone = cardTone,
                 contentMode = contentMode,
+                onOpenMedia = onOpenMedia,
             )
         }
     }
@@ -863,6 +1238,7 @@ private fun QuotiCardPreview(
     post: QuotiPost,
     cardTone: CardTone,
     contentMode: CardContentMode,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dark = cardTone == CardTone.Dark
@@ -882,15 +1258,72 @@ private fun QuotiCardPreview(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val authorMaxWidth = maxWidth * 0.56f
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AuthorIdentity(
+                        avatarUrl = post.authorAvatarUrl,
+                        authorName = post.authorName,
+                        authorHandle = post.authorHandle,
+                        contentColor = contentColor,
+                        mutedColor = mutedColor,
+                        modifier = Modifier.widthIn(max = authorMaxWidth),
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = formatDate(post.publishedAt ?: post.capturedAt),
+                        maxLines = 1,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = mutedColor,
+                    )
+                }
+            }
+
+            Text(
+                text = post.content,
+                style =
+                    MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 21.sp,
+                        lineHeight = 29.sp,
+                    ),
+                color = contentColor,
+            )
+
+            if (contentMode == CardContentMode.WithMedia && post.media.isNotEmpty()) {
+                RemoteMedia(
+                    media = post.media,
+                    contentColor = contentColor,
+                    mutedColor = mutedColor,
+                    presentation = MediaPresentation.Target,
+                    onOpenMedia = onOpenMedia,
+                )
+            }
+
+            post.relatedPost?.let { relatedPost ->
+                RelatedPostBlock(
+                    relatedPost = relatedPost,
+                    showMedia = contentMode == CardContentMode.WithMedia,
+                    contentColor = contentColor,
+                    mutedColor = mutedColor,
+                    onOpenMedia = onOpenMedia,
+                )
+            }
+
+            HorizontalDivider(color = dividerColor)
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Surface(
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(34.dp),
                     shape = CircleShape,
                     color = contentColor.copy(alpha = 0.12f),
                     contentColor = contentColor,
@@ -902,72 +1335,52 @@ private fun QuotiCardPreview(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = formatDate(post.publishedAt ?: post.capturedAt),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = mutedColor,
-                )
-            }
-
-            Text(
-                text = post.content,
-                style = MaterialTheme.typography.headlineMedium,
-                color = contentColor,
-            )
-
-            post.relatedPost?.let { relatedPost ->
-                RelatedPostBlock(
-                    relatedPost = relatedPost,
-                    showMedia = contentMode == CardContentMode.WithMedia,
-                    contentColor = contentColor,
-                    mutedColor = mutedColor,
-                )
-            }
-
-            if (contentMode == CardContentMode.WithMedia && post.media.isNotEmpty()) {
-                RemoteMedia(
-                    media = post.media,
-                    contentColor = contentColor,
-                    mutedColor = mutedColor,
-                )
-            }
-
-            HorizontalDivider(color = dividerColor)
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                post.authorAvatarUrl?.let { avatarUrl ->
-                    RemoteAvatar(
-                        avatarUrl = avatarUrl,
-                        fallbackLabel = post.authorName,
-                        contentColor = contentColor,
-                        size = 40.dp,
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = post.authorName,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                        color = contentColor,
-                    )
-                    Text(
-                        text = post.authorHandle,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = mutedColor,
-                    )
-                }
-                Text(
                     text = "Quoti",
                     style = MaterialTheme.typography.titleMediumEmphasized,
                     color = if (dark) Color(0xFFFFC7A8) else Color(0xFF7A442F),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun AuthorIdentity(
+    avatarUrl: String?,
+    authorName: String,
+    authorHandle: String,
+    contentColor: Color,
+    mutedColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        avatarUrl?.let { url ->
+            RemoteAvatar(
+                avatarUrl = url,
+                fallbackLabel = authorName,
+                contentColor = contentColor,
+                size = 40.dp,
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+        }
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = authorName,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLargeEmphasized,
+                color = contentColor,
+            )
+            Text(
+                text = authorHandle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = mutedColor,
+            )
         }
     }
 }
@@ -1000,6 +1413,7 @@ private fun RelatedPostBlock(
     showMedia: Boolean,
     contentColor: Color,
     mutedColor: Color,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
 ) {
     Column(
         modifier =
@@ -1010,7 +1424,7 @@ private fun RelatedPostBlock(
                     color = contentColor.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(16.dp),
                 )
-                .padding(14.dp),
+                .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val author =
@@ -1039,16 +1453,34 @@ private fun RelatedPostBlock(
                 color = mutedColor,
             )
         }
-        Text(
-            text = relatedPost.content,
-            style = MaterialTheme.typography.bodyLarge,
-            color = contentColor,
-        )
         if (showMedia && relatedPost.media.isNotEmpty()) {
+            Text(
+                text = relatedPost.content,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                style =
+                    MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp,
+                    ),
+                color = contentColor,
+            )
             RemoteMedia(
                 media = relatedPost.media,
                 contentColor = contentColor,
                 mutedColor = mutedColor,
+                presentation = MediaPresentation.Related,
+                onOpenMedia = onOpenMedia,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(148.dp),
+            )
+        } else {
+            Text(
+                text = relatedPost.content,
+                style = MaterialTheme.typography.bodyLarge,
+                color = contentColor,
             )
         }
     }
@@ -1096,19 +1528,26 @@ private fun RemoteMedia(
     media: List<PostMedia>,
     contentColor: Color,
     mutedColor: Color,
+    presentation: MediaPresentation,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val sources = media.mapNotNull(PostMedia::previewSource).take(4)
-    val mediaKey = sources.joinToString("|") { source -> source.url }
+    val mediaKey = sources.joinToString("|") { source -> "${source.sourceId}:${source.url}" }
     val loadedMedia by produceState<List<LoadedRemoteMedia>>(initialValue = emptyList(), mediaKey) {
         value = emptyList()
         value =
             sources.mapNotNull { source ->
-                loadRemoteBitmap(source.url)?.let { bitmap ->
+                val bitmap = loadRemoteBitmap(source.url)
+                if (bitmap != null || source.playableVideoUrl != null) {
                     LoadedRemoteMedia(
+                        sourceId = source.sourceId,
                         bitmap = bitmap,
                         isVideo = source.isVideo,
                         playableVideoUrl = source.playableVideoUrl,
                     )
+                } else {
+                    null
                 }
             }
     }
@@ -1117,6 +1556,8 @@ private fun RemoteMedia(
         MediaPlaceholder(
             contentColor = contentColor,
             mutedColor = mutedColor,
+            compact = presentation == MediaPresentation.Related,
+            modifier = modifier,
         )
         return
     }
@@ -1125,11 +1566,17 @@ private fun RemoteMedia(
         SingleRemoteMedia(
             media = loadedMedia.first(),
             contentColor = contentColor,
+            presentation = presentation,
+            onOpenMedia = onOpenMedia,
+            modifier = modifier,
         )
     } else {
         RemoteMediaGrid(
             media = loadedMedia,
             contentColor = contentColor,
+            presentation = presentation,
+            onOpenMedia = onOpenMedia,
+            modifier = modifier,
         )
     }
 }
@@ -1138,68 +1585,54 @@ private fun RemoteMedia(
 private fun SingleRemoteMedia(
     media: LoadedRemoteMedia,
     contentColor: Color,
+    presentation: MediaPresentation,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val aspectRatio = media.aspectRatio.coerceIn(0.62f, 2.35f)
-    var videoMuted by remember(media.playableVideoUrl) { mutableStateOf(true) }
-    Box(
-        modifier =
-            Modifier
+    val mediaModifier =
+        if (presentation == MediaPresentation.Related) {
+            modifier
+        } else {
+            modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
+        }
+    Box(
+        modifier =
+            mediaModifier
                 .clip(RoundedCornerShape(18.dp))
-                .background(contentColor.copy(alpha = 0.08f)),
+                .background(contentColor.copy(alpha = 0.08f))
+                .then(
+                    if (media.canOpenInViewer) {
+                        Modifier.clickable { onOpenMedia(media.toMediaViewerRequest()) }
+                    } else {
+                        Modifier
+                    },
+                ),
         contentAlignment = Alignment.Center,
     ) {
-        if (media.isVideo && media.playableVideoUrl != null) {
-            VideoPlayer(
-                videoUrl = media.playableVideoUrl,
-                muted = videoMuted,
-                modifier = Modifier.fillMaxSize(),
-            )
-            VideoSoundButton(
-                muted = videoMuted,
-                onClick = { videoMuted = !videoMuted },
-                modifier =
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(10.dp),
-            )
-        } else {
+        if (media.bitmap != null) {
             Image(
                 bitmap = media.bitmap.asImageBitmap(),
                 contentDescription = null,
-                contentScale = ContentScale.Fit,
+                contentScale =
+                    if (presentation == MediaPresentation.Related) {
+                        ContentScale.Crop
+                    } else {
+                        ContentScale.Fit
+                    },
                 modifier = Modifier.fillMaxSize(),
             )
-            if (media.isVideo) {
-                VideoBadge()
-            }
         }
-    }
-}
 
-@Composable
-private fun VideoSoundButton(
-    muted: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val contentDescription = if (muted) "Enable sound" else "Mute video"
-    Surface(
-        modifier = modifier.size(44.dp),
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.62f),
-        contentColor = Color.White,
-    ) {
-        IconButton(
-            onClick = onClick,
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            Icon(
-                imageVector = if (muted) Icons.AutoMirrored.Outlined.VolumeOff else Icons.AutoMirrored.Outlined.VolumeUp,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(22.dp),
+        if (media.isVideo && media.playableVideoUrl != null) {
+            VideoPlayButton(
+                compact = presentation == MediaPresentation.Related,
+                onClick = { onOpenMedia(media.toMediaViewerRequest()) },
             )
+        } else if (media.isVideo) {
+            VideoBadge(compact = presentation == MediaPresentation.Related)
         }
     }
 }
@@ -1208,187 +1641,260 @@ private fun VideoSoundButton(
 private fun VideoPlayer(
     videoUrl: String,
     muted: Boolean,
+    onFirstFrame: () -> Unit,
+    onError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
+    val currentOnError by rememberUpdatedState(onError)
+    val player =
+        remember(videoUrl) {
+            val dataSourceFactory =
+                DefaultHttpDataSource.Factory()
+                    .setUserAgent("Quoti Android")
+                    .setAllowCrossProtocolRedirects(true)
+
+            ExoPlayer
+                .Builder(context)
+                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                .build()
+                .apply {
+                    setMediaItem(MediaItem.fromUri(Uri.parse(videoUrl)))
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    playWhenReady = true
+                    volume = if (muted) 0f else 1f
+                    prepare()
+                }
+        }
+
+    DisposableEffect(player) {
+        val listener =
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        currentOnFirstFrame()
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    currentOnError()
+                }
+            }
+
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+
+    LaunchedEffect(player, muted) {
+        player.volume = if (muted) 0f else 1f
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            TextureView(context).apply {
-                layoutParams =
-                    FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                isClickable = false
-                isFocusable = false
-                isFocusableInTouchMode = false
-                tag = videoUrl
-                surfaceTextureListener = QuotiTextureVideoListener(videoUrl, muted)
+            PlayerView(context).apply {
+                this.player = player
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                useController = true
+                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             }
         },
         update = { view ->
-            if (view.tag != videoUrl) {
-                view.tag = videoUrl
-                (view.surfaceTextureListener as? QuotiTextureVideoListener)?.release()
-                view.surfaceTextureListener = QuotiTextureVideoListener(videoUrl, muted)
-                if (view.isAvailable) {
-                    view.surfaceTexture?.let { texture ->
-                        (view.surfaceTextureListener as? QuotiTextureVideoListener)
-                            ?.start(texture)
-                    }
-                }
-            } else {
-                (view.surfaceTextureListener as? QuotiTextureVideoListener)?.setMuted(muted)
-            }
+            view.player = player
         },
     )
-}
-
-private class QuotiTextureVideoListener(
-    private val videoUrl: String,
-    private var muted: Boolean,
-) : TextureView.SurfaceTextureListener {
-    private var mediaPlayer: MediaPlayer? = null
-    private var surface: Surface? = null
-
-    override fun onSurfaceTextureAvailable(
-        surfaceTexture: SurfaceTexture,
-        width: Int,
-        height: Int,
-    ) {
-        start(surfaceTexture)
-    }
-
-    override fun onSurfaceTextureSizeChanged(
-        surfaceTexture: SurfaceTexture,
-        width: Int,
-        height: Int,
-    ) = Unit
-
-    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-        release()
-        return true
-    }
-
-    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
-
-    fun start(surfaceTexture: SurfaceTexture) {
-        release()
-        val nextSurface = Surface(surfaceTexture)
-        surface = nextSurface
-        mediaPlayer =
-            MediaPlayer().apply {
-                setDataSource(videoUrl)
-                setSurface(nextSurface)
-                isLooping = true
-                applyVolume()
-                setOnPreparedListener { player ->
-                    player.applyVolume()
-                    player.start()
-                }
-                setOnErrorListener { _, _, _ -> true }
-                prepareAsync()
-            }
-    }
-
-    fun setMuted(muted: Boolean) {
-        this.muted = muted
-        mediaPlayer?.applyVolume()
-    }
-
-    fun release() {
-        mediaPlayer?.runCatchingRelease()
-        mediaPlayer = null
-        surface?.release()
-        surface = null
-    }
-
-    private fun MediaPlayer.applyVolume() {
-        val volume = if (muted) 0f else 1f
-        setVolume(volume, volume)
-    }
-}
-
-private fun MediaPlayer.runCatchingRelease() {
-    runCatching {
-        stop()
-    }
-    release()
 }
 
 @Composable
 private fun RemoteMediaGrid(
     media: List<LoadedRemoteMedia>,
     contentColor: Color,
+    presentation: MediaPresentation,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val visibleMedia = media.take(4)
-    val rows = visibleMedia.chunked(2)
+    val mediaModifier =
+        if (presentation == MediaPresentation.Related) {
+            modifier
+        } else {
+            modifier
+                .fillMaxWidth()
+                .aspectRatio(mediaGridAspectRatio(visibleMedia.size))
+        }
     Column(
         modifier =
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(if (visibleMedia.size == 2) 2f else 1f)
+            mediaModifier
                 .clip(RoundedCornerShape(18.dp))
                 .background(contentColor.copy(alpha = 0.08f)),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        rows.forEach { rowMedia ->
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                rowMedia.forEach { item ->
+        when (visibleMedia.size) {
+            2 ->
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    visibleMedia.forEach { item ->
+                        MediaGridCell(
+                            media = item,
+                            compact = presentation == MediaPresentation.Related,
+                            onOpenMedia = onOpenMedia,
+                            modifier =
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                        )
+                    }
+                }
+
+            3 ->
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     MediaGridCell(
-                        media = item,
+                        media = visibleMedia[0],
+                        compact = presentation == MediaPresentation.Related,
+                        onOpenMedia = onOpenMedia,
                         modifier =
                             Modifier
                                 .weight(1f)
                                 .fillMaxHeight(),
                     )
-                }
-                if (rowMedia.size == 1 && visibleMedia.size > 1) {
-                    Spacer(
+                    Column(
                         modifier =
                             Modifier
                                 .weight(1f)
                                 .fillMaxHeight(),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        visibleMedia.drop(1).forEach { item ->
+                            MediaGridCell(
+                                media = item,
+                                compact = presentation == MediaPresentation.Related,
+                                onOpenMedia = onOpenMedia,
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                            )
+                        }
+                    }
                 }
-            }
+
+            else ->
+                visibleMedia.chunked(2).forEach { rowMedia ->
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        rowMedia.forEach { item ->
+                            MediaGridCell(
+                                media = item,
+                                compact = presentation == MediaPresentation.Related,
+                                onOpenMedia = onOpenMedia,
+                                modifier =
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                            )
+                        }
+                    }
+                }
         }
     }
+}
+
+private fun mediaGridAspectRatio(mediaCount: Int): Float {
+    return if (mediaCount == 2) TwoMediaGridAspectRatio else MultiMediaGridAspectRatio
 }
 
 @Composable
 private fun MediaGridCell(
     media: LoadedRemoteMedia,
+    compact: Boolean,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = modifier.background(Color.Black.copy(alpha = 0.08f)),
+        modifier =
+            modifier
+                .background(Color.Black.copy(alpha = 0.08f))
+                .then(
+                    if (media.canOpenInViewer) {
+                        Modifier.clickable { onOpenMedia(media.toMediaViewerRequest()) }
+                    } else {
+                        Modifier
+                    },
+                ),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            bitmap = media.bitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-        )
-        if (media.isVideo) {
-            VideoBadge()
+        if (media.bitmap != null) {
+            Image(
+                bitmap = media.bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        if (media.isVideo && media.playableVideoUrl != null) {
+            VideoPlayButton(
+                compact = compact,
+                onClick = { onOpenMedia(media.toMediaViewerRequest()) },
+            )
+        } else if (media.isVideo && media.playableVideoUrl == null) {
+            VideoBadge(compact = compact)
         }
     }
 }
 
 @Composable
-private fun VideoBadge() {
+private fun VideoPlayButton(
+    compact: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val buttonSize = if (compact) 42.dp else 54.dp
+    val iconSize = if (compact) 22.dp else 28.dp
+    Surface(
+        modifier = modifier.size(buttonSize),
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = 0.7f),
+        contentColor = Color.White,
+    ) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.PlayArrow,
+                contentDescription = "Play video",
+                modifier = Modifier.size(iconSize),
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoBadge(
+    compact: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val badgeSize = if (compact) 38.dp else 48.dp
+    val iconSize = if (compact) 20.dp else 24.dp
     Surface(
         modifier =
-            Modifier
-                .size(48.dp),
+            modifier
+                .size(badgeSize),
         shape = CircleShape,
         color = Color.Black.copy(alpha = 0.62f),
         contentColor = Color.White,
@@ -1397,22 +1903,45 @@ private fun VideoBadge() {
             Icon(
                 imageVector = Icons.Outlined.Movie,
                 contentDescription = "Video",
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(iconSize),
             )
         }
     }
 }
 
+private enum class MediaPresentation {
+    Target,
+    Related,
+}
+
+private enum class VideoPlaybackState {
+    Loading,
+    Playing,
+    Error,
+}
+
 private data class LoadedRemoteMedia(
-    val bitmap: Bitmap,
+    val sourceId: String,
+    val bitmap: Bitmap?,
     val isVideo: Boolean,
     val playableVideoUrl: String?,
 ) {
     val aspectRatio: Float
-        get() = bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
+        get() = bitmap?.let { value -> value.width.toFloat() / value.height.toFloat().coerceAtLeast(1f) } ?: 1.85f
+
+    val canOpenInViewer: Boolean
+        get() = bitmap != null || playableVideoUrl != null
 }
 
+private fun LoadedRemoteMedia.toMediaViewerRequest(): MediaViewerRequest =
+    MediaViewerRequest(
+        videoUrl = playableVideoUrl,
+        bitmap = bitmap,
+        aspectRatio = aspectRatio,
+    )
+
 private data class MediaPreviewSource(
+    val sourceId: String,
     val url: String,
     val isVideo: Boolean,
     val playableVideoUrl: String? = null,
@@ -1420,12 +1949,19 @@ private data class MediaPreviewSource(
 
 private fun PostMedia.previewSource(): MediaPreviewSource? {
     return when (this) {
-        is PostMedia.Image -> MediaPreviewSource(url = url, isVideo = false)
+        is PostMedia.Image ->
+            MediaPreviewSource(
+                sourceId = url,
+                url = url,
+                isVideo = false,
+            )
+
         is PostMedia.Video -> {
             val playableUrl = playableVideoUrl()
             (posterUrl ?: playableUrl ?: url ?: variants.firstOrNull())
                 ?.let { previewUrl ->
                     MediaPreviewSource(
+                        sourceId = playableUrl ?: previewUrl,
                         url = previewUrl,
                         isVideo = true,
                         playableVideoUrl = playableUrl,
@@ -1437,7 +1973,7 @@ private fun PostMedia.previewSource(): MediaPreviewSource? {
 
 private fun PostMedia.Video.playableVideoUrl(): String? {
     val candidates = listOfNotNull(url) + variants
-    return candidates.firstOrNull { candidate -> candidate.isPlayableVideoUrl(".mp4") }
+    return selectExportVideoUrl(candidates)
         ?: candidates.firstOrNull { candidate -> candidate.isPlayableVideoUrl(".m3u8") }
 }
 
@@ -1449,13 +1985,21 @@ private fun String.isPlayableVideoUrl(extension: String): Boolean {
 private fun MediaPlaceholder(
     contentColor: Color,
     mutedColor: Color,
+    compact: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier =
-            Modifier
+    val placeholderModifier =
+        if (compact) {
+            modifier
+        } else {
+            modifier
                 .fillMaxWidth()
                 .heightIn(min = 132.dp)
                 .aspectRatio(1.85f)
+        }
+    Box(
+        modifier =
+            placeholderModifier
                 .clip(RoundedCornerShape(18.dp))
                 .background(contentColor.copy(alpha = 0.08f)),
         contentAlignment = Alignment.Center,

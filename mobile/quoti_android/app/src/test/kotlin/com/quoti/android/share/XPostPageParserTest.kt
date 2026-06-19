@@ -63,6 +63,139 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun treatsGenericMediaThumbnailAsVideoPosterWhenVideoInfoOwnsVariant() {
+        val html =
+            """
+            {
+              "rest_id":"789",
+              "legacy":{
+                "extended_entities":{
+                  "media":[
+                    {
+                      "media_url_https":"https://pbs.twimg.com/media/hexed-teaser.jpg?format=jpg&amp;name=small",
+                      "type":"video",
+                      "video_info":{
+                        "variants":[
+                          {"url":"https://video.twimg.com/amplify_video/789/vid/avc1/1280x720/hexed.mp4?tag=16"}
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            """.trimIndent()
+
+        val media =
+            XPostPageParser.extractMedia(
+                html = html,
+                canonicalUrl = "https://x.com/DisneyAnimation/status/789",
+            )
+
+        assertEquals(1, media.size)
+        assertTrue(media[0] is PostMedia.Video)
+        assertEquals(
+            "https://pbs.twimg.com/media/hexed-teaser.jpg?format=jpg&name=large",
+            (media[0] as PostMedia.Video).posterUrl,
+        )
+        assertEquals(
+            "https://video.twimg.com/amplify_video/789/vid/avc1/1280x720/hexed.mp4?tag=16",
+            (media[0] as PostMedia.Video).url,
+        )
+    }
+
+    @Test
+    fun treatsRenderedVideoTagWithGenericMediaPosterAsVideo() {
+        val html =
+            """
+            <article>
+              <video
+                src="https://video.twimg.com/amplify_video/2066907599577157632/pl/zddek6iXdypq0_Bv.m3u8?tag=28&amp;v=74b"
+                poster="https://pbs.twimg.com/media/HK8nLPebwAAgGxO.jpg"
+                muted=""
+                playsInline="">
+              </video>
+            </article>
+            """.trimIndent()
+
+        val media = XPostPageParser.extractMedia(html)
+
+        assertEquals(1, media.size)
+        assertTrue(media[0] is PostMedia.Video)
+        assertEquals(
+            "https://pbs.twimg.com/media/HK8nLPebwAAgGxO.jpg",
+            (media[0] as PostMedia.Video).posterUrl,
+        )
+        assertEquals(
+            "https://video.twimg.com/amplify_video/2066907599577157632/pl/zddek6iXdypq0_Bv.m3u8?tag=28&v=74b",
+            (media[0] as PostMedia.Video).url,
+        )
+    }
+
+    @Test
+    fun extractsOnlyMediaForRequestedStatusWhenPageContainsRelatedMedia() {
+        val html =
+            """
+            {
+              "rest_id":"123",
+              "legacy":{
+                "entities":{
+                  "media":[
+                    {"media_url_https":"https://pbs.twimg.com/media/main-first.jpg?format=jpg&amp;name=small"},
+                    {"media_url_https":"https://pbs.twimg.com/media/main-second.jpg?format=jpg&amp;name=small"}
+                  ]
+                }
+              },
+              "quoted_status_result":{
+                "result":{
+                  "rest_id":"456",
+                  "legacy":{
+                    "extended_entities":{
+                      "media":[
+                        {
+                          "media_url_https":"https://pbs.twimg.com/ext_tw_video_thumb/456/pu/img/quoted-poster.jpg",
+                          "video_info":{
+                            "variants":[
+                              {"url":"https://video.twimg.com/ext_tw_video/456/pu/vid/avc1/720x720/quoted.mp4?tag=12"}
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+            """.trimIndent()
+
+        val mainMedia =
+            XPostPageParser.extractMedia(
+                html = html,
+                canonicalUrl = "https://x.com/main/status/123",
+            )
+        val relatedMedia =
+            XPostPageParser.extractMedia(
+                html = html,
+                canonicalUrl = "https://x.com/source/status/456",
+            )
+
+        assertEquals(
+            listOf(
+                "https://pbs.twimg.com/media/main-first.jpg?format=jpg&name=large",
+                "https://pbs.twimg.com/media/main-second.jpg?format=jpg&name=large",
+            ),
+            mainMedia.filterIsInstance<PostMedia.Image>().map { image -> image.url },
+        )
+        assertEquals(0, mainMedia.filterIsInstance<PostMedia.Video>().size)
+        assertEquals(1, relatedMedia.size)
+        assertTrue(relatedMedia.first() is PostMedia.Video)
+        assertEquals(
+            "https://pbs.twimg.com/ext_tw_video_thumb/456/pu/img/quoted-poster.jpg",
+            (relatedMedia.first() as PostMedia.Video).posterUrl,
+        )
+    }
+
+    @Test
     fun extractsAuthorAvatarNearHandleFromXPageHtml() {
         val html =
             """
@@ -92,6 +225,132 @@ class XPostPageParserTest {
         assertEquals(
             "https://pbs.twimg.com/profile_images/1/fallback_400x400.png",
             XPostPageParser.extractAuthorAvatarUrl(html, authorHandle = null),
+        )
+    }
+
+    @Test
+    fun extractsFullTargetTweetTextFromPageData() {
+        val html =
+            """
+            {
+              "rest_id":"123",
+              "legacy":{
+                "full_text":"The visible part starts here and then keeps going after show more with the complete ending."
+              },
+              "quoted_status_result":{
+                "result":{
+                  "rest_id":"456",
+                  "legacy":{
+                    "full_text":"A different quoted post should not replace the target tweet even when it is nearby."
+                  }
+                }
+              }
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "The visible part starts here and then keeps going after show more with the complete ending.",
+            XPostPageParser.extractTweetText(
+                html = html,
+                canonicalUrl = "https://x.com/main/status/123",
+                fallbackText = "The visible part starts here...",
+            ),
+        )
+    }
+
+    @Test
+    fun prefersNoteTweetTextOverTruncatedLegacyText() {
+        val html =
+            """
+            {
+              "rest_id":"123",
+              "legacy":{
+                "full_text":"Start of long post..."
+              },
+              "note_tweet_results":{
+                "result":{
+                  "text":"Start of long post with all details that X hides behind Voir plus on mobile."
+                }
+              }
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "Start of long post with all details that X hides behind Voir plus on mobile.",
+            XPostPageParser.extractTweetText(
+                html = html,
+                canonicalUrl = "https://x.com/main/status/123",
+                fallbackText = "Start of long post...",
+            ),
+        )
+    }
+
+    @Test
+    fun extractsUnquotedNoteTweetTextFromCurrentXPagePayload() {
+        val html =
+            """
+            client:VHdlZXQ6MjA2NzU1Mzg0OTYyODQwNTgzMQ==:${
+                "$"
+            }R[10]={
+              __typename:"Tweet",
+              rest_id:"2067553849628405831",
+              details:${"$"}R[20]={__ref:"client:VHdlZXQ6MjA2NzU1Mzg0OTYyODQwNTgzMQ==:details"},
+              note_tweet:${"$"}R[25]={__ref:"client:VHdlZXQ6MjA2NzU1Mzg0OTYyODQwNTgzMQ==:note_tweet"}
+            },
+            "client:VHdlZXQ6MjA2NzU1Mzg0OTYyODQwNTgzMQ==:details":${"$"}R[69]={
+              __typename:"TBirdData",
+              full_text:"A new headphone company called Daisy Sound reached out and sent me its first product, the Daisy One.\n\nHere’s a quick unboxing and first look. These are beautiful headphones with really nice build quality. I especially like this dark green color called “Kelp,” as well as the https://t.co/1o8R0hH8nx"
+            },
+            "client:VHdlZXQ6MjA2NzU1Mzg0OTYyODQwNTgzMQ==:note_tweet":${"$"}R[77]={
+              __typename:"NoteTweetData",
+              is_expandable:!0,
+              note_tweet_results:${"$"}R[78]={__ref:"Tm90ZVR3ZWV0UmVzdWx0czoyMDY3NTUzODQ5NDY0ODIzODA4"}
+            },
+            "Tm90ZVR3ZWV0OjIwNjc1NTM4NDk0NjQ4MjM4MDg=":${"$"}R[81]={
+              __typename:"NoteTweet",
+              text:"A new headphone company called Daisy Sound reached out and sent me its first product, the Daisy One.\n\nHere’s a quick unboxing and first look. These are beautiful headphones with really nice build quality. I especially like this dark green color called “Kelp,” as well as the aluminum control dial and magnetic memory foam ear cushions.\n\nWhat do you think of the design?"
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "A new headphone company called Daisy Sound reached out and sent me its first product, the Daisy One.\n\nHere’s a quick unboxing and first look. These are beautiful headphones with really nice build quality. I especially like this dark green color called “Kelp,” as well as the aluminum control dial and magnetic memory foam ear cushions.\n\nWhat do you think of the design?",
+            XPostPageParser.extractTweetText(
+                html = html,
+                canonicalUrl = "https://x.com/BenGeskin/status/2067553849628405831",
+                fallbackText = "A new headphone company called Daisy Sound reached out and sent me its first product, the Daisy One.\n\nHere’s a quick unboxing and first look. These are beautiful headphones with really nice build quality. I especially like this dark green color called “Kelp,” as well as the…",
+            ),
+        )
+    }
+
+    @Test
+    fun extractsFullTextForFetchedRelatedPostPage() {
+        val html =
+            """
+            {
+              "entryId":"tweet-456",
+              "content":{
+                "itemContent":{
+                  "tweet_results":{
+                    "result":{
+                      "__typename":"Tweet",
+                      "rest_id":"456",
+                      "legacy":{
+                        "full_text":"Quoted context begins here and continues past the collapsed preview until the real final sentence."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "Quoted context begins here and continues past the collapsed preview until the real final sentence.",
+            XPostPageParser.extractTweetText(
+                html = html,
+                canonicalUrl = "https://x.com/source/status/456",
+                fallbackText = "Quoted context begins here...",
+            ),
         )
     }
 
@@ -126,6 +385,32 @@ class XPostPageParserTest {
             XPostPageParser.extractRelatedStatusUrl(
                 html = html,
                 canonicalUrl = "https://x.com/BamDarius_/status/2066866642169036946",
+            ),
+        )
+    }
+
+    @Test
+    fun extractsRelatedStatusUrlFromCurrentQuotedTweetResultsReference() {
+        val html =
+            """
+            "TweetResults:2067889372402205117":${"$"}R[11]={
+              rest_id:"2067889372402205117",
+              result:${"$"}R[12]={__ref:"VHdlZXQ6MjA2Nzg4OTM3MjQwMjIwNTExNw=="}
+            },
+            "VHdlZXQ6MjA2Nzg4OTM3MjQwMjIwNTExNw==":${"$"}R[13]={
+              rest_id:"2067889372402205117",
+              quoted_tweet_results:${"$"}R[20]={__ref:"TweetResults:2067874979631317467"}
+            }
+            <div data-href="/HandofArsenal/status/2067874979631317467" role="link">
+              <div class="line-clamp-5">ARSENAL PREMIER LEAGUE 26/27 FIXTURES</div>
+            </div>
+            """.trimIndent()
+
+        assertEquals(
+            "https://x.com/HandofArsenal/status/2067874979631317467",
+            XPostPageParser.extractRelatedStatusUrl(
+                html = html,
+                canonicalUrl = "https://x.com/yannkees14/status/2067889372402205117",
             ),
         )
     }

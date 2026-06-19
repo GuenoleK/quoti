@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.1.13-logo-contrast"
+        versionCode = 31
+        versionName = "0.1.30-media-frame-consistency"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -36,6 +36,7 @@ kotlin {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.05.00")
+    val media3Version = "1.10.1"
 
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -47,6 +48,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.work:work-runtime-ktx:2.11.0")
     implementation("com.google.android.material:material:1.14.0")
 

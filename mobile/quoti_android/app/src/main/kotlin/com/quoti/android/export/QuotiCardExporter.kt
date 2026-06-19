@@ -42,7 +42,6 @@ import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
 import com.quoti.android.core.model.SocialPlatform
-import com.quoti.android.core.model.hasMedia
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -58,7 +57,10 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 private const val PngMimeType = "image/png"
@@ -76,8 +78,13 @@ private const val AuthorAvatarSize = 64f
 private const val RelatedAvatarSize = 48f
 private const val AvatarGap = 20f
 private const val MinMediaHeight = 260f
+private const val RelatedMediaMinHeight = 150f
+private const val RelatedMediaMaxHeight = 340f
+private const val RelatedMediaThumbnailSize = 300f
 private const val PlaceholderMediaAspectRatio = 1.85f
 private const val MediaGridGap = 6f
+private const val TwoMediaGridAspectRatio = 2f
+private const val MultiMediaGridAspectRatio = 1.7777778f
 private const val VideoExportBitmapWidth = 720
 private const val VideoExportSourceVariantMaxLongEdge = 1280
 internal const val VideoExportFrameRate = 30
@@ -88,6 +95,7 @@ private const val VideoExportMaxBitRate = 24_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
+private const val DefaultIoBufferSize = 8 * 1024
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val XLogoPathData =
     "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932L18.901 1.153zM17.61 20.644h2.039L6.486 3.24H4.298L17.61 20.644z"
@@ -179,6 +187,7 @@ object QuotiCardExporter {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
+        selectedVideoSourceId: String? = null,
         onProgress: (Int) -> Unit = {},
     ): Uri {
         val fileName = quotiVideoFileName(post.id)
@@ -189,23 +198,29 @@ object QuotiCardExporter {
                 File(exportDir, fileName)
             }
 
-        onProgress(0)
-        renderVideoCardMp4(
-            output = output,
-            post = post,
-            cardTone = cardTone,
-            contentMode = contentMode,
-            onProgress = onProgress,
-        )
-        onProgress(99)
+        return try {
+            onProgress(0)
+            renderVideoCardMp4(
+                output = output,
+                post = post,
+                cardTone = cardTone,
+                contentMode = contentMode,
+                selectedVideoSourceId = selectedVideoSourceId,
+                onProgress = onProgress,
+            )
+            onProgress(99)
 
-        val uri = writeCacheVideoToMovies(
-            context = context,
-            cacheFile = output,
-            fileName = fileName,
-        )
-        onProgress(100)
-        return uri
+            val uri = writeCacheVideoToMovies(
+                context = context,
+                cacheFile = output,
+                fileName = fileName,
+            )
+            onProgress(100)
+            uri
+        } catch (cancellation: CancellationException) {
+            output.delete()
+            throw cancellation
+        }
     }
 
     private suspend fun renderCardBitmap(
@@ -215,18 +230,12 @@ object QuotiCardExporter {
     ): Bitmap {
         val mediaBitmaps =
             if (contentMode == CardContentMode.WithMedia) {
-                post.exportMediaSources()
-                    .take(4)
-                    .mapNotNull { source ->
-                        fetchRemoteBitmap(source.url)?.let { bitmap ->
-                            ExportMediaBitmap(
-                                bitmap = bitmap,
-                                isVideo = source.isVideo,
-                            )
-                        }
-                    }
+                ExportMediaBitmaps(
+                    main = fetchExportMediaBitmaps(post.media),
+                    related = fetchExportMediaBitmaps(post.relatedPost?.media.orEmpty()),
+                )
             } else {
-                emptyList()
+                ExportMediaBitmaps.Empty
             }
         val avatarBitmaps =
             ExportAvatarBitmaps(
@@ -246,8 +255,22 @@ object QuotiCardExporter {
             }
         } finally {
             avatarBitmaps.recycle()
-            mediaBitmaps.forEach { media -> media.bitmap.recycle() }
+            mediaBitmaps.recycle()
         }
+    }
+
+    private suspend fun fetchExportMediaBitmaps(media: List<PostMedia>): List<ExportMediaBitmap> {
+        return media
+            .exportMediaSources()
+            .take(4)
+            .mapNotNull { source ->
+                fetchRemoteBitmap(source.url)?.let { bitmap ->
+                    ExportMediaBitmap(
+                        bitmap = bitmap,
+                        isVideo = source.isVideo,
+                    )
+                }
+            }
     }
 
     private suspend fun fetchRemoteBitmap(imageUrl: String): Bitmap? =
@@ -276,22 +299,21 @@ object QuotiCardExporter {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
+        selectedVideoSourceId: String?,
         onProgress: (Int) -> Unit,
     ) {
-        val mediaSources = post.exportMediaSources().take(4)
-        val videoSource = mediaSources.firstOrNull { source -> source.playableVideoUrl != null }
+        val mediaSources =
+            ExportMediaSources(
+                main = post.media.exportMediaSources().take(4),
+                related = post.relatedPost?.media.orEmpty().exportMediaSources().take(4),
+            )
+        val videoSource = mediaSources.videoSourceFor(selectedVideoSourceId)
             ?: error("No playable MP4 video source is available for this Quoti card.")
         val mediaSlots =
-            mediaSources.map { source ->
-                if (source === videoSource) {
-                    ExportVideoMediaSlot.DynamicVideo
-                } else {
-                    ExportVideoMediaSlot.StaticBitmap(
-                        bitmap = fetchRemoteBitmap(source.url),
-                        isVideo = source.isVideo,
-                    )
-                }
-            }
+            ExportVideoMediaSlots(
+                main = mediaSources.main.toVideoMediaSlots(videoSource, ::fetchRemoteBitmap),
+                related = mediaSources.related.toVideoMediaSlots(videoSource, ::fetchRemoteBitmap),
+            )
         val avatarBitmaps =
             ExportAvatarBitmaps(
                 author = post.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
@@ -316,21 +338,17 @@ object QuotiCardExporter {
         } finally {
             localVideoSource.delete()
             avatarBitmaps.recycle()
-            mediaSlots.forEach { slot ->
-                if (slot is ExportVideoMediaSlot.StaticBitmap) {
-                    slot.bitmap?.recycle()
-                }
-            }
+            mediaSlots.recycle()
         }
     }
 
-    private fun renderVideoCardMp4(
+    private suspend fun renderVideoCardMp4(
         output: File,
         videoPath: String,
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
-        mediaSlots: List<ExportVideoMediaSlot>,
+        mediaSlots: ExportVideoMediaSlots,
         avatarBitmaps: ExportAvatarBitmaps,
         onProgress: (Int) -> Unit,
     ) {
@@ -338,8 +356,11 @@ object QuotiCardExporter {
         var frameRenderer: QuotiCardBitmapRenderer.VideoFrameRenderer? = null
         var encodedFrameCount = 0
         var lastProgress = -1
+        val exportCoroutineContext = coroutineContext
+        val ensureNotCancelled = { exportCoroutineContext.ensureActive() }
 
         try {
+            ensureNotCancelled()
             val sourceDurationMs = videoDurationMs(videoPath)
             val exportDurationMs = min(sourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
             val exportDurationUs = exportDurationMs * 1_000L
@@ -352,7 +373,9 @@ object QuotiCardExporter {
                 frameCount = frameCount,
                 frameIntervalUs = frameIntervalUs,
                 maxDurationUs = exportDurationUs,
+                ensureActive = ensureNotCancelled,
             ) { frame, presentationTimeUs ->
+                ensureNotCancelled()
                 val mediaBitmaps = mediaSlots.toMediaBitmaps(frame)
                 val cardBitmap =
                     (frameRenderer
@@ -376,6 +399,7 @@ object QuotiCardExporter {
                             audioSourcePath = videoPath,
                             audioFormat = audioFormat,
                             maxDurationUs = exportDurationUs,
+                            ensureActive = ensureNotCancelled,
                         ).also { createdEncoder ->
                             encoder = createdEncoder
                         }
@@ -390,6 +414,7 @@ object QuotiCardExporter {
                     lastProgress = progress
                 }
             }
+            ensureNotCancelled()
             encoder?.finish()
         } finally {
             frameRenderer?.release()
@@ -429,7 +454,15 @@ object QuotiCardExporter {
 
                 connection.inputStream.use { input ->
                     sourceFile.outputStream().use { outputStream ->
-                        input.copyTo(outputStream)
+                        val buffer = ByteArray(DefaultIoBufferSize)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val bytesRead = input.read(buffer)
+                            if (bytesRead < 0) {
+                                break
+                            }
+                            outputStream.write(buffer, 0, bytesRead)
+                        }
                     }
                 }
                 sourceFile
@@ -461,7 +494,17 @@ object QuotiCardExporter {
 
             runCatching {
                 resolver.openOutputStream(uri)?.use { output ->
-                    cacheFile.inputStream().use { input -> input.copyTo(output) }
+                    cacheFile.inputStream().use { input ->
+                        val buffer = ByteArray(DefaultIoBufferSize)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val bytesRead = input.read(buffer)
+                            if (bytesRead < 0) {
+                                break
+                            }
+                            output.write(buffer, 0, bytesRead)
+                        }
+                    }
                 } ?: error("Unable to open MediaStore output stream.")
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -486,6 +529,22 @@ private sealed interface ExportVideoMediaSlot {
     ) : ExportVideoMediaSlot
 }
 
+private suspend fun List<ExportMediaSource>.toVideoMediaSlots(
+    videoSource: ExportMediaSource,
+    fetchBitmap: suspend (String) -> Bitmap?,
+): List<ExportVideoMediaSlot> {
+    return map { source ->
+        if (source === videoSource) {
+            ExportVideoMediaSlot.DynamicVideo
+        } else {
+            ExportVideoMediaSlot.StaticBitmap(
+                bitmap = fetchBitmap(source.url),
+                isVideo = source.isVideo,
+            )
+        }
+    }
+}
+
 private fun List<ExportVideoMediaSlot>.toMediaBitmaps(videoFrame: Bitmap): List<ExportMediaBitmap> {
     return mapNotNull { slot ->
         when (slot) {
@@ -505,11 +564,27 @@ private fun List<ExportVideoMediaSlot>.toMediaBitmaps(videoFrame: Bitmap): List<
     }
 }
 
+private fun ExportVideoMediaSlots.toMediaBitmaps(videoFrame: Bitmap): ExportMediaBitmaps {
+    return ExportMediaBitmaps(
+        main = main.toMediaBitmaps(videoFrame),
+        related = related.toMediaBitmaps(videoFrame),
+    )
+}
+
+private fun List<ExportVideoMediaSlot>.recycleVideoSlots() {
+    forEach { slot ->
+        if (slot is ExportVideoMediaSlot.StaticBitmap) {
+            slot.bitmap?.recycle()
+        }
+    }
+}
+
 private fun decodeVideoFrames(
     videoPath: String,
     frameCount: Int,
     frameIntervalUs: Long,
     maxDurationUs: Long,
+    ensureActive: () -> Unit = {},
     onFrame: (Bitmap, Long) -> Unit,
 ) {
     val extractor = MediaExtractor()
@@ -546,6 +621,7 @@ private fun decodeVideoFrames(
             decodedPresentationTimeUs: Long,
         ) {
             while (nextFrameIndex < frameCount && nextFrameIndex * frameIntervalUs <= decodedPresentationTimeUs) {
+                ensureActive()
                 val presentationTimeUs = nextFrameIndex * frameIntervalUs
                 onFrame(bitmap, presentationTimeUs)
                 nextFrameIndex++
@@ -558,12 +634,14 @@ private fun decodeVideoFrames(
         fun fillTrailingFrames() {
             val fallback = lastFrame ?: error("Unable to decode a frame from the source video.")
             while (nextFrameIndex < frameCount) {
+                ensureActive()
                 onFrame(fallback, nextFrameIndex * frameIntervalUs)
                 nextFrameIndex++
             }
         }
 
         while (!outputDone && nextFrameIndex < frameCount) {
+            ensureActive()
             if (!inputDone) {
                 val inputBufferIndex = activeDecoder.dequeueInputBuffer(VideoEncoderTimeoutUs)
                 if (inputBufferIndex >= 0) {
@@ -622,7 +700,7 @@ private fun decodeVideoFrames(
                         val isEndOfStream = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         if (bufferInfo.size > 0 && bufferInfo.presentationTimeUs >= nextFrameIndex * frameIntervalUs) {
                             val decodedFrame =
-                                activeDecoder.getOutputImage(outputBufferIndex)?.toVideoBitmap(rotationDegrees)
+                                activeDecoder.getOutputImage(outputBufferIndex)?.toVideoBitmap(rotationDegrees, ensureActive)
                                     ?: error("Video decoder output image is unavailable.")
 
                             try {
@@ -658,7 +736,10 @@ private fun MediaCodec.runCatchingStop() {
     runCatching { stop() }
 }
 
-private fun Image.toVideoBitmap(rotationDegrees: Int): Bitmap {
+private fun Image.toVideoBitmap(
+    rotationDegrees: Int,
+    ensureActive: () -> Unit = {},
+): Bitmap {
     return try {
         val crop = cropRect
         val outputWidth = crop.width()
@@ -672,6 +753,9 @@ private fun Image.toVideoBitmap(rotationDegrees: Int): Bitmap {
         val vBuffer = vPlane.buffer
 
         for (row in 0 until outputHeight) {
+            if (row % 16 == 0) {
+                ensureActive()
+            }
             val imageY = crop.top + row
             for (column in 0 until outputWidth) {
                 val imageX = crop.left + column
@@ -740,6 +824,7 @@ private class AvcBitmapEncoder(
     private val audioSourcePath: String,
     private val audioFormat: MediaFormat?,
     private val maxDurationUs: Long,
+    private val ensureActive: () -> Unit = {},
 ) {
     private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     private val bufferInfo = MediaCodec.BufferInfo()
@@ -768,11 +853,13 @@ private class AvcBitmapEncoder(
         bitmap: Bitmap,
         presentationTimeUs: Long,
     ) {
+        ensureActive()
         inputSurface.drawBitmap(bitmap, presentationTimeUs)
         drain(endOfStream = false)
     }
 
     fun finish() {
+        ensureActive()
         codec.signalEndOfInputStream()
         drain(endOfStream = true)
         copyAudioTrack()
@@ -794,6 +881,7 @@ private class AvcBitmapEncoder(
     private fun drain(endOfStream: Boolean) {
         var stalledPolls = 0
         while (true) {
+            ensureActive()
             val outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, VideoEncoderTimeoutUs)
             when {
                 outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
@@ -855,6 +943,7 @@ private class AvcBitmapEncoder(
             muxer = muxer,
             muxerAudioTrackIndex = audioTrackIndex,
             maxDurationUs = maxDurationUs,
+            ensureActive = ensureActive,
         )
     }
 }
@@ -1165,7 +1254,7 @@ private object QuotiCardBitmapRenderer {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
-        mediaBitmaps: List<ExportMediaBitmap>,
+        mediaBitmaps: ExportMediaBitmaps,
         avatarBitmaps: ExportAvatarBitmaps,
     ): Bitmap {
         val palette = RenderPalette.from(cardTone)
@@ -1183,7 +1272,7 @@ private object QuotiCardBitmapRenderer {
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
-        mediaBitmaps: List<ExportMediaBitmap>,
+        mediaBitmaps: ExportMediaBitmaps,
         avatarBitmaps: ExportAvatarBitmaps,
     ): VideoFrameRenderer {
         val palette = RenderPalette.from(cardTone)
@@ -1210,15 +1299,18 @@ private object QuotiCardBitmapRenderer {
             } else {
                 Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
             }
-        val mediaRect = mediaRectFor(measure, contentMode)
+        val mediaRects = mediaRectsFor(measure, contentMode)
 
         return VideoFrameRenderer(
             staticBase = staticBase,
             fullFrame = fullFrame,
             outputFrame = outputFrame,
             drawDynamicMedia = { canvas, dynamicMediaBitmaps ->
-                mediaRect?.let { rect ->
-                    drawMedia(canvas, dynamicMediaBitmaps, rect, palette)
+                mediaRects.main?.let { rect ->
+                    drawMedia(canvas, dynamicMediaBitmaps.main, rect, palette)
+                }
+                mediaRects.related?.let { rect ->
+                    drawMedia(canvas, dynamicMediaBitmaps.related, rect, palette, cropSingle = true)
                 }
             },
         )
@@ -1228,14 +1320,14 @@ private object QuotiCardBitmapRenderer {
         private val staticBase: Bitmap,
         private val fullFrame: Bitmap,
         private val outputFrame: Bitmap,
-        private val drawDynamicMedia: (Canvas, List<ExportMediaBitmap>) -> Unit,
+        private val drawDynamicMedia: (Canvas, ExportMediaBitmaps) -> Unit,
     ) {
         private val fullCanvas = Canvas(fullFrame)
         private val outputCanvas = Canvas(outputFrame)
         private val outputRect = RectF(0f, 0f, outputFrame.width.toFloat(), outputFrame.height.toFloat())
         private val scalePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
-        fun render(mediaBitmaps: List<ExportMediaBitmap>): Bitmap {
+        fun render(mediaBitmaps: ExportMediaBitmaps): Bitmap {
             fullCanvas.drawBitmap(staticBase, 0f, 0f, null)
             drawDynamicMedia(fullCanvas, mediaBitmaps)
 
@@ -1259,13 +1351,13 @@ private object QuotiCardBitmapRenderer {
         post: QuotiPost,
         palette: RenderPalette,
         contentMode: CardContentMode,
-        mediaBitmaps: List<ExportMediaBitmap>,
+        mediaBitmaps: ExportMediaBitmaps,
         avatarBitmaps: ExportAvatarBitmaps,
     ): MeasuredCard {
         val contentWidth = ExportBitmapWidth - (CardPadding * 2).roundToInt()
         val authorAvatarSlot = if (avatarBitmaps.author != null) AuthorAvatarSize + AvatarGap else 0f
-        val authorWidth = (contentWidth - 220 - authorAvatarSlot).roundToInt().coerceAtLeast(360)
-        val contentPaint = textPaint(palette.textPrimary, 54f, Typeface.SERIF)
+        val authorWidth = ((contentWidth * 0.56f) - authorAvatarSlot).roundToInt().coerceAtLeast(260)
+        val contentPaint = textPaint(palette.textPrimary, 50f, Typeface.SERIF)
         val metadataPaint = textPaint(palette.textSecondary, 32f, Typeface.SANS_SERIF)
         val authorPaint = textPaint(palette.textPrimary, 34f, Typeface.SANS_SERIF, bold = true)
         val handlePaint = textPaint(palette.textSecondary, 31f, Typeface.SANS_SERIF)
@@ -1274,7 +1366,15 @@ private object QuotiCardBitmapRenderer {
         val related = post.relatedPost?.let { relatedPost ->
             val relatedAvatarSlot = if (avatarBitmaps.related != null) RelatedAvatarSize + AvatarGap else 0f
             val relatedContentWidth = (contentWidth - RelatedPadding * 2).roundToInt()
-            val relatedAuthorWidth = (relatedContentWidth - relatedAvatarSlot).roundToInt().coerceAtLeast(240)
+            val hasRelatedMedia = contentMode == CardContentMode.WithMedia && relatedPost.media.isNotEmpty()
+            val relatedMediaHeight =
+                if (hasRelatedMedia) {
+                    measureRelatedMediaHeight(relatedContentWidth.toFloat(), mediaBitmaps.related)
+                } else {
+                    0f
+                }
+            val relatedAuthorWidth =
+                (relatedContentWidth - relatedAvatarSlot).roundToInt().coerceAtLeast(240)
             MeasuredRelatedPost(
                 authorAvatar = avatarBitmaps.related,
                 authorLayout =
@@ -1287,14 +1387,16 @@ private object QuotiCardBitmapRenderer {
                 contentLayout =
                     textLayout(
                         text = relatedPost.content,
-                        paint = textPaint(palette.textPrimary, 34f, Typeface.SERIF),
+                        paint = textPaint(palette.textPrimary, 32f, Typeface.SERIF),
                         width = relatedContentWidth,
+                        maxLines = if (hasRelatedMedia) 4 else Int.MAX_VALUE,
                     ),
+                mediaHeight = relatedMediaHeight,
             )
         }
         val mediaHeight =
-            if (contentMode == CardContentMode.WithMedia && post.hasMedia) {
-                measureMediaHeight(contentWidth.toFloat(), mediaBitmaps)
+            if (contentMode == CardContentMode.WithMedia && post.media.isNotEmpty()) {
+                measureMediaHeight(contentWidth.toFloat(), mediaBitmaps.main)
             } else {
                 0f
             }
@@ -1317,25 +1419,20 @@ private object QuotiCardBitmapRenderer {
                 text = "Quoti",
                 paint = brandPaint,
                 width = 190,
-                alignment = Layout.Alignment.ALIGN_OPPOSITE,
+                alignment = Layout.Alignment.ALIGN_NORMAL,
                 maxLines = 1,
             )
-        val authorStackHeight = authorNameLayout.height + 10f + authorHandleLayout.height
-        val footerHeight =
-            max(
-                max(authorStackHeight, markLayout.height.toFloat()),
-                if (avatarBitmaps.author != null) AuthorAvatarSize else 0f,
-            )
+        val footerHeight = 72f
 
         var height = CardPadding + HeaderHeight + SectionGap
         height += textLayout(post.content, contentPaint, contentWidth).height
-        related?.let {
-            height += SectionGap
-            height += it.height
-        }
         if (mediaHeight > 0f) {
             height += SectionGap
             height += mediaHeight
+        }
+        related?.let {
+            height += SectionGap
+            height += it.height
         }
         height += SectionGap
         height += 2f
@@ -1370,7 +1467,7 @@ private object QuotiCardBitmapRenderer {
         palette: RenderPalette,
         measure: MeasuredCard,
         contentMode: CardContentMode,
-        mediaBitmaps: List<ExportMediaBitmap>,
+        mediaBitmaps: ExportMediaBitmaps,
         drawMediaContent: Boolean = true,
     ) {
         val contentWidth = ExportBitmapWidth - CardPadding * 2
@@ -1382,24 +1479,48 @@ private object QuotiCardBitmapRenderer {
             }
         var y = CardPadding
 
-        fillPaint.color = withAlpha(palette.textPrimary, 0.12f)
-        canvas.drawOval(RectF(CardPadding, y, CardPadding + 72f, y + 72f), fillPaint)
-        drawPlatformMark(
+        val authorStackHeight = measure.authorNameLayout.height + 10f + measure.authorHandleLayout.height
+        val authorTextY = y + ((HeaderHeight - authorStackHeight) / 2f)
+        val authorTextX =
+            if (measure.authorAvatar != null) {
+                CardPadding + AuthorAvatarSize + AvatarGap
+            } else {
+                CardPadding
+            }
+        measure.authorAvatar?.let { avatar ->
+            val avatarTop = y + ((HeaderHeight - AuthorAvatarSize) / 2f)
+            drawCircularImage(
+                canvas = canvas,
+                bitmap = avatar,
+                rect = RectF(CardPadding, avatarTop, CardPadding + AuthorAvatarSize, avatarTop + AuthorAvatarSize),
+            )
+        }
+        drawLayout(canvas, measure.authorNameLayout, authorTextX, authorTextY)
+        drawLayout(
             canvas = canvas,
-            platform = post.platform,
-            rect = RectF(CardPadding + 20f, y + 20f, CardPadding + 52f, y + 52f),
-            color = palette.textPrimary,
+            layout = measure.authorHandleLayout,
+            x = authorTextX,
+            y = authorTextY + measure.authorNameLayout.height + 10f,
         )
         drawLayout(
             canvas = canvas,
             layout = measure.dateLayout,
             x = ExportBitmapWidth - CardPadding - measure.dateLayout.width,
-            y = y + ((72f - measure.dateLayout.height) / 2f),
+            y = y + ((HeaderHeight - measure.dateLayout.height) / 2f),
         )
 
         y += HeaderHeight + SectionGap
         drawLayout(canvas, measure.contentLayout, CardPadding, y)
         y += measure.contentLayout.height
+
+        if (contentMode == CardContentMode.WithMedia && measure.mediaHeight > 0f) {
+            y += SectionGap
+            val mediaRect = RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+            if (drawMediaContent) {
+                drawMedia(canvas, mediaBitmaps.main, mediaRect, palette)
+            }
+            y += measure.mediaHeight
+        }
 
         measure.relatedPost?.let { relatedPost ->
             y += SectionGap
@@ -1431,16 +1552,21 @@ private object QuotiCardBitmapRenderer {
             )
             relatedY += relatedPost.headerHeight + SmallGap
             drawLayout(canvas, relatedPost.contentLayout, CardPadding + RelatedPadding, relatedY)
-            y += relatedHeight
-        }
-
-        if (contentMode == CardContentMode.WithMedia && measure.mediaHeight > 0f) {
-            y += SectionGap
-            val mediaRect = RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
-            if (drawMediaContent) {
-                drawMedia(canvas, mediaBitmaps, mediaRect, palette)
+            relatedY += relatedPost.contentLayout.height
+            if (relatedPost.mediaHeight > 0f) {
+                relatedY += SmallGap
+                val relatedMediaRect =
+                    RectF(
+                        CardPadding + RelatedPadding,
+                        relatedY,
+                        CardPadding + RelatedPadding + (contentWidth - RelatedPadding * 2),
+                        relatedY + relatedPost.mediaHeight,
+                    )
+                if (drawMediaContent) {
+                    drawMedia(canvas, mediaBitmaps.related, relatedMediaRect, palette, cropSingle = true)
+                }
             }
-            y += measure.mediaHeight
+            y += relatedHeight
         }
 
         y += SectionGap
@@ -1449,29 +1575,14 @@ private object QuotiCardBitmapRenderer {
         y += SmallGap
 
         val footerTop = y
-        val authorStackHeight = measure.authorNameLayout.height + 10f + measure.authorHandleLayout.height
-        val authorTextY = footerTop + ((measure.footerHeight - authorStackHeight) / 2f)
-        val authorTextX =
-            if (measure.authorAvatar != null) {
-                CardPadding + AuthorAvatarSize + AvatarGap
-            } else {
-                CardPadding
-            }
-
-        measure.authorAvatar?.let { avatar ->
-            val avatarTop = footerTop + ((measure.footerHeight - AuthorAvatarSize) / 2f)
-            drawCircularImage(
-                canvas = canvas,
-                bitmap = avatar,
-                rect = RectF(CardPadding, avatarTop, CardPadding + AuthorAvatarSize, avatarTop + AuthorAvatarSize),
-            )
-        }
-        drawLayout(canvas, measure.authorNameLayout, authorTextX, authorTextY)
-        drawLayout(
+        val platformBadgeTop = footerTop + ((measure.footerHeight - 72f) / 2f)
+        fillPaint.color = withAlpha(palette.textPrimary, 0.12f)
+        canvas.drawOval(RectF(CardPadding, platformBadgeTop, CardPadding + 72f, platformBadgeTop + 72f), fillPaint)
+        drawPlatformMark(
             canvas = canvas,
-            layout = measure.authorHandleLayout,
-            x = authorTextX,
-            y = authorTextY + measure.authorNameLayout.height + 10f,
+            platform = post.platform,
+            rect = RectF(CardPadding + 20f, platformBadgeTop + 20f, CardPadding + 52f, platformBadgeTop + 52f),
+            color = palette.textPrimary,
         )
         drawLayout(
             canvas = canvas,
@@ -1481,24 +1592,52 @@ private object QuotiCardBitmapRenderer {
         )
     }
 
-    private fun mediaRectFor(
+    private fun mediaRectsFor(
         measure: MeasuredCard,
         contentMode: CardContentMode,
-    ): RectF? {
-        if (contentMode != CardContentMode.WithMedia || measure.mediaHeight <= 0f) {
-            return null
+    ): MediaRects {
+        if (contentMode != CardContentMode.WithMedia) {
+            return MediaRects()
         }
 
         val contentWidth = ExportBitmapWidth - CardPadding * 2
         var y = CardPadding + HeaderHeight + SectionGap + measure.contentLayout.height
+        var relatedRect: RectF? = null
+
+        val mainRect =
+            if (measure.mediaHeight > 0f) {
+                y += SectionGap
+                RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+                    .also { y += measure.mediaHeight }
+            } else {
+                null
+            }
 
         measure.relatedPost?.let { relatedPost ->
             y += SectionGap
+            if (relatedPost.mediaHeight > 0f) {
+                val relatedMediaTop =
+                    y +
+                        RelatedPadding +
+                        relatedPost.headerHeight +
+                        SmallGap +
+                        relatedPost.contentLayout.height +
+                        SmallGap
+                relatedRect =
+                    RectF(
+                        CardPadding + RelatedPadding,
+                        relatedMediaTop,
+                        CardPadding + RelatedPadding + (contentWidth - RelatedPadding * 2),
+                        relatedMediaTop + relatedPost.mediaHeight,
+                    )
+            }
             y += relatedPost.height
         }
 
-        y += SectionGap
-        return RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+        return MediaRects(
+            main = mainRect,
+            related = relatedRect,
+        )
     }
 
     private fun videoExportSizeFor(
@@ -1534,10 +1673,21 @@ private object QuotiCardBitmapRenderer {
         }
 
         return if (mediaBitmaps.size == 2) {
-            max(MinMediaHeight, contentWidth / 2f)
+            max(MinMediaHeight, contentWidth / TwoMediaGridAspectRatio)
         } else {
-            contentWidth
+            max(MinMediaHeight, contentWidth / MultiMediaGridAspectRatio)
         }
+    }
+
+    private fun measureRelatedMediaHeight(
+        contentWidth: Float,
+        mediaBitmaps: List<ExportMediaBitmap>,
+    ): Float {
+        if (mediaBitmaps.isEmpty()) {
+            return RelatedMediaThumbnailSize
+        }
+        return min(RelatedMediaThumbnailSize, contentWidth * 0.36f)
+            .coerceIn(RelatedMediaMinHeight, RelatedMediaMaxHeight)
     }
 
     private fun drawPlatformMark(
@@ -1592,6 +1742,7 @@ private object QuotiCardBitmapRenderer {
         mediaBitmaps: List<ExportMediaBitmap>,
         rect: RectF,
         palette: RenderPalette,
+        cropSingle: Boolean = false,
     ) {
         val fillPaint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1627,9 +1778,10 @@ private object QuotiCardBitmapRenderer {
         )
 
         if (mediaBitmaps.size == 1) {
-            drawImageFit(canvas, mediaBitmaps.first().bitmap, rect)
-            if (mediaBitmaps.first().isVideo) {
-                drawVideoBadge(canvas, rect)
+            if (cropSingle) {
+                drawImageCover(canvas, mediaBitmaps.first().bitmap, rect)
+            } else {
+                drawImageFit(canvas, mediaBitmaps.first().bitmap, rect)
             }
         } else {
             drawMediaGrid(canvas, mediaBitmaps.take(4), rect)
@@ -1659,21 +1811,83 @@ private object QuotiCardBitmapRenderer {
         mediaBitmaps: List<ExportMediaBitmap>,
         rect: RectF,
     ) {
-        val rows = mediaBitmaps.chunked(2)
-        val rowHeight = (rect.height() - MediaGridGap * (rows.size - 1)) / rows.size
-
-        rows.forEachIndexed { rowIndex, row ->
-            val top = rect.top + rowIndex * (rowHeight + MediaGridGap)
-            val cellWidth = (rect.width() - MediaGridGap) / 2f
-            row.forEachIndexed { columnIndex, media ->
-                val left = rect.left + columnIndex * (cellWidth + MediaGridGap)
-                val cellRect = RectF(left, top, left + cellWidth, top + rowHeight)
-                drawImageFit(canvas, media.bitmap, cellRect)
-                if (media.isVideo) {
-                    drawVideoBadge(canvas, cellRect)
-                }
-            }
+        when (mediaBitmaps.size) {
+            2 -> drawTwoMediaGrid(canvas, mediaBitmaps, rect)
+            3 -> drawThreeMediaGrid(canvas, mediaBitmaps, rect)
+            else -> drawFourMediaGrid(canvas, mediaBitmaps, rect)
         }
+    }
+
+    private fun drawTwoMediaGrid(
+        canvas: Canvas,
+        mediaBitmaps: List<ExportMediaBitmap>,
+        rect: RectF,
+    ) {
+        val cellWidth = (rect.width() - MediaGridGap) / 2f
+
+        mediaBitmaps.take(2).forEachIndexed { index, media ->
+            val left = rect.left + index * (cellWidth + MediaGridGap)
+            drawMediaGridCell(
+                canvas = canvas,
+                media = media,
+                rect = RectF(left, rect.top, left + cellWidth, rect.bottom),
+            )
+        }
+    }
+
+    private fun drawThreeMediaGrid(
+        canvas: Canvas,
+        mediaBitmaps: List<ExportMediaBitmap>,
+        rect: RectF,
+    ) {
+        val cellWidth = (rect.width() - MediaGridGap) / 2f
+        val rightLeft = rect.left + cellWidth + MediaGridGap
+        val rightCellHeight = (rect.height() - MediaGridGap) / 2f
+
+        drawMediaGridCell(
+            canvas = canvas,
+            media = mediaBitmaps[0],
+            rect = RectF(rect.left, rect.top, rect.left + cellWidth, rect.bottom),
+        )
+        drawMediaGridCell(
+            canvas = canvas,
+            media = mediaBitmaps[1],
+            rect = RectF(rightLeft, rect.top, rect.right, rect.top + rightCellHeight),
+        )
+        drawMediaGridCell(
+            canvas = canvas,
+            media = mediaBitmaps[2],
+            rect = RectF(rightLeft, rect.top + rightCellHeight + MediaGridGap, rect.right, rect.bottom),
+        )
+    }
+
+    private fun drawFourMediaGrid(
+        canvas: Canvas,
+        mediaBitmaps: List<ExportMediaBitmap>,
+        rect: RectF,
+    ) {
+        val cellWidth = (rect.width() - MediaGridGap) / 2f
+        val rowHeight = (rect.height() - MediaGridGap) / 2f
+
+        mediaBitmaps.take(4).forEachIndexed { index, media ->
+            val column = index % 2
+            val row = index / 2
+            val left = rect.left + column * (cellWidth + MediaGridGap)
+            val top = rect.top + row * (rowHeight + MediaGridGap)
+            drawMediaGridCell(
+                canvas = canvas,
+                media = media,
+                rect = RectF(left, top, left + cellWidth, top + rowHeight),
+            )
+        }
+    }
+
+    private fun drawMediaGridCell(
+        canvas: Canvas,
+        media: ExportMediaBitmap,
+        rect: RectF,
+    ) {
+        drawImageCover(canvas, media.bitmap, rect)
     }
 
     private fun drawImageCover(
@@ -1706,22 +1920,6 @@ private object QuotiCardBitmapRenderer {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
         canvas.drawBitmap(bitmap, null, destination, paint)
-    }
-
-    private fun drawVideoBadge(
-        canvas: Canvas,
-        rect: RectF,
-    ) {
-        val badgeRadius = 44f
-        val badgePaint =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-                color = AndroidColor.argb(170, 0, 0, 0)
-            }
-        val textPaint = textPaint(AndroidColor.WHITE, 29f, Typeface.SANS_SERIF, bold = true)
-
-        canvas.drawCircle(rect.centerX(), rect.centerY(), badgeRadius, badgePaint)
-        drawCenteredText(canvas, "Video", rect.centerX(), rect.centerY(), textPaint)
     }
 
     private fun drawLayout(
@@ -1765,12 +1963,22 @@ private data class MeasuredRelatedPost(
     val authorAvatar: Bitmap?,
     val authorLayout: StaticLayout,
     val contentLayout: StaticLayout,
+    val mediaHeight: Float,
 ) {
     val headerHeight: Float
         get() = max(authorLayout.height.toFloat(), if (authorAvatar != null) RelatedAvatarSize else 0f)
 
     val height: Float
-        get() = RelatedPadding + headerHeight + SmallGap + contentLayout.height + RelatedPadding
+        get() {
+            val mediaBlockHeight =
+                if (mediaHeight > 0f) {
+                    SmallGap + mediaHeight
+                } else {
+                    0f
+                }
+            return RelatedPadding + headerHeight + SmallGap + contentLayout.height.toFloat() + mediaBlockHeight +
+                RelatedPadding
+        }
 }
 
 private data class RenderPalette(
@@ -1804,6 +2012,20 @@ private data class ExportMediaBitmap(
     val isVideo: Boolean,
 )
 
+private data class ExportMediaBitmaps(
+    val main: List<ExportMediaBitmap> = emptyList(),
+    val related: List<ExportMediaBitmap> = emptyList(),
+) {
+    fun recycle() {
+        main.forEach { media -> media.bitmap.recycle() }
+        related.forEach { media -> media.bitmap.recycle() }
+    }
+
+    companion object {
+        val Empty = ExportMediaBitmaps()
+    }
+}
+
 private data class ExportAvatarBitmaps(
     val author: Bitmap?,
     val related: Bitmap?,
@@ -1819,7 +2041,39 @@ private data class VideoExportSize(
     val height: Int,
 )
 
+private data class MediaRects(
+    val main: RectF? = null,
+    val related: RectF? = null,
+)
+
+private data class ExportMediaSources(
+    val main: List<ExportMediaSource>,
+    val related: List<ExportMediaSource>,
+) {
+    val all: List<ExportMediaSource>
+        get() = main + related
+
+    fun videoSourceFor(selectedSourceId: String?): ExportMediaSource? {
+        return selectedSourceId
+            ?.let { sourceId ->
+                all.firstOrNull { source -> source.sourceId == sourceId && source.playableVideoUrl != null }
+            }
+            ?: all.firstOrNull { source -> source.playableVideoUrl != null }
+    }
+}
+
+private data class ExportVideoMediaSlots(
+    val main: List<ExportVideoMediaSlot>,
+    val related: List<ExportVideoMediaSlot>,
+) {
+    fun recycle() {
+        main.recycleVideoSlots()
+        related.recycleVideoSlots()
+    }
+}
+
 private data class ExportMediaSource(
+    val sourceId: String,
     val url: String,
     val isVideo: Boolean,
     val playableVideoUrl: String? = null,
@@ -1851,7 +2105,7 @@ private fun textLayout(
         .setLineSpacing(8f, 1f)
         .setIncludePad(false)
         .setMaxLines(maxLines)
-        .setEllipsize(if (maxLines == 1) TextUtils.TruncateAt.END else null)
+        .setEllipsize(if (maxLines != Int.MAX_VALUE) TextUtils.TruncateAt.END else null)
         .build()
 
 private fun RelatedPost.authorLabel(): String =
@@ -1859,19 +2113,23 @@ private fun RelatedPost.authorLabel(): String =
         .joinToString("  ")
         .ifBlank { "Original post" }
 
-private fun QuotiPost.exportMediaSources(): List<ExportMediaSource> {
-    return (media + relatedPost?.media.orEmpty())
-        .mapNotNull(PostMedia::exportSource)
-}
+private fun List<PostMedia>.exportMediaSources(): List<ExportMediaSource> = mapNotNull(PostMedia::exportSource)
 
 private fun PostMedia.exportSource(): ExportMediaSource? {
     return when (this) {
-        is PostMedia.Image -> ExportMediaSource(url = url, isVideo = false)
+        is PostMedia.Image ->
+            ExportMediaSource(
+                sourceId = url,
+                url = url,
+                isVideo = false,
+            )
+
         is PostMedia.Video -> {
             val playableUrl = playableVideoUrl()
             (posterUrl ?: playableUrl ?: url ?: variants.firstOrNull())
                 ?.let { previewUrl ->
                     ExportMediaSource(
+                        sourceId = playableUrl ?: previewUrl,
                         url = previewUrl,
                         isVideo = true,
                         playableVideoUrl = playableUrl,
@@ -1941,6 +2199,7 @@ private fun copyAudioTrackToMuxer(
     muxer: MediaMuxer,
     muxerAudioTrackIndex: Int,
     maxDurationUs: Long,
+    ensureActive: () -> Unit = {},
 ) {
     val extractor = MediaExtractor()
     val bufferInfo = MediaCodec.BufferInfo()
@@ -1961,6 +2220,7 @@ private fun copyAudioTrackToMuxer(
 
         extractor.selectTrack(sourceAudioTrackIndex)
         while (true) {
+            ensureActive()
             val sampleTimeUs = extractor.sampleTime
             if (sampleTimeUs < 0L) {
                 break

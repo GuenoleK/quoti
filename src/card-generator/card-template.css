@@ -66,9 +66,12 @@
 }
 
 .context-card__date {
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--card-color-text-secondary);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
+  white-space: nowrap;
   transition: color var(--duration-slow) ease;
 }
 
@@ -144,8 +147,9 @@
   display: grid;
   gap: var(--space-3);
   margin: 0;
-  padding-top: var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--card-color-border) 74%, transparent);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--card-color-border) 74%, transparent);
+  border-radius: var(--radius-md);
   transition:
     border-color var(--duration-slow) ease,
     color var(--duration-slow) ease;
@@ -195,7 +199,8 @@
 }
 
 .context-card__related-media {
-  width: min(100%, 430px);
+  width: 100%;
+  max-width: 430px;
   justify-self: start;
 }
 
@@ -208,7 +213,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-5);
+  gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid var(--card-color-border);
   transition: border-color var(--duration-slow) ease;
@@ -224,8 +229,8 @@
   min-height: 0;
   margin: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--card-color-border) 55%, transparent);
-  border: 1px solid var(--card-color-border);
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-md);
   transition:
     background-color var(--duration-slow) ease,
@@ -278,8 +283,13 @@
   width: 100%;
   height: 100%;
   max-height: none;
-  object-fit: contain;
+  object-fit: cover;
   border-radius: inherit;
+}
+
+.context-card__related-media .context-card__image,
+.context-card__related-media .context-card__video {
+  object-fit: cover;
 }
 
 .context-card__video-probe {
@@ -316,6 +326,7 @@
 
 .context-card__author {
   display: grid;
+  overflow: hidden;
   min-width: 0;
   gap: var(--space-1);
 }
@@ -325,6 +336,11 @@
   align-items: center;
   min-width: 0;
   gap: var(--space-3);
+}
+
+.context-card__author-group--primary {
+  flex: 0 1 min(56%, 380px);
+  max-width: min(56%, 380px);
 }
 
 .context-card__avatar {
@@ -366,14 +382,21 @@
 }
 
 .context-card__author-name {
+  display: block;
+  overflow: hidden;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .context-card__author-handle {
+  display: block;
+  overflow: hidden;
   color: var(--card-color-text-secondary);
   font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: color var(--duration-slow) ease;
 }
 

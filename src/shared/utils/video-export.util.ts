@@ -59,7 +59,8 @@ export async function exportPostVideoToWebmBlob({ cardTheme, post, video }: Vide
 
   try {
     const theme = getCanvasTheme(cardTheme);
-    const metrics = measureCard(post, video);
+    const authorAvatar = await loadCanvasImage(post.authorAvatarUrl);
+    const metrics = measureCard(post, video, Boolean(authorAvatar));
     const canvas = document.createElement("canvas");
     canvas.width = canvasWidth;
     canvas.height = metrics.canvasHeight;
@@ -100,11 +101,11 @@ export async function exportPostVideoToWebmBlob({ cardTheme, post, video }: Vide
       recorder.addEventListener("error", () => reject(new Error("Video export failed.")), { once: true });
     });
 
-    renderVideoFrame(context, post, video, metrics, theme);
+    renderVideoFrame(context, post, video, metrics, theme, authorAvatar);
     recorder.start(1000);
     await playVideo(video);
 
-    const renderLoop = startRenderLoop(context, post, video, metrics, theme);
+    const renderLoop = startRenderLoop(context, post, video, metrics, theme, authorAvatar);
 
     try {
       await waitForVideoEnd(video);
@@ -260,6 +261,23 @@ function waitForAudioTrack(stream: MediaStream, timeout: number): Promise<void> 
   });
 }
 
+function loadCanvasImage(source: string | undefined): Promise<HTMLImageElement | null> {
+  if (!source) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    const image = new Image();
+
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => resolve(null), { once: true });
+    image.src = source;
+  });
+}
+
 function createRecorder(stream: MediaStream): MediaRecorder {
   const mimeType = [
     "video/webm;codecs=vp9,opus",
@@ -275,13 +293,14 @@ function startRenderLoop(
   post: ExtractedPost,
   video: HTMLVideoElement,
   metrics: CardMetrics,
-  theme: CanvasTheme
+  theme: CanvasTheme,
+  authorAvatar: HTMLImageElement | null
 ): { stop: () => void } {
   const interval = window.setInterval(() => {
-    renderVideoFrame(context, post, video, metrics, theme);
+    renderVideoFrame(context, post, video, metrics, theme, authorAvatar);
   }, 1000 / frameRate);
 
-  renderVideoFrame(context, post, video, metrics, theme);
+  renderVideoFrame(context, post, video, metrics, theme, authorAvatar);
 
   return {
     stop: () => {
@@ -291,7 +310,10 @@ function startRenderLoop(
 }
 
 type CardMetrics = {
-  authorY: number;
+  authorHandleY: number;
+  authorNameY: number;
+  authorTextWidth: number;
+  authorTextX: number;
   canvasHeight: number;
   cardHeight: number;
   cardWidth: number;
@@ -307,10 +329,13 @@ type CardMetrics = {
   quoteY: number;
 };
 
-function measureCard(post: ExtractedPost, video: HTMLVideoElement): CardMetrics {
+function measureCard(post: ExtractedPost, video: HTMLVideoElement, hasAuthorAvatar: boolean): CardMetrics {
   const cardWidth = canvasWidth;
   const contentX = cardPadding;
   const contentWidth = cardWidth - cardPadding * 2;
+  const authorAvatarSlot = hasAuthorAvatar ? 56 : 0;
+  const authorTextWidth = Math.max(180, Math.round(contentWidth * 0.56) - authorAvatarSlot);
+  const authorTextX = contentX + authorAvatarSlot;
   const probe = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
   probe.font = "34px Georgia, serif";
 
@@ -321,13 +346,16 @@ function measureCard(post: ExtractedPost, video: HTMLVideoElement): CardMetrics 
   const mediaHeight = Math.min(Math.round(contentWidth * videoRatio), maxMediaHeight);
   const mediaWidth = Math.round(mediaHeight / videoRatio);
   const mediaX = contentX + Math.round((contentWidth - mediaWidth) / 2);
-  const quoteY = cardPadding + 72;
+  const quoteY = cardPadding + 86;
   const mediaY = quoteY + quoteHeight + 34;
   const footerY = mediaY + mediaHeight + 58;
-  const cardHeight = footerY + 76;
+  const cardHeight = footerY + 92;
 
   return {
-    authorY: footerY + 34,
+    authorHandleY: cardPadding + 50,
+    authorNameY: cardPadding + 26,
+    authorTextWidth,
+    authorTextX,
     canvasHeight: cardHeight,
     cardHeight,
     cardWidth,
@@ -349,23 +377,36 @@ function renderVideoFrame(
   post: ExtractedPost,
   video: HTMLVideoElement,
   metrics: CardMetrics,
-  theme: CanvasTheme
+  theme: CanvasTheme,
+  authorAvatar: HTMLImageElement | null
 ): void {
   context.clearRect(0, 0, canvasWidth, metrics.canvasHeight);
 
   drawRoundRect(context, 0, 0, metrics.cardWidth, metrics.cardHeight, 32, theme.surface);
   strokeRoundRect(context, 0, 0, metrics.cardWidth, metrics.cardHeight, 32, theme.border);
 
-  drawPlatformMark(context, metrics.contentX, cardPadding);
+  if (authorAvatar) {
+    drawCircularImage(context, authorAvatar, metrics.contentX, cardPadding + 6, 44);
+  }
 
   context.fillStyle = theme.muted;
   context.font = "500 15px Arial, sans-serif";
   context.textAlign = "right";
   context.fillText(formatPublishedDate(post.publishedAt), canvasWidth - cardPadding, metrics.dateY);
 
+  context.textAlign = "left";
+  context.fillStyle = theme.author;
+  context.font = "700 18px Arial, sans-serif";
+  drawEllipsizedText(context, post.authorName, metrics.authorTextX, metrics.authorNameY, metrics.authorTextWidth);
+
+  if (post.authorHandle) {
+    context.fillStyle = theme.muted;
+    context.font = "15px Arial, sans-serif";
+    drawEllipsizedText(context, post.authorHandle, metrics.authorTextX, metrics.authorHandleY, metrics.authorTextWidth);
+  }
+
   context.fillStyle = theme.quote;
   context.font = "34px Georgia, serif";
-  context.textAlign = "left";
   metrics.quoteLines.forEach((line, index) => {
     context.fillText(line, metrics.contentX, metrics.quoteY + index * 42);
   });
@@ -383,20 +424,12 @@ function renderVideoFrame(
   context.lineTo(metrics.contentX + metrics.contentWidth, metrics.footerY);
   context.stroke();
 
-  context.fillStyle = theme.author;
-  context.font = "700 18px Arial, sans-serif";
-  context.fillText(post.authorName, metrics.contentX, metrics.authorY);
-
-  if (post.authorHandle) {
-    context.fillStyle = theme.muted;
-    context.font = "15px Arial, sans-serif";
-    context.fillText(post.authorHandle, metrics.contentX, metrics.authorY + 24);
-  }
+  drawPlatformMark(context, metrics.contentX, metrics.footerY + 20);
 
   context.fillStyle = theme.brand;
   context.font = "700 24px Georgia, serif";
   context.textAlign = "right";
-  context.fillText("Quoti", metrics.contentX + metrics.contentWidth, metrics.authorY + 10);
+  context.fillText("Quoti", metrics.contentX + metrics.contentWidth, metrics.footerY + 47);
   context.textAlign = "left";
 }
 
@@ -426,6 +459,41 @@ function drawPlatformMark(context: CanvasRenderingContext2D, x: number, y: numbe
   context.moveTo(x + 25, y + 10);
   context.lineTo(x + 11, y + 26);
   context.stroke();
+}
+
+function drawCircularImage(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, size: number): void {
+  context.save();
+  context.beginPath();
+  context.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+  context.clip();
+  drawImageCover(context, image, x, y, size, size);
+  context.restore();
+}
+
+function drawImageCover(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number): void {
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const scaledWidth = image.naturalWidth * scale;
+  const scaledHeight = image.naturalHeight * scale;
+  const left = x + (width - scaledWidth) / 2;
+  const top = y + (height - scaledHeight) / 2;
+
+  context.drawImage(image, left, top, scaledWidth, scaledHeight);
+}
+
+function drawEllipsizedText(context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number): void {
+  if (context.measureText(text).width <= maxWidth) {
+    context.fillText(text, x, y);
+    return;
+  }
+
+  const ellipsis = "...";
+  let end = text.length;
+
+  while (end > 0 && context.measureText(`${text.slice(0, end)}${ellipsis}`).width > maxWidth) {
+    end -= 1;
+  }
+
+  context.fillText(`${text.slice(0, end)}${ellipsis}`, x, y);
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number, maxWordsPerLine: number): string[] {

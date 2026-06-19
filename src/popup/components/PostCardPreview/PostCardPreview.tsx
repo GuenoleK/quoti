@@ -76,7 +76,13 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
         >
           <div className="context-card__inner">
             <header className="context-card__source">
-              <SocialPlatformIcon platform={post.platform} />
+              <div className="context-card__author-group context-card__author-group--primary">
+                <PostAvatar avatarUrl={post.authorAvatarUrl} label={post.authorName} variant="author" />
+                <div className="context-card__author">
+                  <span className="context-card__author-name">{post.authorName}</span>
+                  {post.authorHandle ? <span className="context-card__author-handle">{post.authorHandle}</span> : null}
+                </div>
+              </div>
               <span className="context-card__date">{formatPublishedDate(post.publishedAt)}</span>
             </header>
 
@@ -115,13 +121,7 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
             ) : null}
 
             <footer className="context-card__footer">
-              <div className="context-card__author-group">
-                <PostAvatar avatarUrl={post.authorAvatarUrl} label={post.authorName} variant="author" />
-                <div className="context-card__author">
-                  <span className="context-card__author-name">{post.authorName}</span>
-                  {post.authorHandle ? <span className="context-card__author-handle">{post.authorHandle}</span> : null}
-                </div>
-              </div>
+              <SocialPlatformIcon platform={post.platform} />
               <span className="context-card__mark">Quoti</span>
             </footer>
           </div>

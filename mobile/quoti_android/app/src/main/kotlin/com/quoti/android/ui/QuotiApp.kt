@@ -66,6 +66,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
@@ -1049,13 +1050,7 @@ private fun ExportProcessingState(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(16.dp))
-        TextButton(onClick = onCancel) {
-            Icon(
-                imageVector = Icons.Outlined.Close,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+        Button(onClick = onCancel) {
             Text(text = if (exportType == QuotiExportType.Video) "Stop processing" else "Cancel export")
         }
     }

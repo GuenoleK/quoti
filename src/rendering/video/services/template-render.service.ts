@@ -102,23 +102,25 @@ export async function renderVideoTemplateAsset(templateNode: HTMLElement): Promi
 }
 
 function prepareVideoTemplateNode(exportNode: HTMLElement): PreparedVideoTemplateNode {
-  const mediaElement =
+  const mediaRoot =
     exportNode.querySelector<HTMLElement>('.context-card__media[data-media-type="video"]') ??
     exportNode.querySelector<HTMLElement>(".context-card__media");
 
-  if (!mediaElement) {
+  if (!mediaRoot) {
     throw new VideoRenderError("TEMPLATE_RENDER_FAILED", "The card template does not contain a media frame.");
   }
 
   exportNode.dataset.cardContentMode = "with-media";
-  mediaElement.hidden = false;
-  mediaElement.removeAttribute("hidden");
+  mediaRoot.hidden = false;
+  mediaRoot.removeAttribute("hidden");
 
-  const videoFrame = mediaElement.querySelector<HTMLElement>(".context-card__video-frame");
+  const videoFrame = mediaRoot.querySelector<HTMLElement>(".context-card__video-frame");
 
   if (!videoFrame) {
     throw new VideoRenderError("TEMPLATE_RENDER_FAILED", "The card template does not contain a video frame.");
   }
+
+  const mediaElement = videoFrame.closest<HTMLElement>(".context-card__media-item") ?? mediaRoot;
 
   return {
     mediaElement,

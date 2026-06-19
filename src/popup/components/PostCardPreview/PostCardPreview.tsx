@@ -24,12 +24,14 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   const isMountedRef = useRef(true);
   const [primaryMediaSize, setPrimaryMediaSize] = useState<MediaSize | null>(null);
   const [relatedMediaSize, setRelatedMediaSize] = useState<MediaSize | null>(null);
-  const primaryMedia = getPrimaryMedia(post.media);
-  const relatedMedia = getPrimaryMedia(post.relatedPost?.media ?? []);
+  const primaryMediaItems = getRenderableMedia(post.media);
+  const relatedMediaItems = getRenderableMedia(post.relatedPost?.media ?? []);
+  const primaryMedia = getPrimaryMedia(primaryMediaItems);
+  const relatedMedia = getPrimaryMedia(relatedMediaItems);
   const layoutMedia = contentMode === "with-media" ? primaryMedia ?? relatedMedia : undefined;
   const layoutMediaSize = primaryMedia ? primaryMediaSize : relatedMediaSize;
-  const primaryMediaKey = getMediaKey(primaryMedia);
-  const relatedMediaKey = getMediaKey(relatedMedia);
+  const primaryMediaKey = getMediaCollectionKey(primaryMediaItems);
+  const relatedMediaKey = getMediaCollectionKey(relatedMediaItems);
   const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, layoutMediaSize), [layoutMedia, layoutMediaSize, post]);
 
   useEffect(() => {
@@ -90,10 +92,11 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
               <p className="context-card__quote">
                 <EmojiText text={post.content} />
               </p>
-              {post.relatedPost && primaryMedia ? (
+              {post.relatedPost && primaryMedia && primaryMediaItems.length > 0 ? (
                 <PostCardMediaFigure
                   active={contentMode === "with-media"}
-                  media={primaryMedia}
+                  layoutMedia={primaryMedia}
+                  media={primaryMediaItems}
                   mediaSize={primaryMediaSize}
                   onMediaSize={handlePrimaryMediaSize}
                   showMedia={contentMode === "with-media"}
@@ -110,10 +113,11 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
               ) : null}
             </div>
 
-            {primaryMedia && !post.relatedPost ? (
+            {primaryMedia && primaryMediaItems.length > 0 && !post.relatedPost ? (
               <PostCardMediaFigure
                 active={contentMode === "with-media"}
-                media={primaryMedia}
+                layoutMedia={primaryMedia}
+                media={primaryMediaItems}
                 mediaSize={primaryMediaSize}
                 onMediaSize={handlePrimaryMediaSize}
                 showMedia={contentMode === "with-media"}
@@ -133,25 +137,38 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
 
 function PostCardMediaFigure({
   active,
+  layoutMedia,
   media,
   mediaSize,
   onMediaSize,
+  related = false,
   showMedia
 }: {
   active: boolean;
-  media: PostMedia;
+  layoutMedia: PostMedia;
+  media: PostMedia[];
   mediaSize: MediaSize | null;
   onMediaSize: (size: MediaSize) => void;
+  related?: boolean;
   showMedia: boolean;
 }) {
+  const visibleMedia = getRenderableMedia(media);
+  const mediaType = visibleMedia.some((item) => item.type === "video") ? "video" : "image";
+
+  if (visibleMedia.length === 0) {
+    return null;
+  }
+
   return (
     <figure
-      className="context-card__media"
-      data-media-type={media.type}
+      className={`context-card__media${related ? " context-card__related-media" : ""}`}
+      data-media-count={visibleMedia.length}
+      data-media-layout={visibleMedia.length > 1 ? "grid" : "single"}
+      data-media-type={mediaType}
       hidden={!showMedia}
-      style={getMediaStyle(media, mediaSize)}
+      style={getMediaStyle(layoutMedia, mediaSize, visibleMedia.length)}
     >
-      <PostCardMedia active={active} media={media} onSize={onMediaSize} />
+      <PostCardMediaCollection active={active} layoutMedia={layoutMedia} media={visibleMedia} onSize={onMediaSize} />
     </figure>
   );
 }
@@ -169,7 +186,8 @@ function RelatedPostCard({
   relatedPost: RelatedPost;
   showMedia: boolean;
 }) {
-  const media = getPrimaryMedia(relatedPost.media ?? []);
+  const media = getRenderableMedia(relatedPost.media ?? []);
+  const layoutMedia = getPrimaryMedia(media);
   return (
     <aside className="context-card__related-post" aria-label="Post auquel l'auteur répond">
       <div className="context-card__related-meta">
@@ -183,15 +201,16 @@ function RelatedPostCard({
       <p className="context-card__related-content">
         <EmojiText text={relatedPost.content} />
       </p>
-      {media ? (
-        <figure
-          className="context-card__media context-card__related-media"
-          data-media-type={media.type}
-          hidden={!showMedia}
-          style={getMediaStyle(media, mediaSize)}
-        >
-          <PostCardMedia active={active} media={media} onSize={onMediaSize} />
-        </figure>
+      {layoutMedia && media.length > 0 ? (
+        <PostCardMediaFigure
+          active={active}
+          layoutMedia={layoutMedia}
+          media={media}
+          mediaSize={mediaSize}
+          onMediaSize={onMediaSize}
+          related
+          showMedia={showMedia}
+        />
       ) : null}
     </aside>
   );
@@ -254,6 +273,32 @@ function PostCardMedia({ active, media, onSize }: { active: boolean; media: Post
   return <VideoMedia active={active} media={media} onSize={onSize} />;
 }
 
+function PostCardMediaCollection({
+  active,
+  layoutMedia,
+  media,
+  onSize
+}: {
+  active: boolean;
+  layoutMedia: PostMedia;
+  media: PostMedia[];
+  onSize: (size: MediaSize) => void;
+}) {
+  if (media.length === 1) {
+    return <PostCardMedia active={active} media={media[0]} onSize={onSize} />;
+  }
+
+  return (
+    <div className="context-card__media-grid" data-media-count={media.length}>
+      {media.map((item, index) => (
+        <div className="context-card__media-item" data-media-type={item.type} key={`${getMediaKey(item) ?? item.type}-${index}`}>
+          <PostCardMedia active={active} media={item} onSize={item === layoutMedia ? onSize : ignoreMediaSize} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ImageMedia({ media, onSize }: { media: Extract<PostMedia, { type: "image" }>; onSize: (size: MediaSize) => void }) {
   const previewImageUrl = getPreviewImageUrl(media.url);
 
@@ -281,8 +326,10 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
   const posterSizeRef = useRef<MediaSize | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [sourceIndex, setSourceIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [videoStatus, setVideoStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [videoError, setVideoError] = useState<string>("");
+  const [playError, setPlayError] = useState<string>("");
   const playableVideoUrls = getPlayableVideoUrls(media);
   const playableVideoUrl = playableVideoUrls[sourceIndex];
   const posterUrl = getPreviewImageUrl(media.posterUrl);
@@ -290,13 +337,16 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
   useEffect(() => {
     posterSizeRef.current = null;
     setSourceIndex(0);
+    setIsPlaying(false);
     setVideoStatus("idle");
     setVideoError("");
+    setPlayError("");
   }, [media.url, media.posterUrl, media.variants]);
 
   useEffect(() => {
     if (!active) {
       videoRef.current?.pause();
+      setIsPlaying(false);
     }
   }, [active]);
 
@@ -322,6 +372,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
 
     setVideoStatus("loading");
     setVideoError("");
+    setPlayError("");
     video.addEventListener("error", handleError);
 
     if (isHlsVideoUrl(playableVideoUrl) && Hls.isSupported()) {
@@ -403,8 +454,29 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
     setVideoError(message ? "Video preview unavailable" : "Video unavailable");
   };
 
+  const handleManualPlay = (): void => {
+    const video = videoRef.current;
+
+    if (!video || !playableVideoUrl || videoStatus !== "ready") {
+      return;
+    }
+
+    video.defaultMuted = false;
+    video.muted = false;
+
+    if (video.volume === 0) {
+      video.volume = 1;
+    }
+
+    void video.play().catch(() => {
+      setPlayError("Use video controls to play");
+    });
+  };
+
+  const canPlay = videoStatus === "ready" && Boolean(playableVideoUrl);
+
   return (
-    <div className="context-card__video-frame">
+    <div className="context-card__video-frame" data-video-state={isPlaying ? "playing" : videoStatus}>
       <video
         aria-label={media.alt ?? "Video"}
         className="context-card__video"
@@ -413,6 +485,12 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
         preload="metadata"
         poster={posterUrl}
         ref={videoRef}
+        onEnded={() => setIsPlaying(false)}
+        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          setIsPlaying(true);
+          setPlayError("");
+        }}
         onLoadedMetadata={(event) => {
           const video = event.currentTarget;
           setVideoStatus("ready");
@@ -425,6 +503,18 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
           }
         }}
       />
+      {!isPlaying && playableVideoUrl && videoStatus !== "error" ? (
+        <button
+          className="context-card__video-play-button"
+          disabled={!canPlay}
+          type="button"
+          title={canPlay ? "Play video with sound" : "Loading video"}
+          aria-label={canPlay ? "Play video with sound" : "Loading video"}
+          onClick={handleManualPlay}
+        >
+          <span className="context-card__video-play-icon" aria-hidden="true" />
+        </button>
+      ) : null}
       {posterUrl ? (
         <img
           className="context-card__video-probe"
@@ -447,6 +537,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
           {playableVideoUrl ? videoError || "Video unavailable" : "Video unavailable"}
         </span>
       ) : null}
+      {playError ? <span className="context-card__video-status">{playError}</span> : null}
     </div>
   );
 }
@@ -569,6 +660,16 @@ function getPrimaryMedia(media: PostMedia[]): PostMedia | undefined {
   return media.find((item) => item.type === "video") ?? media.find((item) => item.type === "image");
 }
 
+function getRenderableMedia(media: PostMedia[]): PostMedia[] {
+  return media.slice(0, 4);
+}
+
+function getMediaCollectionKey(media: PostMedia[]): string {
+  return getRenderableMedia(media)
+    .map((item, index) => `${index}:${getMediaKey(item) ?? ""}`)
+    .join("|");
+}
+
 function getMediaKey(media: PostMedia | undefined): string | undefined {
   if (!media) {
     return undefined;
@@ -577,7 +678,17 @@ function getMediaKey(media: PostMedia | undefined): string | undefined {
   return media.type === "image" ? media.url : media.url ?? media.posterUrl;
 }
 
-function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null): React.CSSProperties | undefined {
+function ignoreMediaSize(): void {
+  return undefined;
+}
+
+function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null, mediaCount = 1): React.CSSProperties | undefined {
+  if (mediaCount > 1) {
+    return {
+      aspectRatio: `${getMediaGridAspectRatio(mediaCount)} / 1`
+    };
+  }
+
   if (!mediaSize) {
     return undefined;
   }
@@ -595,6 +706,10 @@ function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null): React.CS
   return {
     aspectRatio: `${mediaSize.width} / ${mediaSize.height}`
   };
+}
+
+function getMediaGridAspectRatio(mediaCount: number): number {
+  return mediaCount === 2 ? 2 : 16 / 9;
 }
 
 function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {

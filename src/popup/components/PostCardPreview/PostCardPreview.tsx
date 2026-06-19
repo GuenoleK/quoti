@@ -32,6 +32,7 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   const layoutMediaSize = primaryMedia ? primaryMediaSize : relatedMediaSize;
   const primaryMediaKey = getMediaCollectionKey(primaryMediaItems);
   const relatedMediaKey = getMediaCollectionKey(relatedMediaItems);
+  const hasBodyContent = Boolean(post.content.trim() || post.relatedPost);
   const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, layoutMediaSize), [layoutMedia, layoutMediaSize, post]);
 
   useEffect(() => {
@@ -88,30 +89,34 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
               <span className="context-card__date">{formatPublishedDate(post.publishedAt)}</span>
             </header>
 
-            <div className="context-card__body">
-              <p className="context-card__quote">
-                <EmojiText text={post.content} />
-              </p>
-              {post.relatedPost && primaryMedia && primaryMediaItems.length > 0 ? (
-                <PostCardMediaFigure
-                  active={contentMode === "with-media"}
-                  layoutMedia={primaryMedia}
-                  media={primaryMediaItems}
-                  mediaSize={primaryMediaSize}
-                  onMediaSize={handlePrimaryMediaSize}
-                  showMedia={contentMode === "with-media"}
-                />
-              ) : null}
-              {post.relatedPost ? (
-                <RelatedPostCard
-                  active={contentMode === "with-media"}
-                  mediaSize={relatedMediaSize}
-                  onMediaSize={handleRelatedMediaSize}
-                  relatedPost={post.relatedPost}
-                  showMedia={contentMode === "with-media"}
-                />
-              ) : null}
-            </div>
+            {hasBodyContent ? (
+              <div className="context-card__body">
+                {post.content.trim() ? (
+                  <p className="context-card__quote">
+                    <EmojiText text={post.content} />
+                  </p>
+                ) : null}
+                {post.relatedPost && primaryMedia && primaryMediaItems.length > 0 ? (
+                  <PostCardMediaFigure
+                    active={contentMode === "with-media"}
+                    layoutMedia={primaryMedia}
+                    media={primaryMediaItems}
+                    mediaSize={primaryMediaSize}
+                    onMediaSize={handlePrimaryMediaSize}
+                    showMedia={contentMode === "with-media"}
+                  />
+                ) : null}
+                {post.relatedPost ? (
+                  <RelatedPostCard
+                    active={contentMode === "with-media"}
+                    mediaSize={relatedMediaSize}
+                    onMediaSize={handleRelatedMediaSize}
+                    relatedPost={post.relatedPost}
+                    showMedia={contentMode === "with-media"}
+                  />
+                ) : null}
+              </div>
+            ) : null}
 
             {primaryMedia && primaryMediaItems.length > 0 && !post.relatedPost ? (
               <PostCardMediaFigure

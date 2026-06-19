@@ -152,7 +152,7 @@ function extractArticle(article: HTMLElement | null, emptyReason: string, observ
 
   const post = extractPostFromArticle(article, observedVideoUrls);
 
-  if (!post.content) {
+  if (!hasExtractedPostContent(post)) {
     return {
       status: "empty",
       reason: "Quoti found a post, but could not read its content."
@@ -271,7 +271,7 @@ function injectInlineButtons(): void {
 }
 
 function shouldInjectInlineButton(article: HTMLElement): boolean {
-  return Boolean(article.querySelector('[data-testid="tweetText"]'));
+  return Boolean(article.querySelector('[data-testid="tweetText"], time, img[src*="/media/"], video'));
 }
 
 function removeArticleInlineButtons(article: HTMLElement): void {
@@ -399,7 +399,7 @@ function findViewsElement(article: HTMLElement): HTMLElement | null {
       text: normalizeText(candidate.textContent)
     }))
     .filter(({ candidate, text }) => !candidate.classList.contains(inlineButtonClassName) && isViewsText(text))
-    .sort((a, b) => a.text.length - b.text.length)[0]?.candidate ?? null;
+    .sort((left, right) => left.text.length - right.text.length)[0]?.candidate ?? null;
 }
 
 function isViewsText(text: string): boolean {
@@ -487,6 +487,15 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
     media,
     capturedAt: new Date().toISOString()
   };
+}
+
+function hasExtractedPostContent(post: ExtractedPost): boolean {
+  return Boolean(
+    post.content.trim() ||
+      post.media.length > 0 ||
+      post.relatedPost?.content.trim() ||
+      (post.relatedPost?.media?.length ?? 0) > 0
+  );
 }
 
 function readAuthorName(authorBlock: HTMLElement | null): string {
@@ -631,16 +640,8 @@ function readPostContent(
     };
   }
 
-  const fallbackText = normalizePostContent(article.innerText);
-  const linesToRemove = new Set(["Reply", "Repost", "Like", "View", "Share"]);
-
   return {
-    content: fallbackText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !linesToRemove.has(line))
-      .slice(0, 12)
-      .join("\n")
+    content: ""
   };
 }
 

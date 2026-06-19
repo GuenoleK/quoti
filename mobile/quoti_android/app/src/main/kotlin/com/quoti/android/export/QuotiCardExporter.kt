@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.media.Image
 import android.media.MediaCodec
@@ -25,6 +26,7 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
+import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
 import android.os.Build
@@ -369,6 +371,8 @@ object QuotiCardExporter {
     ) {
         var encoder: AvcBitmapEncoder? = null
         var frameRenderer: QuotiCardBitmapRenderer.VideoFrameRenderer? = null
+        var gpuTemplate: QuotiCardBitmapRenderer.GpuVideoFrameTemplate? = null
+        var decoderOutputSurface: DecoderOutputSurface? = null
         var encodedFrameCount = 0
         var lastProgress = -1
         val exportCoroutineContext = coroutineContext
@@ -384,44 +388,9 @@ object QuotiCardExporter {
                 ?.let { source -> runCatching { findAudioTrackFormat(source) }.getOrNull() }
             val frameCount = max(1, ceil(exportDurationMs / 1_000.0 * exportProfile.frameRate).toInt())
             val frameIntervalUs = 1_000_000L / exportProfile.frameRate
+            val videoTrackInfo = readVideoTrackInfo(videoSource)
 
-            decodeVideoFrames(
-                videoSource = videoSource,
-                frameCount = frameCount,
-                frameIntervalUs = frameIntervalUs,
-                maxDurationUs = exportDurationUs,
-                ensureActive = ensureNotCancelled,
-            ) { frame, presentationTimeUs ->
-                ensureNotCancelled()
-                val mediaBitmaps = mediaSlots.toMediaBitmaps(frame)
-                val cardBitmap =
-                    (frameRenderer
-                        ?: QuotiCardBitmapRenderer.prepareVideoFrameRenderer(
-                            post = post,
-                            cardTone = cardTone,
-                            contentMode = contentMode,
-                            mediaBitmaps = mediaBitmaps,
-                            avatarBitmaps = avatarBitmaps,
-                            targetWidth = exportProfile.bitmapWidth,
-                        ).also { preparedRenderer ->
-                            frameRenderer = preparedRenderer
-                        }).render(mediaBitmaps)
-
-                val activeEncoder =
-                    encoder
-                        ?: AvcBitmapEncoder(
-                            output = output,
-                            width = cardBitmap.width,
-                            height = cardBitmap.height,
-                            frameRate = exportProfile.frameRate,
-                            audioSource = audioSource,
-                            audioFormat = audioFormat,
-                            maxDurationUs = exportDurationUs,
-                            ensureActive = ensureNotCancelled,
-                        ).also { createdEncoder ->
-                            encoder = createdEncoder
-                        }
-                activeEncoder.encode(cardBitmap, presentationTimeUs)
+            fun reportFrameProgress() {
                 encodedFrameCount++
                 val progress =
                     (20f + ((encodedFrameCount.toFloat() / frameCount.toFloat()) * 78f))
@@ -432,9 +401,112 @@ object QuotiCardExporter {
                     lastProgress = progress
                 }
             }
-            ensureNotCancelled()
-            encoder?.finish()
+
+            if (mediaSlots.supportsGpuVideoTexturePath() && videoTrackInfo.rotationDegrees == 0) {
+                val videoPlaceholder = videoTrackInfo.createPlaceholderBitmap()
+                try {
+                    val templateMediaBitmaps =
+                        ExportMediaBitmaps(
+                            main = listOf(
+                                ExportMediaBitmap(
+                                    bitmap = videoPlaceholder,
+                                    isVideo = false,
+                                ),
+                            ),
+                        )
+                    val preparedTemplate =
+                        QuotiCardBitmapRenderer.prepareGpuVideoFrameTemplate(
+                            post = post,
+                            cardTone = cardTone,
+                            contentMode = contentMode,
+                            mediaBitmaps = templateMediaBitmaps,
+                            avatarBitmaps = avatarBitmaps,
+                            targetWidth = exportProfile.bitmapWidth,
+                        )
+                    gpuTemplate = preparedTemplate
+                    val activeEncoder =
+                        AvcBitmapEncoder(
+                            output = output,
+                            width = preparedTemplate.width,
+                            height = preparedTemplate.height,
+                            frameRate = exportProfile.frameRate,
+                            audioSource = audioSource,
+                            audioFormat = audioFormat,
+                            maxDurationUs = exportDurationUs,
+                            ensureActive = ensureNotCancelled,
+                        ).also { createdEncoder ->
+                            encoder = createdEncoder
+                        }
+                    val decoderTextureId = activeEncoder.createExternalTexture()
+                    val activeDecoderOutputSurface =
+                        DecoderOutputSurface(decoderTextureId).also { createdSurface ->
+                            decoderOutputSurface = createdSurface
+                        }
+
+                    decodeVideoFramesToTexture(
+                        videoSource = videoSource,
+                        frameCount = frameCount,
+                        frameIntervalUs = frameIntervalUs,
+                        maxDurationUs = exportDurationUs,
+                        decoderOutputSurface = activeDecoderOutputSurface,
+                        videoTrackInfo = videoTrackInfo,
+                        ensureActive = ensureNotCancelled,
+                    ) { frame, presentationTimeUs ->
+                        ensureNotCancelled()
+                        activeEncoder.encodeTexture(preparedTemplate, frame, presentationTimeUs)
+                        reportFrameProgress()
+                    }
+                    ensureNotCancelled()
+                    activeEncoder.finish()
+                } finally {
+                    videoPlaceholder.recycle()
+                }
+            } else {
+                decodeVideoFrames(
+                    videoSource = videoSource,
+                    frameCount = frameCount,
+                    frameIntervalUs = frameIntervalUs,
+                    maxDurationUs = exportDurationUs,
+                    ensureActive = ensureNotCancelled,
+                ) { frame, presentationTimeUs ->
+                    ensureNotCancelled()
+                    val mediaBitmaps = mediaSlots.toMediaBitmaps(frame)
+                    val cardBitmap =
+                        (frameRenderer
+                            ?: QuotiCardBitmapRenderer.prepareVideoFrameRenderer(
+                                post = post,
+                                cardTone = cardTone,
+                                contentMode = contentMode,
+                                mediaBitmaps = mediaBitmaps,
+                                avatarBitmaps = avatarBitmaps,
+                                targetWidth = exportProfile.bitmapWidth,
+                            ).also { preparedRenderer ->
+                                frameRenderer = preparedRenderer
+                            }).render(mediaBitmaps)
+
+                    val activeEncoder =
+                        encoder
+                            ?: AvcBitmapEncoder(
+                                output = output,
+                                width = cardBitmap.width,
+                                height = cardBitmap.height,
+                                frameRate = exportProfile.frameRate,
+                                audioSource = audioSource,
+                                audioFormat = audioFormat,
+                                maxDurationUs = exportDurationUs,
+                                ensureActive = ensureNotCancelled,
+                            ).also { createdEncoder ->
+                                encoder = createdEncoder
+                            }
+                    activeEncoder.encode(cardBitmap, presentationTimeUs)
+                    reportFrameProgress()
+                }
+                ensureNotCancelled()
+                encoder?.finish()
+            }
         } finally {
+            decoderOutputSurface?.release()
+            gpuTemplate?.release()
             frameRenderer?.release()
             encoder?.release()
         }
@@ -779,6 +851,215 @@ private fun List<ExportVideoMediaSlot>.recycleVideoSlots() {
     }
 }
 
+private fun ExportVideoMediaSlots.supportsGpuVideoTexturePath(): Boolean {
+    return main.size == 1 &&
+        main.first() == ExportVideoMediaSlot.DynamicVideo &&
+        related.isEmpty()
+}
+
+private data class VideoTrackInfo(
+    val width: Int,
+    val height: Int,
+    val rotationDegrees: Int,
+) {
+    val displayWidth: Int
+        get() = if (rotationDegrees == 90 || rotationDegrees == 270) height else width
+
+    val displayHeight: Int
+        get() = if (rotationDegrees == 90 || rotationDegrees == 270) width else height
+
+    fun createPlaceholderBitmap(): Bitmap {
+        val longEdge = max(displayWidth, displayHeight).coerceAtLeast(1)
+        val scale = min(1f, VideoExportSourceFrameMaxLongEdge.toFloat() / longEdge.toFloat())
+        val bitmapWidth = max(2, (displayWidth * scale).roundToInt())
+        val bitmapHeight = max(2, (displayHeight * scale).roundToInt())
+        return Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
+    }
+}
+
+private fun readVideoTrackInfo(videoSource: String): VideoTrackInfo {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setVideoDataSource(videoSource)
+        val videoTrackIndex = extractor.firstTrackIndex("video/")
+        if (videoTrackIndex < 0) {
+            error("No video track is available in the source video.")
+        }
+
+        val format = extractor.getTrackFormat(videoTrackIndex)
+        VideoTrackInfo(
+            width = format.getIntegerOrDefault(MediaFormat.KEY_WIDTH, 2).coerceAtLeast(2),
+            height = format.getIntegerOrDefault(MediaFormat.KEY_HEIGHT, 2).coerceAtLeast(2),
+            rotationDegrees = format.getIntegerOrDefault(MediaFormat.KEY_ROTATION, 0),
+        )
+    } finally {
+        extractor.release()
+    }
+}
+
+private data class VideoTextureFrame(
+    val textureId: Int,
+    val textureMatrix: FloatArray,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
+)
+
+private fun decodeVideoFramesToTexture(
+    videoSource: String,
+    frameCount: Int,
+    frameIntervalUs: Long,
+    maxDurationUs: Long,
+    decoderOutputSurface: DecoderOutputSurface,
+    videoTrackInfo: VideoTrackInfo,
+    ensureActive: () -> Unit = {},
+    onFrame: (VideoTextureFrame, Long) -> Unit,
+) {
+    val extractor = MediaExtractor()
+    var decoder: MediaCodec? = null
+    var lastFrame: VideoTextureFrame? = null
+
+    try {
+        extractor.setVideoDataSource(videoSource)
+        val videoTrackIndex = extractor.firstTrackIndex("video/")
+        if (videoTrackIndex < 0) {
+            error("No video track is available in the source video.")
+        }
+
+        extractor.selectTrack(videoTrackIndex)
+        val format = extractor.getTrackFormat(videoTrackIndex)
+        val mime = format.getString(MediaFormat.KEY_MIME)
+            ?: error("Video track MIME type is unavailable.")
+        val activeDecoder =
+            MediaCodec.createDecoderByType(mime).also { createdDecoder ->
+                decoder = createdDecoder
+                createdDecoder.configure(format, decoderOutputSurface.surface, null, 0)
+                createdDecoder.start()
+            }
+
+        val bufferInfo = MediaCodec.BufferInfo()
+        var inputDone = false
+        var outputDone = false
+        var nextFrameIndex = 0
+        var stalledPolls = 0
+
+        fun emitFramesUpTo(
+            frame: VideoTextureFrame,
+            decodedPresentationTimeUs: Long,
+        ) {
+            while (nextFrameIndex < frameCount && nextFrameIndex * frameIntervalUs <= decodedPresentationTimeUs) {
+                ensureActive()
+                val presentationTimeUs = nextFrameIndex * frameIntervalUs
+                onFrame(frame, presentationTimeUs)
+                nextFrameIndex++
+                if (presentationTimeUs + frameIntervalUs > maxDurationUs) {
+                    break
+                }
+            }
+        }
+
+        fun fillTrailingFrames() {
+            val fallback = lastFrame ?: error("Unable to decode a frame from the source video.")
+            while (nextFrameIndex < frameCount) {
+                ensureActive()
+                onFrame(fallback, nextFrameIndex * frameIntervalUs)
+                nextFrameIndex++
+            }
+        }
+
+        while (!outputDone && nextFrameIndex < frameCount) {
+            ensureActive()
+            if (!inputDone) {
+                val inputBufferIndex = activeDecoder.dequeueInputBuffer(VideoEncoderTimeoutUs)
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = activeDecoder.getInputBuffer(inputBufferIndex)
+                        ?: error("Video decoder input buffer is unavailable.")
+                    val sampleTimeUs = extractor.sampleTime
+                    if (sampleTimeUs < 0L || sampleTimeUs >= maxDurationUs) {
+                        activeDecoder.queueInputBuffer(
+                            inputBufferIndex,
+                            0,
+                            0,
+                            0L,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                        )
+                        inputDone = true
+                    } else {
+                        inputBuffer.clear()
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize < 0) {
+                            activeDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                0,
+                                0L,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                            )
+                            inputDone = true
+                        } else {
+                            activeDecoder.queueInputBuffer(
+                                inputBufferIndex,
+                                0,
+                                sampleSize,
+                                sampleTimeUs,
+                                extractor.sampleFlags,
+                            )
+                            extractor.advance()
+                            stalledPolls = 0
+                        }
+                    }
+                }
+            }
+
+            when (val outputBufferIndex = activeDecoder.dequeueOutputBuffer(bufferInfo, VideoEncoderTimeoutUs)) {
+                MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    stalledPolls++
+                    check(stalledPolls <= VideoCodecMaxStalledPolls) {
+                        "Timed out while decoding the source video."
+                    }
+                }
+                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    stalledPolls = 0
+                }
+                else -> {
+                    if (outputBufferIndex >= 0) {
+                        stalledPolls = 0
+                        val isEndOfStream = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        val shouldRender =
+                            bufferInfo.size > 0 &&
+                                bufferInfo.presentationTimeUs >= nextFrameIndex * frameIntervalUs
+                        activeDecoder.releaseOutputBuffer(outputBufferIndex, shouldRender)
+
+                        if (shouldRender) {
+                            decoderOutputSurface.awaitNewImage(ensureActive)
+                            val frame =
+                                VideoTextureFrame(
+                                    textureId = decoderOutputSurface.textureId,
+                                    textureMatrix = decoderOutputSurface.textureMatrix.copyOf(),
+                                    sourceWidth = videoTrackInfo.displayWidth,
+                                    sourceHeight = videoTrackInfo.displayHeight,
+                                )
+                            emitFramesUpTo(frame, bufferInfo.presentationTimeUs)
+                            lastFrame = frame
+                        }
+
+                        if (isEndOfStream) {
+                            outputDone = true
+                        }
+                    }
+                }
+            }
+        }
+
+        if (nextFrameIndex < frameCount) {
+            fillTrailingFrames()
+        }
+    } finally {
+        decoder?.runCatchingStop()
+        decoder?.release()
+        extractor.release()
+    }
+}
+
 private fun decodeVideoFrames(
     videoSource: String,
     frameCount: Int,
@@ -790,6 +1071,7 @@ private fun decodeVideoFrames(
     val extractor = MediaExtractor()
     var decoder: MediaCodec? = null
     var lastFrame: Bitmap? = null
+    val frameConverter = VideoFrameBitmapConverter()
 
     try {
         extractor.setVideoDataSource(videoSource)
@@ -899,17 +1181,13 @@ private fun decodeVideoFrames(
                         stalledPolls = 0
                         val isEndOfStream = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         if (bufferInfo.size > 0 && bufferInfo.presentationTimeUs >= nextFrameIndex * frameIntervalUs) {
-                            val decodedFrame =
-                                activeDecoder.getOutputImage(outputBufferIndex)?.toVideoBitmap(rotationDegrees, ensureActive)
-                                    ?: error("Video decoder output image is unavailable.")
+                            val outputImage = activeDecoder.getOutputImage(outputBufferIndex)
+                                ?: error("Video decoder output image is unavailable.")
+                            val decodedFrame = frameConverter.convert(outputImage, rotationDegrees, ensureActive)
 
-                            try {
-                                emitFramesUpTo(decodedFrame, bufferInfo.presentationTimeUs)
-                                lastFrame?.recycle()
-                                lastFrame = decodedFrame.copy(Bitmap.Config.ARGB_8888, false)
-                            } finally {
-                                decodedFrame.recycle()
-                            }
+                            emitFramesUpTo(decodedFrame, bufferInfo.presentationTimeUs)
+                            lastFrame?.recycle()
+                            lastFrame = decodedFrame.copy(Bitmap.Config.ARGB_8888, false)
                         }
 
                         activeDecoder.releaseOutputBuffer(outputBufferIndex, false)
@@ -926,6 +1204,7 @@ private fun decodeVideoFrames(
         }
     } finally {
         lastFrame?.recycle()
+        frameConverter.release()
         decoder?.runCatchingStop()
         decoder?.release()
         extractor.release()
@@ -936,15 +1215,95 @@ private fun MediaCodec.runCatchingStop() {
     runCatching { stop() }
 }
 
-private fun Image.toVideoBitmap(
-    rotationDegrees: Int,
-    ensureActive: () -> Unit = {},
-): Bitmap {
-    return try {
+private class DecoderOutputSurface(
+    val textureId: Int,
+) : SurfaceTexture.OnFrameAvailableListener {
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+    private val frameSyncObject = Object()
+    private val surfaceTexture = SurfaceTexture(textureId)
+    val surface = Surface(surfaceTexture)
+    val textureMatrix = FloatArray(16)
+    private var frameAvailable = false
+    private var released = false
+
+    init {
+        surfaceTexture.setOnFrameAvailableListener(this)
+    }
+
+    override fun onFrameAvailable(surfaceTexture: SurfaceTexture) {
+        synchronized(frameSyncObject) {
+            frameAvailable = true
+            frameSyncObject.notifyAll()
+        }
+    }
+
+    fun awaitNewImage(ensureActive: () -> Unit = {}) {
+        val timeoutMs = 2_500L
+        val deadline = System.currentTimeMillis() + timeoutMs
+        synchronized(frameSyncObject) {
+            while (!frameAvailable) {
+                ensureActive()
+                val remainingMs = deadline - System.currentTimeMillis()
+                check(remainingMs > 0L) { "Timed out waiting for a decoded video frame." }
+                frameSyncObject.wait(min(25L, remainingMs))
+            }
+            frameAvailable = false
+        }
+
+        ensureActive()
+        surfaceTexture.updateTexImage()
+        surfaceTexture.getTransformMatrix(textureMatrix)
+    }
+
+    fun release() {
+        if (released) {
+            return
+        }
+
+        released = true
+        surface.release()
+        surfaceTexture.release()
+    }
+}
+
+private class VideoFrameBitmapConverter {
+    private var pixelBuffer = IntArray(0)
+    private var rawBitmap: Bitmap? = null
+    private var scaledBitmap: Bitmap? = null
+    private var rotatedBitmap: Bitmap? = null
+    private val transformPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    fun convert(
+        image: Image,
+        rotationDegrees: Int,
+        ensureActive: () -> Unit = {},
+    ): Bitmap {
+        try {
+            val rawFrame = image.toReusableRawBitmap(ensureActive)
+            val scaledFrame = rawFrame.scaledLongEdgeToReusable(VideoExportSourceFrameMaxLongEdge)
+            return scaledFrame.rotatedToReusable(rotationDegrees)
+        } finally {
+            image.close()
+        }
+    }
+
+    fun release() {
+        rawBitmap?.recycle()
+        scaledBitmap?.recycle()
+        rotatedBitmap?.recycle()
+        rawBitmap = null
+        scaledBitmap = null
+        rotatedBitmap = null
+    }
+
+    private fun Image.toReusableRawBitmap(ensureActive: () -> Unit): Bitmap {
         val crop = cropRect
         val outputWidth = crop.width()
         val outputHeight = crop.height()
-        val pixels = IntArray(outputWidth * outputHeight)
+        val pixelCount = outputWidth * outputHeight
+        if (pixelBuffer.size < pixelCount) {
+            pixelBuffer = IntArray(pixelCount)
+        }
         val yPlane = planes[0]
         val uPlane = planes[1]
         val vPlane = planes[2]
@@ -964,16 +1323,79 @@ private fun Image.toVideoBitmap(
                 val chromaY = imageY / 2
                 val u = uBuffer.get(chromaY * uPlane.rowStride + chromaX * uPlane.pixelStride).toInt() and 0xff
                 val v = vBuffer.get(chromaY * vPlane.rowStride + chromaX * vPlane.pixelStride).toInt() and 0xff
-                pixels[row * outputWidth + column] = yuvToArgb(y, u, v)
+                pixelBuffer[row * outputWidth + column] = yuvToArgb(y, u, v)
             }
         }
 
-        Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
-            .scaleLongEdgeTo(VideoExportSourceFrameMaxLongEdge)
-            .rotate(rotationDegrees)
-    } finally {
-        close()
+        val bitmap = rawBitmap.reuseOrCreate(outputWidth, outputHeight).also { reusable ->
+            rawBitmap = reusable
+        }
+        bitmap.setPixels(pixelBuffer, 0, outputWidth, 0, 0, outputWidth, outputHeight)
+        return bitmap
     }
+
+    private fun Bitmap.scaledLongEdgeToReusable(maxLongEdge: Int): Bitmap {
+        val longEdge = max(width, height)
+        if (longEdge <= maxLongEdge) {
+            return this
+        }
+
+        val scale = maxLongEdge.toFloat() / longEdge.toFloat()
+        val scaledWidth = max(2, (width * scale).roundToInt())
+        val scaledHeight = max(2, (height * scale).roundToInt())
+        val output = scaledBitmap.reuseOrCreate(scaledWidth, scaledHeight).also { reusable ->
+            scaledBitmap = reusable
+        }
+        Canvas(output).drawBitmap(this, null, RectF(0f, 0f, scaledWidth.toFloat(), scaledHeight.toFloat()), transformPaint)
+        return output
+    }
+
+    private fun Bitmap.rotatedToReusable(rotationDegrees: Int): Bitmap {
+        return when (((rotationDegrees % 360) + 360) % 360) {
+            90 -> drawRotatedToReusable(width = height, height = width, degrees = 90f) { canvas ->
+                canvas.translate(height.toFloat(), 0f)
+            }
+            180 -> drawRotatedToReusable(width = width, height = height, degrees = 180f) { canvas ->
+                canvas.translate(width.toFloat(), height.toFloat())
+            }
+            270 -> drawRotatedToReusable(width = height, height = width, degrees = 270f) { canvas ->
+                canvas.translate(0f, width.toFloat())
+            }
+            else -> this
+        }
+    }
+
+    private fun Bitmap.drawRotatedToReusable(
+        width: Int,
+        height: Int,
+        degrees: Float,
+        translate: (Canvas) -> Unit,
+    ): Bitmap {
+        val output = rotatedBitmap.reuseOrCreate(width, height).also { reusable ->
+            rotatedBitmap = reusable
+        }
+        output.eraseColor(AndroidColor.TRANSPARENT)
+        Canvas(output).apply {
+            save()
+            translate(this)
+            rotate(degrees)
+            drawBitmap(this@drawRotatedToReusable, 0f, 0f, transformPaint)
+            restore()
+        }
+        return output
+    }
+}
+
+private fun Bitmap?.reuseOrCreate(
+    width: Int,
+    height: Int,
+): Bitmap {
+    if (this != null && !isRecycled && this.width == width && this.height == height) {
+        return this
+    }
+
+    this?.recycle()
+    return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 }
 
 private fun yuvToArgb(
@@ -988,32 +1410,6 @@ private fun yuvToArgb(
     val green = ((298 * clampedY - 100 * shiftedU - 208 * shiftedV + 128) shr 8).coerceIn(0, 255)
     val blue = ((298 * clampedY + 516 * shiftedU + 128) shr 8).coerceIn(0, 255)
     return AndroidColor.rgb(red, green, blue)
-}
-
-private fun Bitmap.scaleLongEdgeTo(maxLongEdge: Int): Bitmap {
-    val longEdge = max(width, height)
-    if (longEdge <= maxLongEdge) {
-        return this
-    }
-
-    val scale = maxLongEdge.toFloat() / longEdge.toFloat()
-    val scaledWidth = max(2, (width * scale).roundToInt())
-    val scaledHeight = max(2, (height * scale).roundToInt())
-    val output = Bitmap.createScaledBitmap(this, scaledWidth, scaledHeight, true)
-    recycle()
-    return output
-}
-
-private fun Bitmap.rotate(rotationDegrees: Int): Bitmap {
-    val normalizedDegrees = ((rotationDegrees % 360) + 360) % 360
-    if (normalizedDegrees == 0) {
-        return this
-    }
-
-    val matrix = Matrix().apply { postRotate(normalizedDegrees.toFloat()) }
-    val output = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
-    recycle()
-    return output
 }
 
 private class AvcBitmapEncoder(
@@ -1055,6 +1451,21 @@ private class AvcBitmapEncoder(
     ) {
         ensureActive()
         inputSurface.drawBitmap(bitmap, presentationTimeUs)
+        drain(endOfStream = false)
+    }
+
+    fun createExternalTexture(): Int {
+        ensureActive()
+        return inputSurface.createExternalTexture()
+    }
+
+    fun encodeTexture(
+        template: QuotiCardBitmapRenderer.GpuVideoFrameTemplate,
+        frame: VideoTextureFrame,
+        presentationTimeUs: Long,
+    ) {
+        ensureActive()
+        inputSurface.drawTextureFrame(template, frame, presentationTimeUs)
         drain(endOfStream = false)
     }
 
@@ -1162,14 +1573,32 @@ private class EncoderInputSurface(
                 put(FullFrameVertices)
                 position(0)
             }
+    private val videoVertexBuffer: FloatBuffer =
+        ByteBuffer
+            .allocateDirect(VideoFrameVertices.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+    private val videoFrameVertices = FloatArray(VideoFrameVertices.size)
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var program = 0
+    private var externalProgram = 0
     private var textureId = 0
+    private var templateTextureId = 0
+    private var templateOverlayTextureId = 0
     private var positionHandle = 0
     private var textureCoordinateHandle = 0
     private var textureUniformHandle = 0
+    private var externalPositionHandle = 0
+    private var externalTextureCoordinateHandle = 0
+    private var externalQuadCoordinateHandle = 0
+    private var externalTextureUniformHandle = 0
+    private var externalTextureMatrixHandle = 0
+    private var externalRectSizeHandle = 0
+    private var externalCornerRadiusHandle = 0
+    private var textureWidth = 0
+    private var textureHeight = 0
     private var released = false
 
     init {
@@ -1193,7 +1622,13 @@ private class EncoderInputSurface(
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        if (textureWidth == bitmap.width && textureHeight == bitmap.height) {
+            GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap)
+        } else {
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            textureWidth = bitmap.width
+            textureHeight = bitmap.height
+        }
         GLES20.glUniform1i(textureUniformHandle, 0)
 
         vertexBuffer.position(0)
@@ -1227,6 +1662,247 @@ private class EncoderInputSurface(
         checkEgl(EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
             "Unable to swap the encoder EGL buffers."
         }
+    }
+
+    fun createExternalTexture(): Int {
+        check(!released) { "Encoder input surface has already been released." }
+        checkEgl(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            "Unable to make the encoder EGL context current."
+        }
+
+        val textures = IntArray(1)
+        GLES20.glGenTextures(1, textures, 0)
+        val externalTextureId = textures[0]
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, externalTextureId)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        checkGlError("create decoder texture")
+        return externalTextureId
+    }
+
+    fun drawTextureFrame(
+        template: QuotiCardBitmapRenderer.GpuVideoFrameTemplate,
+        frame: VideoTextureFrame,
+        presentationTimeUs: Long,
+    ) {
+        check(!released) { "Encoder input surface has already been released." }
+        checkEgl(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            "Unable to make the encoder EGL context current."
+        }
+
+        GLES20.glViewport(0, 0, width, height)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        drawTexture2d(
+            textureId = templateTexture(template.staticBase, isOverlay = false),
+            blend = false,
+        )
+        drawExternalVideoTexture(template, frame)
+        drawTexture2d(
+            textureId = templateTexture(template.overlay, isOverlay = true),
+            blend = true,
+        )
+        checkGlError("draw texture frame")
+
+        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, presentationTimeUs * 1_000L)
+        checkEgl(EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
+            "Unable to swap the encoder EGL buffers."
+        }
+    }
+
+    private fun templateTexture(
+        bitmap: Bitmap,
+        isOverlay: Boolean,
+    ): Int {
+        val currentTextureId = if (isOverlay) templateOverlayTextureId else templateTextureId
+        if (currentTextureId != 0) {
+            return currentTextureId
+        }
+
+        val textures = IntArray(1)
+        GLES20.glGenTextures(1, textures, 0)
+        val createdTextureId = textures[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, createdTextureId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        checkGlError("upload template texture")
+
+        if (isOverlay) {
+            templateOverlayTextureId = createdTextureId
+        } else {
+            templateTextureId = createdTextureId
+        }
+        return createdTextureId
+    }
+
+    private fun drawTexture2d(
+        textureId: Int,
+        blend: Boolean,
+    ) {
+        if (blend) {
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        }
+
+        GLES20.glUseProgram(program)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        GLES20.glUniform1i(textureUniformHandle, 0)
+
+        vertexBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(positionHandle)
+        GLES20.glVertexAttribPointer(
+            positionHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            FullFrameVertexStrideBytes,
+            vertexBuffer,
+        )
+
+        vertexBuffer.position(2)
+        GLES20.glEnableVertexAttribArray(textureCoordinateHandle)
+        GLES20.glVertexAttribPointer(
+            textureCoordinateHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            FullFrameVertexStrideBytes,
+            vertexBuffer,
+        )
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(positionHandle)
+        GLES20.glDisableVertexAttribArray(textureCoordinateHandle)
+
+        if (blend) {
+            GLES20.glDisable(GLES20.GL_BLEND)
+        }
+    }
+
+    private fun drawExternalVideoTexture(
+        template: QuotiCardBitmapRenderer.GpuVideoFrameTemplate,
+        frame: VideoTextureFrame,
+    ) {
+        val destination = videoFitRect(
+            container = template.videoRect,
+            sourceWidth = frame.sourceWidth,
+            sourceHeight = frame.sourceHeight,
+        )
+        putVideoVertices(destination)
+
+        GLES20.glUseProgram(externalProgram)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, frame.textureId)
+        GLES20.glUniform1i(externalTextureUniformHandle, 0)
+        GLES20.glUniformMatrix4fv(externalTextureMatrixHandle, 1, false, frame.textureMatrix, 0)
+        GLES20.glUniform2f(externalRectSizeHandle, destination.width(), destination.height())
+        GLES20.glUniform1f(
+            externalCornerRadiusHandle,
+            if (destination.nearlyEquals(template.videoRect)) template.videoCornerRadius else 0f,
+        )
+
+        videoVertexBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(externalPositionHandle)
+        GLES20.glVertexAttribPointer(
+            externalPositionHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            VideoFrameVertexStrideBytes,
+            videoVertexBuffer,
+        )
+
+        videoVertexBuffer.position(2)
+        GLES20.glEnableVertexAttribArray(externalTextureCoordinateHandle)
+        GLES20.glVertexAttribPointer(
+            externalTextureCoordinateHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            VideoFrameVertexStrideBytes,
+            videoVertexBuffer,
+        )
+
+        videoVertexBuffer.position(4)
+        GLES20.glEnableVertexAttribArray(externalQuadCoordinateHandle)
+        GLES20.glVertexAttribPointer(
+            externalQuadCoordinateHandle,
+            2,
+            GLES20.GL_FLOAT,
+            false,
+            VideoFrameVertexStrideBytes,
+            videoVertexBuffer,
+        )
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(externalPositionHandle)
+        GLES20.glDisableVertexAttribArray(externalTextureCoordinateHandle)
+        GLES20.glDisableVertexAttribArray(externalQuadCoordinateHandle)
+    }
+
+    private fun putVideoVertices(rect: RectF) {
+        val left = (rect.left / width.toFloat()) * 2f - 1f
+        val right = (rect.right / width.toFloat()) * 2f - 1f
+        val top = 1f - (rect.top / height.toFloat()) * 2f
+        val bottom = 1f - (rect.bottom / height.toFloat()) * 2f
+
+        videoFrameVertices[0] = left
+        videoFrameVertices[1] = bottom
+        videoFrameVertices[2] = 0f
+        videoFrameVertices[3] = 1f
+        videoFrameVertices[4] = 0f
+        videoFrameVertices[5] = 1f
+        videoFrameVertices[6] = right
+        videoFrameVertices[7] = bottom
+        videoFrameVertices[8] = 1f
+        videoFrameVertices[9] = 1f
+        videoFrameVertices[10] = 1f
+        videoFrameVertices[11] = 1f
+        videoFrameVertices[12] = left
+        videoFrameVertices[13] = top
+        videoFrameVertices[14] = 0f
+        videoFrameVertices[15] = 0f
+        videoFrameVertices[16] = 0f
+        videoFrameVertices[17] = 0f
+        videoFrameVertices[18] = right
+        videoFrameVertices[19] = top
+        videoFrameVertices[20] = 1f
+        videoFrameVertices[21] = 0f
+        videoFrameVertices[22] = 1f
+        videoFrameVertices[23] = 0f
+        videoVertexBuffer.clear()
+        videoVertexBuffer.put(videoFrameVertices)
+        videoVertexBuffer.position(0)
+    }
+
+    private fun videoFitRect(
+        container: RectF,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ): RectF {
+        val scale = min(
+            container.width() / sourceWidth.toFloat().coerceAtLeast(1f),
+            container.height() / sourceHeight.toFloat().coerceAtLeast(1f),
+        )
+        val fittedWidth = sourceWidth * scale
+        val fittedHeight = sourceHeight * scale
+        val left = container.left + ((container.width() - fittedWidth) / 2f)
+        val top = container.top + ((container.height() - fittedHeight) / 2f)
+        return RectF(left, top, left + fittedWidth, top + fittedHeight)
+    }
+
+    private fun RectF.nearlyEquals(other: RectF): Boolean {
+        return kotlin.math.abs(left - other.left) < 0.5f &&
+            kotlin.math.abs(top - other.top) < 0.5f &&
+            kotlin.math.abs(right - other.right) < 0.5f &&
+            kotlin.math.abs(bottom - other.bottom) < 0.5f
     }
 
     fun release() {
@@ -1326,11 +2002,30 @@ private class EncoderInputSurface(
 
     private fun setupGl() {
         program = createProgram(VertexShader, FragmentShader)
+        externalProgram = createProgram(ExternalVertexShader, ExternalFragmentShader)
         positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
         textureCoordinateHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
         textureUniformHandle = GLES20.glGetUniformLocation(program, "uTexture")
         check(positionHandle >= 0 && textureCoordinateHandle >= 0 && textureUniformHandle >= 0) {
             "Unable to resolve GL shader handles."
+        }
+        externalPositionHandle = GLES20.glGetAttribLocation(externalProgram, "aPosition")
+        externalTextureCoordinateHandle = GLES20.glGetAttribLocation(externalProgram, "aTexCoord")
+        externalQuadCoordinateHandle = GLES20.glGetAttribLocation(externalProgram, "aQuadCoord")
+        externalTextureUniformHandle = GLES20.glGetUniformLocation(externalProgram, "uTexture")
+        externalTextureMatrixHandle = GLES20.glGetUniformLocation(externalProgram, "uTextureMatrix")
+        externalRectSizeHandle = GLES20.glGetUniformLocation(externalProgram, "uRectSize")
+        externalCornerRadiusHandle = GLES20.glGetUniformLocation(externalProgram, "uCornerRadius")
+        check(
+            externalPositionHandle >= 0 &&
+                externalTextureCoordinateHandle >= 0 &&
+                externalQuadCoordinateHandle >= 0 &&
+                externalTextureUniformHandle >= 0 &&
+                externalTextureMatrixHandle >= 0 &&
+                externalRectSizeHandle >= 0 &&
+                externalCornerRadiusHandle >= 0,
+        ) {
+            "Unable to resolve external video GL shader handles."
         }
 
         val textures = IntArray(1)
@@ -1406,6 +2101,7 @@ private class EncoderInputSurface(
 
     private companion object {
         private const val FullFrameVertexStrideBytes = 4 * Float.SIZE_BYTES
+        private const val VideoFrameVertexStrideBytes = 6 * Float.SIZE_BYTES
         private val FullFrameVertices =
             floatArrayOf(
                 -1f,
@@ -1425,6 +2121,7 @@ private class EncoderInputSurface(
                 1f,
                 0f,
             )
+        private val VideoFrameVertices = FloatArray(24)
         private const val VertexShader =
             """
             attribute vec4 aPosition;
@@ -1443,6 +2140,45 @@ private class EncoderInputSurface(
             uniform sampler2D uTexture;
 
             void main() {
+                gl_FragColor = texture2D(uTexture, vTexCoord);
+            }
+            """
+        private const val ExternalVertexShader =
+            """
+            attribute vec4 aPosition;
+            attribute vec2 aTexCoord;
+            attribute vec2 aQuadCoord;
+            uniform mat4 uTextureMatrix;
+            varying vec2 vTexCoord;
+            varying vec2 vQuadCoord;
+
+            void main() {
+                gl_Position = aPosition;
+                vTexCoord = (uTextureMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+                vQuadCoord = aQuadCoord;
+            }
+            """
+        private const val ExternalFragmentShader =
+            """
+            #extension GL_OES_EGL_image_external : require
+            precision mediump float;
+            varying vec2 vTexCoord;
+            varying vec2 vQuadCoord;
+            uniform samplerExternalOES uTexture;
+            uniform vec2 uRectSize;
+            uniform float uCornerRadius;
+
+            void main() {
+                if (uCornerRadius > 0.0) {
+                    vec2 point = vQuadCoord * uRectSize;
+                    vec2 nearestEdge = min(point, uRectSize - point);
+                    if (nearestEdge.x < uCornerRadius && nearestEdge.y < uCornerRadius) {
+                        vec2 delta = vec2(uCornerRadius) - nearestEdge;
+                        if (dot(delta, delta) > uCornerRadius * uCornerRadius) {
+                            discard;
+                        }
+                    }
+                }
                 gl_FragColor = texture2D(uTexture, vTexCoord);
             }
             """
@@ -1493,19 +2229,28 @@ private object QuotiCardBitmapRenderer {
         )
 
         val outputSize = videoExportSizeFor(staticBase.width, staticBase.height, targetWidth)
-        val fullFrame = Bitmap.createBitmap(staticBase.width, staticBase.height, Bitmap.Config.ARGB_8888)
-        val outputFrame =
-            if (outputSize.width == fullFrame.width && outputSize.height == fullFrame.height) {
-                fullFrame
+        val outputScale = outputSize.width.toFloat() / staticBase.width.toFloat()
+        val staticFrameBase =
+            if (outputSize.width == staticBase.width && outputSize.height == staticBase.height) {
+                staticBase
             } else {
-                Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
+                Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888).also { scaledBase ->
+                    Canvas(scaledBase).drawBitmap(
+                        staticBase,
+                        null,
+                        RectF(0f, 0f, outputSize.width.toFloat(), outputSize.height.toFloat()),
+                        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+                    )
+                    staticBase.recycle()
+                }
             }
+        val outputFrame = Bitmap.createBitmap(staticFrameBase.width, staticFrameBase.height, Bitmap.Config.ARGB_8888)
         val mediaRects = mediaRectsFor(measure, contentMode)
 
         return VideoFrameRenderer(
-            staticBase = staticBase,
-            fullFrame = fullFrame,
+            staticBase = staticFrameBase,
             outputFrame = outputFrame,
+            outputScale = outputScale,
             drawDynamicMedia = { canvas, dynamicMediaBitmaps ->
                 mediaRects.main?.let { rect ->
                     drawMedia(canvas, dynamicMediaBitmaps.main, rect, palette)
@@ -1517,34 +2262,94 @@ private object QuotiCardBitmapRenderer {
         )
     }
 
+    fun prepareGpuVideoFrameTemplate(
+        post: QuotiPost,
+        cardTone: CardTone,
+        contentMode: CardContentMode,
+        mediaBitmaps: ExportMediaBitmaps,
+        avatarBitmaps: ExportAvatarBitmaps,
+        targetWidth: Int,
+    ): GpuVideoFrameTemplate {
+        val palette = RenderPalette.from(cardTone)
+        val measure = measure(post, palette, contentMode, mediaBitmaps, avatarBitmaps)
+        val staticBase = Bitmap.createBitmap(ExportBitmapWidth, measure.height, Bitmap.Config.ARGB_8888)
+        val staticCanvas = Canvas(staticBase)
+
+        staticCanvas.drawColor(palette.surface)
+        drawCard(
+            canvas = staticCanvas,
+            post = post,
+            palette = palette,
+            measure = measure,
+            contentMode = contentMode,
+            mediaBitmaps = mediaBitmaps,
+            drawMediaContent = false,
+        )
+
+        val mediaRect = mediaRectsFor(measure, contentMode).main
+            ?: error("The GPU video renderer requires a main media rect.")
+        drawMediaFrameFill(staticCanvas, mediaRect, palette)
+
+        val outputSize = videoExportSizeFor(staticBase.width, staticBase.height, targetWidth)
+        val outputScale = outputSize.width.toFloat() / staticBase.width.toFloat()
+        val scaledBase = staticBase.scaledTo(outputSize)
+        if (scaledBase !== staticBase) {
+            staticBase.recycle()
+        }
+
+        val overlay = Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
+        val overlayCanvas = Canvas(overlay)
+        overlayCanvas.save()
+        overlayCanvas.scale(outputScale, outputScale)
+        drawMediaFrameStroke(overlayCanvas, mediaRect, palette)
+        overlayCanvas.restore()
+
+        return GpuVideoFrameTemplate(
+            staticBase = scaledBase,
+            overlay = overlay,
+            videoRect = mediaRect.scaledBy(outputScale),
+            videoCornerRadius = 42f * outputScale,
+        )
+    }
+
     class VideoFrameRenderer(
         private val staticBase: Bitmap,
-        private val fullFrame: Bitmap,
         private val outputFrame: Bitmap,
+        private val outputScale: Float,
         private val drawDynamicMedia: (Canvas, ExportMediaBitmaps) -> Unit,
     ) {
-        private val fullCanvas = Canvas(fullFrame)
         private val outputCanvas = Canvas(outputFrame)
-        private val outputRect = RectF(0f, 0f, outputFrame.width.toFloat(), outputFrame.height.toFloat())
-        private val scalePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
         fun render(mediaBitmaps: ExportMediaBitmaps): Bitmap {
-            fullCanvas.drawBitmap(staticBase, 0f, 0f, null)
-            drawDynamicMedia(fullCanvas, mediaBitmaps)
-
-            if (outputFrame !== fullFrame) {
-                outputCanvas.drawBitmap(fullFrame, null, outputRect, scalePaint)
+            outputCanvas.drawBitmap(staticBase, 0f, 0f, null)
+            outputCanvas.save()
+            if (outputScale != 1f) {
+                outputCanvas.scale(outputScale, outputScale)
             }
+            drawDynamicMedia(outputCanvas, mediaBitmaps)
+            outputCanvas.restore()
 
             return outputFrame
         }
 
         fun release() {
             staticBase.recycle()
-            if (outputFrame !== fullFrame) {
-                outputFrame.recycle()
-            }
-            fullFrame.recycle()
+            outputFrame.recycle()
+        }
+    }
+
+    class GpuVideoFrameTemplate(
+        val staticBase: Bitmap,
+        val overlay: Bitmap,
+        val videoRect: RectF,
+        val videoCornerRadius: Float,
+    ) {
+        val width: Int = staticBase.width
+        val height: Int = staticBase.height
+
+        fun release() {
+            staticBase.recycle()
+            overlay.recycle()
         }
     }
 
@@ -1858,6 +2663,56 @@ private object QuotiCardBitmapRenderer {
             width = targetWidth.makeEven(),
             height = max(2, (height * scale).roundToInt()).makeEven(),
         )
+    }
+
+    private fun Bitmap.scaledTo(size: VideoExportSize): Bitmap {
+        if (width == size.width && height == size.height) {
+            return this
+        }
+
+        return Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888).also { scaled ->
+            Canvas(scaled).drawBitmap(
+                this,
+                null,
+                RectF(0f, 0f, size.width.toFloat(), size.height.toFloat()),
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+            )
+        }
+    }
+
+    private fun RectF.scaledBy(scale: Float): RectF =
+        RectF(
+            left * scale,
+            top * scale,
+            right * scale,
+            bottom * scale,
+        )
+
+    private fun drawMediaFrameFill(
+        canvas: Canvas,
+        rect: RectF,
+        palette: RenderPalette,
+    ) {
+        val fillPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = withAlpha(palette.textPrimary, 0.08f)
+            }
+        canvas.drawRoundRect(rect, 42f, 42f, fillPaint)
+    }
+
+    private fun drawMediaFrameStroke(
+        canvas: Canvas,
+        rect: RectF,
+        palette: RenderPalette,
+    ) {
+        val strokePaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+                color = withAlpha(palette.textPrimary, 0.14f)
+            }
+        canvas.drawRoundRect(rect, 42f, 42f, strokePaint)
     }
 
     private fun measureMediaHeight(

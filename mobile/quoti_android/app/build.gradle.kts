@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 40
-        versionName = "0.1.39-video-source-speed"
+        versionCode = 42
+        versionName = "0.1.41-gpu-video-export"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

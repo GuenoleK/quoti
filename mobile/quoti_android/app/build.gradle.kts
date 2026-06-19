@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 35
-        versionName = "0.1.34-video-export-hls-fix"
+        versionCode = 36
+        versionName = "0.1.35-hls-video-duration"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

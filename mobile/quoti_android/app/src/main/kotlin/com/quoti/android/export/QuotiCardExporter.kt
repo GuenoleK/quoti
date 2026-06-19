@@ -90,13 +90,12 @@ private const val VideoExportBitmapWidth = 720
 private const val VideoExportSourceVariantMaxLongEdge = 1280
 internal const val VideoExportFrameRate = 30
 private const val VideoExportSourceFrameMaxLongEdge = 720
-internal const val VideoExportMaxDurationMs = 60_000L
+internal const val VideoExportMaxDurationMs = 180_000L
 private const val VideoExportMinBitRate = 8_000_000L
 private const val VideoExportMaxBitRate = 24_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
-private const val HlsExportMaxDurationSeconds = 60.0
 private const val DefaultIoBufferSize = 8 * 1024
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val XLogoPathData =
@@ -334,6 +333,7 @@ object QuotiCardExporter {
                     output = output,
                     videoSource = videoInputSource.videoSource,
                     audioSource = videoInputSource.audioSource,
+                    sourceDurationMs = videoInputSource.durationMs,
                     post = post,
                     cardTone = cardTone,
                     contentMode = contentMode,
@@ -353,6 +353,7 @@ object QuotiCardExporter {
         output: File,
         videoSource: String,
         audioSource: String?,
+        sourceDurationMs: Long?,
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
@@ -369,8 +370,8 @@ object QuotiCardExporter {
 
         try {
             ensureNotCancelled()
-            val sourceDurationMs = videoDurationMs(videoSource)
-            val exportDurationMs = min(sourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
+            val resolvedSourceDurationMs = sourceDurationMs ?: videoDurationMs(videoSource)
+            val exportDurationMs = min(resolvedSourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
             val exportDurationUs = exportDurationMs * 1_000L
             val audioFormat = audioSource
                 ?.let { source -> runCatching { findAudioTrackFormat(source) }.getOrNull() }
@@ -456,6 +457,7 @@ object QuotiCardExporter {
         return VideoInputSource(
             videoSource = localFile.absolutePath,
             audioSource = localFile.absolutePath,
+            durationMs = null,
             localFiles = listOf(localFile),
         )
     }
@@ -473,10 +475,11 @@ object QuotiCardExporter {
             var materializedAudioFile: File? = null
 
             try {
-                materializeHlsMediaPlaylist(
-                    playlistUrl = videoPlaylistUrl,
-                    output = videoSourceFile,
-                )
+                val videoDurationMs =
+                    materializeHlsMediaPlaylist(
+                        playlistUrl = videoPlaylistUrl,
+                        output = videoSourceFile,
+                    )
 
                 materializedAudioFile =
                     audioPlaylistUrl
@@ -496,6 +499,7 @@ object QuotiCardExporter {
                 VideoInputSource(
                     videoSource = videoSourceFile.absolutePath,
                     audioSource = materializedAudioFile?.absolutePath ?: videoSourceFile.absolutePath,
+                    durationMs = videoDurationMs,
                     localFiles = listOfNotNull(videoSourceFile, materializedAudioFile),
                 )
             } catch (throwable: Throwable) {
@@ -508,12 +512,13 @@ object QuotiCardExporter {
     private suspend fun materializeHlsMediaPlaylist(
         playlistUrl: String,
         output: File,
-    ) {
+    ): Long {
         val playlist = downloadText(playlistUrl)
         val lines = playlist.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
         var initSegmentWritten = false
         var pendingDurationSeconds = 0.0
         var totalDurationSeconds = 0.0
+        val maxDurationSeconds = VideoExportMaxDurationMs / 1_000.0
 
         output.outputStream().buffered(DefaultIoBufferSize).use { fileOutput ->
             lines.forEach { line ->
@@ -539,7 +544,7 @@ object QuotiCardExporter {
 
                     line.startsWith("#") -> Unit
 
-                    totalDurationSeconds < HlsExportMaxDurationSeconds -> {
+                    totalDurationSeconds < maxDurationSeconds -> {
                         downloadUrlTo(
                             url = resolveHlsUrl(playlistUrl, line),
                             output = fileOutput,
@@ -552,6 +557,7 @@ object QuotiCardExporter {
         }
 
         check(output.length() > 0L) { "Unable to materialize HLS media playlist." }
+        return hlsExportDurationMsForMediaPlaylist(playlist)
     }
 
     private fun downloadText(url: String): String {
@@ -2223,6 +2229,7 @@ private data class ExportMediaSources(
 private data class VideoInputSource(
     val videoSource: String,
     val audioSource: String?,
+    val durationMs: Long?,
     val localFiles: List<File> = emptyList(),
 )
 
@@ -2396,6 +2403,43 @@ internal fun selectHlsMediaPlaylistsForExport(
         videoPlaylistUrl = selectedVariant.playlistUrl,
         audioPlaylistUrl = audioPlaylistUrl,
     )
+}
+
+internal fun hlsExportDurationMsForMediaPlaylist(
+    playlist: String,
+    maxDurationMs: Long = VideoExportMaxDurationMs,
+): Long {
+    var pendingDurationSeconds = 0.0
+    var totalDurationSeconds = 0.0
+    val maxDurationSeconds = maxDurationMs / 1_000.0
+
+    playlist
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .forEach { line ->
+            when {
+                line.startsWith("#EXTINF:") -> {
+                    pendingDurationSeconds =
+                        line
+                            .substringAfter(":")
+                            .substringBefore(",")
+                            .toDoubleOrNull()
+                            ?: 0.0
+                }
+
+                line.startsWith("#") -> Unit
+
+                totalDurationSeconds < maxDurationSeconds -> {
+                    totalDurationSeconds += pendingDurationSeconds
+                    pendingDurationSeconds = 0.0
+                }
+            }
+        }
+
+    return (totalDurationSeconds * 1_000.0)
+        .roundToLong()
+        .coerceAtLeast(1_000L)
 }
 
 private data class HlsVariant(

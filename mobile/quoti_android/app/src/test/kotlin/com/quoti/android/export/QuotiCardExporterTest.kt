@@ -6,7 +6,7 @@ import org.junit.Test
 class QuotiCardExporterTest {
     @Test
     fun `video export keeps enough duration and cadence for X clips`() {
-        assertEquals(60_000L, VideoExportMaxDurationMs)
+        assertEquals(180_000L, VideoExportMaxDurationMs)
         assertEquals(30, VideoExportFrameRate)
     }
 
@@ -67,6 +67,23 @@ class QuotiCardExporterTest {
             ),
             selection,
         )
+    }
+
+    @Test
+    fun `hls export duration uses playlist segments for long clips`() {
+        val playlist =
+            buildString {
+                appendLine("#EXTM3U")
+                repeat(39) { index ->
+                    appendLine("#EXTINF:3.000,")
+                    appendLine("segment-$index.m4s")
+                }
+                appendLine("#EXTINF:1.000,")
+                appendLine("segment-last.m4s")
+                appendLine("#EXT-X-ENDLIST")
+            }
+
+        assertEquals(118_000L, hlsExportDurationMsForMediaPlaylist(playlist))
     }
 
     @Test

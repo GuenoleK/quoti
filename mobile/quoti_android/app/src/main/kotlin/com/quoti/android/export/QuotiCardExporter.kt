@@ -87,12 +87,15 @@ private const val MediaGridGap = 6f
 private const val TwoMediaGridAspectRatio = 2f
 private const val MultiMediaGridAspectRatio = 1.7777778f
 private const val VideoExportBitmapWidth = 720
+private const val VideoExportLongClipBitmapWidth = 640
 private const val VideoExportSourceVariantMaxLongEdge = 1280
 internal const val VideoExportFrameRate = 30
+internal const val VideoExportLongClipFrameRate = 20
+private const val VideoExportLongClipThresholdMs = 45_000L
 private const val VideoExportSourceFrameMaxLongEdge = 720
 internal const val VideoExportMaxDurationMs = 180_000L
-private const val VideoExportMinBitRate = 8_000_000L
-private const val VideoExportMaxBitRate = 24_000_000L
+private const val VideoExportMinBitRate = 3_000_000L
+private const val VideoExportMaxBitRate = 12_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
@@ -322,10 +325,13 @@ object QuotiCardExporter {
                 related = post.relatedPost?.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
             )
 
+        onProgress(2)
         val videoInputSource = prepareVideoInputSource(
             videoUrl = videoSource.playableVideoUrl ?: error("Missing playable video URL."),
             output = output,
+            onProgress = { progress -> onProgress(progress.coerceIn(2, 18)) },
         )
+        onProgress(20)
 
         try {
             withContext(Dispatchers.Default) {
@@ -373,10 +379,11 @@ object QuotiCardExporter {
             val resolvedSourceDurationMs = sourceDurationMs ?: videoDurationMs(videoSource)
             val exportDurationMs = min(resolvedSourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
             val exportDurationUs = exportDurationMs * 1_000L
+            val exportProfile = videoExportProfileForDurationMs(exportDurationMs)
             val audioFormat = audioSource
                 ?.let { source -> runCatching { findAudioTrackFormat(source) }.getOrNull() }
-            val frameCount = max(1, ceil(exportDurationMs / 1_000.0 * VideoExportFrameRate).toInt())
-            val frameIntervalUs = 1_000_000L / VideoExportFrameRate
+            val frameCount = max(1, ceil(exportDurationMs / 1_000.0 * exportProfile.frameRate).toInt())
+            val frameIntervalUs = 1_000_000L / exportProfile.frameRate
 
             decodeVideoFrames(
                 videoSource = videoSource,
@@ -395,6 +402,7 @@ object QuotiCardExporter {
                             contentMode = contentMode,
                             mediaBitmaps = mediaBitmaps,
                             avatarBitmaps = avatarBitmaps,
+                            targetWidth = exportProfile.bitmapWidth,
                         ).also { preparedRenderer ->
                             frameRenderer = preparedRenderer
                         }).render(mediaBitmaps)
@@ -405,7 +413,7 @@ object QuotiCardExporter {
                             output = output,
                             width = cardBitmap.width,
                             height = cardBitmap.height,
-                            frameRate = VideoExportFrameRate,
+                            frameRate = exportProfile.frameRate,
                             audioSource = audioSource,
                             audioFormat = audioFormat,
                             maxDurationUs = exportDurationUs,
@@ -416,9 +424,9 @@ object QuotiCardExporter {
                 activeEncoder.encode(cardBitmap, presentationTimeUs)
                 encodedFrameCount++
                 val progress =
-                    ((encodedFrameCount.toFloat() / frameCount.toFloat()) * 98f)
+                    (20f + ((encodedFrameCount.toFloat() / frameCount.toFloat()) * 78f))
                         .roundToInt()
-                        .coerceIn(1, 98)
+                        .coerceIn(20, 98)
                 if (progress != lastProgress) {
                     onProgress(progress)
                     lastProgress = progress
@@ -448,12 +456,15 @@ object QuotiCardExporter {
     private suspend fun prepareVideoInputSource(
         videoUrl: String,
         output: File,
+        onProgress: (Int) -> Unit,
     ): VideoInputSource {
         if (videoUrl.isHlsVideoUrl()) {
-            return materializeHlsVideoSource(videoUrl, output)
+            return materializeHlsVideoSource(videoUrl, output, onProgress)
         }
 
+        onProgress(8)
         val localFile = downloadVideoSource(videoUrl, output)
+        onProgress(18)
         return VideoInputSource(
             videoSource = localFile.absolutePath,
             audioSource = localFile.absolutePath,
@@ -465,8 +476,10 @@ object QuotiCardExporter {
     private suspend fun materializeHlsVideoSource(
         playlistUrl: String,
         output: File,
+        onProgress: (Int) -> Unit,
     ): VideoInputSource =
         withContext(Dispatchers.IO) {
+            onProgress(3)
             val masterPlaylist = downloadText(playlistUrl)
             val selection = selectHlsMediaPlaylistsForExport(masterPlaylist, playlistUrl)
             val videoPlaylistUrl = selection?.videoPlaylistUrl ?: playlistUrl
@@ -479,6 +492,9 @@ object QuotiCardExporter {
                     materializeHlsMediaPlaylist(
                         playlistUrl = videoPlaylistUrl,
                         output = videoSourceFile,
+                        progressStart = 4,
+                        progressEnd = if (audioPlaylistUrl == null) 18 else 14,
+                        onProgress = onProgress,
                     )
 
                 materializedAudioFile =
@@ -489,6 +505,9 @@ object QuotiCardExporter {
                                 materializeHlsMediaPlaylist(
                                     playlistUrl = url,
                                     output = target,
+                                    progressStart = 15,
+                                    progressEnd = 18,
+                                    onProgress = onProgress,
                                 )
                                 target
                             }.onFailure {
@@ -512,6 +531,9 @@ object QuotiCardExporter {
     private suspend fun materializeHlsMediaPlaylist(
         playlistUrl: String,
         output: File,
+        progressStart: Int,
+        progressEnd: Int,
+        onProgress: (Int) -> Unit,
     ): Long {
         val playlist = downloadText(playlistUrl)
         val lines = playlist.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
@@ -519,6 +541,10 @@ object QuotiCardExporter {
         var pendingDurationSeconds = 0.0
         var totalDurationSeconds = 0.0
         val maxDurationSeconds = VideoExportMaxDurationMs / 1_000.0
+        val expectedSegments = hlsExportSegmentCountForMediaPlaylist(playlist).coerceAtLeast(1)
+        var downloadedSegments = 0
+        var lastProgress = progressStart
+        onProgress(progressStart)
 
         output.outputStream().buffered(DefaultIoBufferSize).use { fileOutput ->
             lines.forEach { line ->
@@ -551,12 +577,22 @@ object QuotiCardExporter {
                         )
                         totalDurationSeconds += pendingDurationSeconds
                         pendingDurationSeconds = 0.0
+                        downloadedSegments++
+                        val progress =
+                            (progressStart + ((downloadedSegments.toFloat() / expectedSegments.toFloat()) * (progressEnd - progressStart)))
+                                .roundToInt()
+                                .coerceIn(progressStart, progressEnd)
+                        if (progress != lastProgress) {
+                            onProgress(progress)
+                            lastProgress = progress
+                        }
                     }
                 }
             }
         }
 
         check(output.length() > 0L) { "Unable to materialize HLS media playlist." }
+        onProgress(progressEnd)
         return hlsExportDurationMsForMediaPlaylist(playlist)
     }
 
@@ -1438,6 +1474,7 @@ private object QuotiCardBitmapRenderer {
         contentMode: CardContentMode,
         mediaBitmaps: ExportMediaBitmaps,
         avatarBitmaps: ExportAvatarBitmaps,
+        targetWidth: Int,
     ): VideoFrameRenderer {
         val palette = RenderPalette.from(cardTone)
         val measure = measure(post, palette, contentMode, mediaBitmaps, avatarBitmaps)
@@ -1455,7 +1492,7 @@ private object QuotiCardBitmapRenderer {
             drawMediaContent = false,
         )
 
-        val outputSize = videoExportSizeFor(staticBase.width, staticBase.height)
+        val outputSize = videoExportSizeFor(staticBase.width, staticBase.height, targetWidth)
         val fullFrame = Bitmap.createBitmap(staticBase.width, staticBase.height, Bitmap.Config.ARGB_8888)
         val outputFrame =
             if (outputSize.width == fullFrame.width && outputSize.height == fullFrame.height) {
@@ -1807,17 +1844,18 @@ private object QuotiCardBitmapRenderer {
     private fun videoExportSizeFor(
         width: Int,
         height: Int,
+        targetWidth: Int,
     ): VideoExportSize {
-        if (width <= VideoExportBitmapWidth) {
+        if (width <= targetWidth) {
             return VideoExportSize(
                 width = width.makeEven(),
                 height = height.makeEven(),
             )
         }
 
-        val scale = VideoExportBitmapWidth.toFloat() / width.toFloat()
+        val scale = targetWidth.toFloat() / width.toFloat()
         return VideoExportSize(
-            width = VideoExportBitmapWidth.makeEven(),
+            width = targetWidth.makeEven(),
             height = max(2, (height * scale).roundToInt()).makeEven(),
         )
     }
@@ -2205,6 +2243,24 @@ private data class VideoExportSize(
     val height: Int,
 )
 
+internal data class VideoExportProfile(
+    val frameRate: Int,
+    val bitmapWidth: Int,
+)
+
+internal fun videoExportProfileForDurationMs(durationMs: Long): VideoExportProfile =
+    if (durationMs >= VideoExportLongClipThresholdMs) {
+        VideoExportProfile(
+            frameRate = VideoExportLongClipFrameRate,
+            bitmapWidth = VideoExportLongClipBitmapWidth,
+        )
+    } else {
+        VideoExportProfile(
+            frameRate = VideoExportFrameRate,
+            bitmapWidth = VideoExportBitmapWidth,
+        )
+    }
+
 private data class MediaRects(
     val main: RectF? = null,
     val related: RectF? = null,
@@ -2440,6 +2496,43 @@ internal fun hlsExportDurationMsForMediaPlaylist(
     return (totalDurationSeconds * 1_000.0)
         .roundToLong()
         .coerceAtLeast(1_000L)
+}
+
+internal fun hlsExportSegmentCountForMediaPlaylist(
+    playlist: String,
+    maxDurationMs: Long = VideoExportMaxDurationMs,
+): Int {
+    var pendingDurationSeconds = 0.0
+    var totalDurationSeconds = 0.0
+    var segmentCount = 0
+    val maxDurationSeconds = maxDurationMs / 1_000.0
+
+    playlist
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .forEach { line ->
+            when {
+                line.startsWith("#EXTINF:") -> {
+                    pendingDurationSeconds =
+                        line
+                            .substringAfter(":")
+                            .substringBefore(",")
+                            .toDoubleOrNull()
+                            ?: 0.0
+                }
+
+                line.startsWith("#") -> Unit
+
+                totalDurationSeconds < maxDurationSeconds -> {
+                    totalDurationSeconds += pendingDurationSeconds
+                    pendingDurationSeconds = 0.0
+                    segmentCount++
+                }
+            }
+        }
+
+    return segmentCount
 }
 
 private data class HlsVariant(

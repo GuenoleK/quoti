@@ -8,6 +8,19 @@ class QuotiCardExporterTest {
     fun `video export keeps enough duration and cadence for X clips`() {
         assertEquals(180_000L, VideoExportMaxDurationMs)
         assertEquals(30, VideoExportFrameRate)
+        assertEquals(20, VideoExportLongClipFrameRate)
+    }
+
+    @Test
+    fun `video export uses faster profile for long clips`() {
+        assertEquals(
+            VideoExportProfile(frameRate = 30, bitmapWidth = 720),
+            videoExportProfileForDurationMs(30_000L),
+        )
+        assertEquals(
+            VideoExportProfile(frameRate = 20, bitmapWidth = 640),
+            videoExportProfileForDurationMs(118_000L),
+        )
     }
 
     @Test
@@ -84,6 +97,7 @@ class QuotiCardExporterTest {
             }
 
         assertEquals(118_000L, hlsExportDurationMsForMediaPlaylist(playlist))
+        assertEquals(40, hlsExportSegmentCountForMediaPlaylist(playlist))
     }
 
     @Test

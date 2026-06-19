@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "0.1.33-icon-padding-extension"
+        versionCode = 35
+        versionName = "0.1.34-video-export-hls-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

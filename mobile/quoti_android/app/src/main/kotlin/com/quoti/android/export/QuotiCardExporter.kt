@@ -43,6 +43,7 @@ import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
 import com.quoti.android.core.model.SocialPlatform
 import java.io.File
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
@@ -95,10 +96,12 @@ private const val VideoExportMaxBitRate = 24_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
+private const val HlsExportMaxDurationSeconds = 60.0
 private const val DefaultIoBufferSize = 8 * 1024
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val XLogoPathData =
     "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932L18.901 1.153zM17.61 20.644h2.039L6.486 3.24H4.298L17.61 20.644z"
+private val VideoRequestHeaders = mapOf("User-Agent" to "Quoti Android")
 
 object QuotiCardExporter {
     suspend fun writeCachePng(
@@ -308,7 +311,7 @@ object QuotiCardExporter {
                 related = post.relatedPost?.media.orEmpty().exportMediaSources().take(4),
             )
         val videoSource = mediaSources.videoSourceFor(selectedVideoSourceId)
-            ?: error("No playable MP4 video source is available for this Quoti card.")
+            ?: error("No playable video source is available for this Quoti card.")
         val mediaSlots =
             ExportVideoMediaSlots(
                 main = mediaSources.main.toVideoMediaSlots(videoSource, ::fetchRemoteBitmap),
@@ -320,13 +323,17 @@ object QuotiCardExporter {
                 related = post.relatedPost?.authorAvatarUrl?.let { url -> fetchRemoteBitmap(url) },
             )
 
-        val localVideoSource = downloadVideoSource(videoSource.playableVideoUrl ?: error("Missing playable video URL."), output)
+        val videoInputSource = prepareVideoInputSource(
+            videoUrl = videoSource.playableVideoUrl ?: error("Missing playable video URL."),
+            output = output,
+        )
 
         try {
             withContext(Dispatchers.Default) {
                 renderVideoCardMp4(
                     output = output,
-                    videoPath = localVideoSource.absolutePath,
+                    videoSource = videoInputSource.videoSource,
+                    audioSource = videoInputSource.audioSource,
                     post = post,
                     cardTone = cardTone,
                     contentMode = contentMode,
@@ -336,7 +343,7 @@ object QuotiCardExporter {
                 )
             }
         } finally {
-            localVideoSource.delete()
+            videoInputSource.localFiles.forEach { file -> file.delete() }
             avatarBitmaps.recycle()
             mediaSlots.recycle()
         }
@@ -344,7 +351,8 @@ object QuotiCardExporter {
 
     private suspend fun renderVideoCardMp4(
         output: File,
-        videoPath: String,
+        videoSource: String,
+        audioSource: String?,
         post: QuotiPost,
         cardTone: CardTone,
         contentMode: CardContentMode,
@@ -361,15 +369,16 @@ object QuotiCardExporter {
 
         try {
             ensureNotCancelled()
-            val sourceDurationMs = videoDurationMs(videoPath)
+            val sourceDurationMs = videoDurationMs(videoSource)
             val exportDurationMs = min(sourceDurationMs, VideoExportMaxDurationMs).coerceAtLeast(1_000L)
             val exportDurationUs = exportDurationMs * 1_000L
-            val audioFormat = findAudioTrackFormat(videoPath)
+            val audioFormat = audioSource
+                ?.let { source -> runCatching { findAudioTrackFormat(source) }.getOrNull() }
             val frameCount = max(1, ceil(exportDurationMs / 1_000.0 * VideoExportFrameRate).toInt())
             val frameIntervalUs = 1_000_000L / VideoExportFrameRate
 
             decodeVideoFrames(
-                videoPath = videoPath,
+                videoSource = videoSource,
                 frameCount = frameCount,
                 frameIntervalUs = frameIntervalUs,
                 maxDurationUs = exportDurationUs,
@@ -396,7 +405,7 @@ object QuotiCardExporter {
                             width = cardBitmap.width,
                             height = cardBitmap.height,
                             frameRate = VideoExportFrameRate,
-                            audioSourcePath = videoPath,
+                            audioSource = audioSource,
                             audioFormat = audioFormat,
                             maxDurationUs = exportDurationUs,
                             ensureActive = ensureNotCancelled,
@@ -425,13 +434,162 @@ object QuotiCardExporter {
     private fun videoDurationMs(videoPath: String): Long {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(videoPath)
+            retriever.setVideoDataSource(videoPath)
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull()
                 ?.takeIf { duration -> duration > 0L }
                 ?: 1_000L
         } finally {
             retriever.release()
+        }
+    }
+
+    private suspend fun prepareVideoInputSource(
+        videoUrl: String,
+        output: File,
+    ): VideoInputSource {
+        if (videoUrl.isHlsVideoUrl()) {
+            return materializeHlsVideoSource(videoUrl, output)
+        }
+
+        val localFile = downloadVideoSource(videoUrl, output)
+        return VideoInputSource(
+            videoSource = localFile.absolutePath,
+            audioSource = localFile.absolutePath,
+            localFiles = listOf(localFile),
+        )
+    }
+
+    private suspend fun materializeHlsVideoSource(
+        playlistUrl: String,
+        output: File,
+    ): VideoInputSource =
+        withContext(Dispatchers.IO) {
+            val masterPlaylist = downloadText(playlistUrl)
+            val selection = selectHlsMediaPlaylistsForExport(masterPlaylist, playlistUrl)
+            val videoPlaylistUrl = selection?.videoPlaylistUrl ?: playlistUrl
+            val audioPlaylistUrl = selection?.audioPlaylistUrl
+            val videoSourceFile = File(output.parentFile, "${output.nameWithoutExtension}-source-hls-video.mp4")
+            var materializedAudioFile: File? = null
+
+            try {
+                materializeHlsMediaPlaylist(
+                    playlistUrl = videoPlaylistUrl,
+                    output = videoSourceFile,
+                )
+
+                materializedAudioFile =
+                    audioPlaylistUrl
+                        ?.let { url ->
+                            val target = File(output.parentFile, "${output.nameWithoutExtension}-source-hls-audio.m4a")
+                            runCatching {
+                                materializeHlsMediaPlaylist(
+                                    playlistUrl = url,
+                                    output = target,
+                                )
+                                target
+                            }.onFailure {
+                                target.delete()
+                            }.getOrNull()
+                        }
+
+                VideoInputSource(
+                    videoSource = videoSourceFile.absolutePath,
+                    audioSource = materializedAudioFile?.absolutePath ?: videoSourceFile.absolutePath,
+                    localFiles = listOfNotNull(videoSourceFile, materializedAudioFile),
+                )
+            } catch (throwable: Throwable) {
+                videoSourceFile.delete()
+                materializedAudioFile?.delete()
+                throw throwable
+            }
+        }
+
+    private suspend fun materializeHlsMediaPlaylist(
+        playlistUrl: String,
+        output: File,
+    ) {
+        val playlist = downloadText(playlistUrl)
+        val lines = playlist.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+        var initSegmentWritten = false
+        var pendingDurationSeconds = 0.0
+        var totalDurationSeconds = 0.0
+
+        output.outputStream().buffered(DefaultIoBufferSize).use { fileOutput ->
+            lines.forEach { line ->
+                coroutineContext.ensureActive()
+                when {
+                    line.startsWith("#EXT-X-MAP:") && !initSegmentWritten -> {
+                        val initUri = parseHlsAttributes(line)["URI"] ?: return@forEach
+                        downloadUrlTo(
+                            url = resolveHlsUrl(playlistUrl, initUri),
+                            output = fileOutput,
+                        )
+                        initSegmentWritten = true
+                    }
+
+                    line.startsWith("#EXTINF:") -> {
+                        pendingDurationSeconds =
+                            line
+                                .substringAfter(":")
+                                .substringBefore(",")
+                                .toDoubleOrNull()
+                                ?: 0.0
+                    }
+
+                    line.startsWith("#") -> Unit
+
+                    totalDurationSeconds < HlsExportMaxDurationSeconds -> {
+                        downloadUrlTo(
+                            url = resolveHlsUrl(playlistUrl, line),
+                            output = fileOutput,
+                        )
+                        totalDurationSeconds += pendingDurationSeconds
+                        pendingDurationSeconds = 0.0
+                    }
+                }
+            }
+        }
+
+        check(output.length() > 0L) { "Unable to materialize HLS media playlist." }
+    }
+
+    private fun downloadText(url: String): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        return try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 8_000
+            connection.readTimeout = 20_000
+            connection.setRequestProperty("User-Agent", VideoRequestHeaders.getValue("User-Agent"))
+
+            if (connection.responseCode !in 200..299) {
+                error("Unable to fetch HLS playlist (${connection.responseCode}).")
+            }
+
+            connection.inputStream.bufferedReader().use { reader -> reader.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun downloadUrlTo(
+        url: String,
+        output: OutputStream,
+    ) {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 8_000
+            connection.readTimeout = 20_000
+            connection.setRequestProperty("User-Agent", VideoRequestHeaders.getValue("User-Agent"))
+
+            if (connection.responseCode !in 200..299) {
+                error("Unable to fetch HLS media segment (${connection.responseCode}).")
+            }
+
+            connection.inputStream.use { input -> input.copyTo(output, DefaultIoBufferSize) }
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -580,7 +738,7 @@ private fun List<ExportVideoMediaSlot>.recycleVideoSlots() {
 }
 
 private fun decodeVideoFrames(
-    videoPath: String,
+    videoSource: String,
     frameCount: Int,
     frameIntervalUs: Long,
     maxDurationUs: Long,
@@ -592,7 +750,7 @@ private fun decodeVideoFrames(
     var lastFrame: Bitmap? = null
 
     try {
-        extractor.setDataSource(videoPath)
+        extractor.setVideoDataSource(videoSource)
         val videoTrackIndex = extractor.firstTrackIndex("video/")
         if (videoTrackIndex < 0) {
             error("No video track is available in the source video.")
@@ -821,7 +979,7 @@ private class AvcBitmapEncoder(
     private val width: Int,
     private val height: Int,
     frameRate: Int,
-    private val audioSourcePath: String,
+    private val audioSource: String?,
     private val audioFormat: MediaFormat?,
     private val maxDurationUs: Long,
     private val ensureActive: () -> Unit = {},
@@ -933,13 +1091,13 @@ private class AvcBitmapEncoder(
     }
 
     private fun copyAudioTrack() {
-        if (audioFormat == null || audioTrackIndex < 0) {
+        if (audioSource == null || audioFormat == null || audioTrackIndex < 0) {
             return
         }
 
         check(muxerStarted) { "Video muxer has not started." }
         copyAudioTrackToMuxer(
-            sourcePath = audioSourcePath,
+            sourcePath = audioSource,
             muxer = muxer,
             muxerAudioTrackIndex = audioTrackIndex,
             maxDurationUs = maxDurationUs,
@@ -2062,6 +2220,12 @@ private data class ExportMediaSources(
     }
 }
 
+private data class VideoInputSource(
+    val videoSource: String,
+    val audioSource: String?,
+    val localFiles: List<File> = emptyList(),
+)
+
 private data class ExportVideoMediaSlots(
     val main: List<ExportVideoMediaSlot>,
     val related: List<ExportVideoMediaSlot>,
@@ -2146,10 +2310,12 @@ private fun PostMedia.Video.playableVideoUrl(): String? {
 
 internal fun selectExportVideoUrl(candidates: List<String>): String? {
     val directMp4Urls = candidates.distinct().filter { candidate -> candidate.isDirectMp4VideoUrl() }
-    return directMp4Urls
+    val selectedMp4 = directMp4Urls
         .filter { url -> url.videoResolution()?.longEdge()?.let { it <= VideoExportSourceVariantMaxLongEdge } ?: false }
         .maxByOrNull { url -> url.videoResolution()?.area ?: 0 }
         ?: directMp4Urls.minByOrNull { url -> url.videoResolution()?.longEdge() ?: Int.MAX_VALUE }
+
+    return selectedMp4 ?: candidates.distinct().firstOrNull { candidate -> candidate.isHlsVideoUrl() }
 }
 
 private fun String.isDirectMp4VideoUrl(): Boolean {
@@ -2158,6 +2324,141 @@ private fun String.isDirectMp4VideoUrl(): Boolean {
         !contains("/pl/") &&
         !contains("/seg/")
 }
+
+private fun String.isHlsVideoUrl(): Boolean {
+    return startsWith("https://") && ".m3u8" in this
+}
+
+internal data class HlsPlaylistSelection(
+    val videoPlaylistUrl: String,
+    val audioPlaylistUrl: String?,
+)
+
+internal fun selectHlsMediaPlaylistsForExport(
+    masterPlaylist: String,
+    playlistUrl: String,
+): HlsPlaylistSelection? {
+    val lines = masterPlaylist.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+    val audioRenditions =
+        lines
+            .filter { line -> line.startsWith("#EXT-X-MEDIA:") }
+            .mapNotNull { line ->
+                val attributes = parseHlsAttributes(line)
+                if (attributes["TYPE"] != "AUDIO") {
+                    return@mapNotNull null
+                }
+                val groupId = attributes["GROUP-ID"] ?: return@mapNotNull null
+                val uri = attributes["URI"] ?: return@mapNotNull null
+                HlsAudioRendition(
+                    groupId = groupId,
+                    playlistUrl = resolveHlsUrl(playlistUrl, uri),
+                )
+            }
+    val variants =
+        lines.mapIndexedNotNull { index, line ->
+            if (!line.startsWith("#EXT-X-STREAM-INF:")) {
+                return@mapIndexedNotNull null
+            }
+
+            val mediaUri =
+                lines
+                    .drop(index + 1)
+                    .firstOrNull { nextLine -> !nextLine.startsWith("#") }
+                    ?: return@mapIndexedNotNull null
+            val attributes = parseHlsAttributes(line)
+            HlsVariant(
+                playlistUrl = resolveHlsUrl(playlistUrl, mediaUri),
+                resolution = attributes["RESOLUTION"]?.toVideoResolution(),
+                bandwidth = attributes["AVERAGE-BANDWIDTH"]?.toIntOrNull()
+                    ?: attributes["BANDWIDTH"]?.toIntOrNull()
+                    ?: 0,
+                audioGroupId = attributes["AUDIO"],
+            )
+        }
+
+    val selectedVariant =
+        variants
+            .filter { variant ->
+                variant.resolution?.longEdge()?.let { longEdge ->
+                    longEdge <= VideoExportSourceVariantMaxLongEdge
+                } ?: false
+            }
+            .maxWithOrNull(compareBy<HlsVariant> { it.resolution?.area ?: 0 }.thenBy { it.bandwidth })
+            ?: variants.minWithOrNull(compareBy<HlsVariant> { it.resolution?.longEdge() ?: Int.MAX_VALUE }.thenByDescending { it.bandwidth })
+            ?: return null
+
+    val audioPlaylistUrl =
+        audioRenditions
+            .firstOrNull { rendition -> rendition.groupId == selectedVariant.audioGroupId }
+            ?.playlistUrl
+
+    return HlsPlaylistSelection(
+        videoPlaylistUrl = selectedVariant.playlistUrl,
+        audioPlaylistUrl = audioPlaylistUrl,
+    )
+}
+
+private data class HlsVariant(
+    val playlistUrl: String,
+    val resolution: VideoResolution?,
+    val bandwidth: Int,
+    val audioGroupId: String?,
+)
+
+private data class HlsAudioRendition(
+    val groupId: String,
+    val playlistUrl: String,
+)
+
+private fun parseHlsAttributes(line: String): Map<String, String> {
+    val attributes = mutableMapOf<String, String>()
+    val rawAttributes = line.substringAfter(":", missingDelimiterValue = "")
+    val parts = mutableListOf<String>()
+    val current = StringBuilder()
+    var inQuotes = false
+
+    rawAttributes.forEach { char ->
+        when (char) {
+            '"' -> {
+                inQuotes = !inQuotes
+                current.append(char)
+            }
+            ',' -> {
+                if (inQuotes) {
+                    current.append(char)
+                } else {
+                    parts += current.toString()
+                    current.clear()
+                }
+            }
+            else -> current.append(char)
+        }
+    }
+    if (current.isNotEmpty()) {
+        parts += current.toString()
+    }
+
+    parts.forEach { part ->
+        val key = part.substringBefore("=", missingDelimiterValue = "").trim()
+        val value = part.substringAfter("=", missingDelimiterValue = "").trim().trim('"')
+        if (key.isNotEmpty() && value.isNotEmpty()) {
+            attributes[key] = value
+        }
+    }
+
+    return attributes
+}
+
+private fun String.toVideoResolution(): VideoResolution? {
+    val width = substringBefore("x").toIntOrNull() ?: return null
+    val height = substringAfter("x", missingDelimiterValue = "").toIntOrNull() ?: return null
+    return VideoResolution(width = width, height = height)
+}
+
+private fun resolveHlsUrl(
+    playlistUrl: String,
+    mediaUri: String,
+): String = URL(URL(playlistUrl), mediaUri).toString()
 
 private data class VideoResolution(
     val width: Int,
@@ -2182,7 +2483,7 @@ private fun String.videoResolution(): VideoResolution? {
 private fun findAudioTrackFormat(sourcePath: String): MediaFormat? {
     val extractor = MediaExtractor()
     return try {
-        extractor.setDataSource(sourcePath)
+        extractor.setVideoDataSource(sourcePath)
         val trackIndex = extractor.firstTrackIndex("audio/")
         if (trackIndex >= 0) {
             extractor.getTrackFormat(trackIndex)
@@ -2204,7 +2505,7 @@ private fun copyAudioTrackToMuxer(
     val extractor = MediaExtractor()
     val bufferInfo = MediaCodec.BufferInfo()
     try {
-        extractor.setDataSource(sourcePath)
+        extractor.setVideoDataSource(sourcePath)
         val sourceAudioTrackIndex = extractor.firstTrackIndex("audio/")
         if (sourceAudioTrackIndex < 0) {
             return
@@ -2260,6 +2561,25 @@ private fun MediaExtractor.firstTrackIndex(mimePrefix: String): Int {
     }
     return -1
 }
+
+private fun MediaExtractor.setVideoDataSource(source: String) {
+    if (source.isRemoteVideoUrl()) {
+        setDataSource(source, VideoRequestHeaders)
+    } else {
+        setDataSource(source)
+    }
+}
+
+private fun MediaMetadataRetriever.setVideoDataSource(source: String) {
+    if (source.isRemoteVideoUrl()) {
+        setDataSource(source, VideoRequestHeaders)
+    } else {
+        setDataSource(source)
+    }
+}
+
+private fun String.isRemoteVideoUrl(): Boolean =
+    startsWith("http://") || startsWith("https://")
 
 private fun MediaFormat.getIntegerOrDefault(
     key: String,

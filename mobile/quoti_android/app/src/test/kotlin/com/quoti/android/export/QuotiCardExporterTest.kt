@@ -15,6 +15,7 @@ class QuotiCardExporterTest {
         val selected =
             selectExportVideoUrl(
                 listOf(
+                    "https://video.twimg.com/amplify_video/1/pl/source.m3u8?tag=28",
                     "https://video.twimg.com/amplify_video/1/vid/avc1/1920x1080/high.mp4?tag=28",
                     "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/export.mp4?tag=28",
                     "https://video.twimg.com/amplify_video/1/vid/avc1/640x360/low.mp4?tag=28",
@@ -24,6 +25,47 @@ class QuotiCardExporterTest {
         assertEquals(
             "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/export.mp4?tag=28",
             selected,
+        )
+    }
+
+    @Test
+    fun `video export falls back to hls source when no mp4 exists`() {
+        val selected =
+            selectExportVideoUrl(
+                listOf(
+                    "https://video.twimg.com/amplify_video/1/pl/source.m3u8?tag=28",
+                ),
+            )
+
+        assertEquals(
+            "https://video.twimg.com/amplify_video/1/pl/source.m3u8?tag=28",
+            selected,
+        )
+    }
+
+    @Test
+    fun `hls export selects bounded video variant and matching audio playlist`() {
+        val selection =
+            selectHlsMediaPlaylistsForExport(
+                masterPlaylist =
+                    """
+                    #EXTM3U
+                    #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-64000",URI="/video/pl/audio/64k.m3u8"
+                    #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-128000",URI="/video/pl/audio/128k.m3u8"
+                    #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=531384,RESOLUTION=858x360,AUDIO="audio-64000"
+                    /video/pl/avc1/858x360/video.m3u8
+                    #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=1471854,RESOLUTION=1718x720,AUDIO="audio-128000"
+                    /video/pl/avc1/1718x720/video.m3u8
+                    """.trimIndent(),
+                playlistUrl = "https://video.twimg.com/amplify_video/1/pl/master.m3u8?tag=28",
+            )
+
+        assertEquals(
+            HlsPlaylistSelection(
+                videoPlaylistUrl = "https://video.twimg.com/video/pl/avc1/858x360/video.m3u8",
+                audioPlaylistUrl = "https://video.twimg.com/video/pl/audio/64k.m3u8",
+            ),
+            selection,
         )
     }
 

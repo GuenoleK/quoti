@@ -371,7 +371,11 @@ fun QuotiApp(
 
         val choices = activePost.videoExportChoices()
         when (choices.size) {
-            0 -> startExport(activePost, QuotiExportType.Video, CardContentMode.WithMedia)
+            0 -> {
+                scope.launch {
+                    snackbarHostState.showSnackbar("No exportable video source found")
+                }
+            }
             1 -> startExport(
                 activePost = activePost,
                 exportType = QuotiExportType.Video,

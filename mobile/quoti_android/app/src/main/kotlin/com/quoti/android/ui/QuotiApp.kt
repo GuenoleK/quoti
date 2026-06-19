@@ -1534,25 +1534,55 @@ private fun RemoteMedia(
 ) {
     val sources = media.mapNotNull(PostMedia::previewSource).take(4)
     val mediaKey = sources.joinToString("|") { source -> "${source.sourceId}:${source.url}" }
-    val loadedMedia by produceState<List<LoadedRemoteMedia>>(initialValue = emptyList(), mediaKey) {
-        value = emptyList()
-        value =
-            sources.mapNotNull { source ->
-                val bitmap = loadRemoteBitmap(source.url)
-                if (bitmap != null || source.playableVideoUrl != null) {
-                    LoadedRemoteMedia(
-                        sourceId = source.sourceId,
-                        bitmap = bitmap,
-                        isVideo = source.isVideo,
-                        playableVideoUrl = source.playableVideoUrl,
-                    )
-                } else {
-                    null
-                }
-            }
+    if (sources.isEmpty()) {
+        MediaPlaceholder(
+            contentColor = contentColor,
+            mutedColor = mutedColor,
+            compact = presentation == MediaPresentation.Related,
+            modifier = modifier,
+        )
+        return
     }
 
-    if (sources.isEmpty() || loadedMedia.isEmpty()) {
+    val loadState by produceState<RemoteMediaLoadState>(
+        initialValue = RemoteMediaLoadState.Loading,
+        mediaKey,
+    ) {
+        value = RemoteMediaLoadState.Loading
+        value =
+            RemoteMediaLoadState.Ready(
+                sources.mapNotNull { source ->
+                    val bitmap = loadRemoteBitmap(source.url)
+                    if (bitmap != null || source.playableVideoUrl != null) {
+                        LoadedRemoteMedia(
+                            sourceId = source.sourceId,
+                            bitmap = bitmap,
+                            isVideo = source.isVideo,
+                            playableVideoUrl = source.playableVideoUrl,
+                        )
+                    } else {
+                        null
+                    }
+                },
+            )
+    }
+
+    val loadedMedia =
+        when (val state = loadState) {
+            RemoteMediaLoadState.Loading -> {
+                MediaLoadingPlaceholder(
+                    mediaCount = sources.size,
+                    contentColor = contentColor,
+                    compact = presentation == MediaPresentation.Related,
+                    modifier = modifier,
+                )
+                return
+            }
+
+            is RemoteMediaLoadState.Ready -> state.media
+        }
+
+    if (loadedMedia.isEmpty()) {
         MediaPlaceholder(
             contentColor = contentColor,
             mutedColor = mutedColor,
@@ -1920,6 +1950,14 @@ private enum class VideoPlaybackState {
     Error,
 }
 
+private sealed interface RemoteMediaLoadState {
+    data object Loading : RemoteMediaLoadState
+
+    data class Ready(
+        val media: List<LoadedRemoteMedia>,
+    ) : RemoteMediaLoadState
+}
+
 private data class LoadedRemoteMedia(
     val sourceId: String,
     val bitmap: Bitmap?,
@@ -1979,6 +2017,152 @@ private fun PostMedia.Video.playableVideoUrl(): String? {
 
 private fun String.isPlayableVideoUrl(extension: String): Boolean {
     return startsWith("https://") && contains(extension)
+}
+
+@Composable
+private fun MediaLoadingPlaceholder(
+    mediaCount: Int,
+    contentColor: Color,
+    compact: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val visibleCount = mediaCount.coerceIn(1, 4)
+    val placeholderModifier =
+        if (compact) {
+            modifier
+        } else {
+            modifier
+                .fillMaxWidth()
+                .heightIn(min = 132.dp)
+                .aspectRatio(
+                    if (visibleCount == 1) {
+                        1.85f
+                    } else {
+                        mediaGridAspectRatio(visibleCount)
+                    },
+                )
+        }
+    Box(
+        modifier =
+            placeholderModifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(contentColor.copy(alpha = 0.08f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (visibleCount == 1) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(contentColor.copy(alpha = 0.04f)),
+            )
+        } else {
+            MediaLoadingGrid(
+                mediaCount = visibleCount,
+                contentColor = contentColor,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        MaterialLoadingIndicator(
+            modifier = Modifier.size(if (compact) 30.dp else 38.dp),
+            contentDescription = "Loading media",
+            contained = true,
+        )
+    }
+}
+
+@Composable
+private fun MediaLoadingGrid(
+    mediaCount: Int,
+    contentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        when (mediaCount) {
+            2 ->
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    repeat(2) {
+                        MediaLoadingCell(
+                            contentColor = contentColor,
+                            modifier =
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                        )
+                    }
+                }
+
+            3 ->
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    MediaLoadingCell(
+                        contentColor = contentColor,
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                    )
+                    Column(
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        repeat(2) {
+                            MediaLoadingCell(
+                                contentColor = contentColor,
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                            )
+                        }
+                    }
+                }
+
+            else ->
+                repeat(2) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        repeat(2) {
+                            MediaLoadingCell(
+                                contentColor = contentColor,
+                                modifier =
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                            )
+                        }
+                    }
+                }
+        }
+    }
+}
+
+@Composable
+private fun MediaLoadingCell(
+    contentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier =
+            modifier
+                .background(contentColor.copy(alpha = 0.04f)),
+    )
 }
 
 @Composable

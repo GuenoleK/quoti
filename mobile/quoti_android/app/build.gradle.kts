@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "0.1.31-media-loader-preview"
+        versionCode = 33
+        versionName = "0.1.32-icon-safe-logo"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

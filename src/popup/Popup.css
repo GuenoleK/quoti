@@ -23,19 +23,13 @@
 }
 
 .popup__logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  color: var(--color-text-inverse);
-  background: var(--color-text-primary);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
-  font-family: var(--font-family-serif);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-bold);
+  object-fit: contain;
 }
 
 .popup__title {

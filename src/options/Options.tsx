@@ -30,7 +30,7 @@ export function Options() {
     <main className="options-page">
       <section className="options-page__panel">
         <header className="options-page__header">
-          <span className="options-page__logo" aria-hidden="true">Q</span>
+          <img className="options-page__logo" src="/icons/quoti-icon.svg" alt="" aria-hidden="true" draggable={false} />
           <div>
             <h1 className="options-page__title">Quoti Options</h1>
             <p className="options-page__subtitle">Choose how Quoti appears while you browse social posts.</p>

@@ -24,18 +24,12 @@
 }
 
 .options-page__logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 48px;
   height: 48px;
   flex: 0 0 auto;
-  color: var(--color-text-inverse);
-  background: var(--color-text-primary);
   border-radius: var(--radius-sm);
-  font-family: var(--font-family-serif);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-bold);
+  object-fit: contain;
 }
 
 .options-page__title {

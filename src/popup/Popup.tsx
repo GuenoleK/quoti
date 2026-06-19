@@ -524,7 +524,7 @@ export function Popup() {
           </div>
         ) : (
           <div className="popup__brand">
-            <span className="popup__logo" aria-hidden="true">Q</span>
+            <img className="popup__logo" src="/icons/quoti-icon.svg" alt="" aria-hidden="true" draggable={false} />
             <div>
               <h1 className="popup__title">Quoti</h1>
               <p className="popup__subtitle">Capture the post. Keep the context.</p>

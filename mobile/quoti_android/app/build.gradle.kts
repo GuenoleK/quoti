@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 39
-        versionName = "0.1.38-primary-stop-button"
+        versionCode = 40
+        versionName = "0.1.39-video-source-speed"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -24,7 +24,7 @@ class QuotiCardExporterTest {
     }
 
     @Test
-    fun `video export prefers 720p source over oversized variants`() {
+    fun `video export prefers source size that matches card output`() {
         val selected =
             selectExportVideoUrl(
                 listOf(
@@ -36,7 +36,7 @@ class QuotiCardExporterTest {
             )
 
         assertEquals(
-            "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/export.mp4?tag=28",
+            "https://video.twimg.com/amplify_video/1/vid/avc1/640x360/low.mp4?tag=28",
             selected,
         )
     }
@@ -65,6 +65,8 @@ class QuotiCardExporterTest {
                     #EXTM3U
                     #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-64000",URI="/video/pl/audio/64k.m3u8"
                     #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-128000",URI="/video/pl/audio/128k.m3u8"
+                    #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=280000,RESOLUTION=644x270,AUDIO="audio-64000"
+                    /video/pl/avc1/644x270/video.m3u8
                     #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=531384,RESOLUTION=858x360,AUDIO="audio-64000"
                     /video/pl/avc1/858x360/video.m3u8
                     #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=1471854,RESOLUTION=1718x720,AUDIO="audio-128000"
@@ -75,7 +77,7 @@ class QuotiCardExporterTest {
 
         assertEquals(
             HlsPlaylistSelection(
-                videoPlaylistUrl = "https://video.twimg.com/video/pl/avc1/858x360/video.m3u8",
+                videoPlaylistUrl = "https://video.twimg.com/video/pl/avc1/644x270/video.m3u8",
                 audioPlaylistUrl = "https://video.twimg.com/video/pl/audio/64k.m3u8",
             ),
             selection,

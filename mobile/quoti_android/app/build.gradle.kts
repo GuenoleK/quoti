@@ -11,8 +11,8 @@ android {
         applicationId = "com.quoti.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "0.1.30-media-frame-consistency"
+        versionCode = 32
+        versionName = "0.1.31-media-loader-preview"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

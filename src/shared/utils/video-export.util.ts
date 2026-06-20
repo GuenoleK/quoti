@@ -435,7 +435,7 @@ function renderVideoFrame(
   context.lineTo(metrics.contentX + metrics.contentWidth, metrics.footerY);
   context.stroke();
 
-  drawPlatformMark(context, metrics.contentX, metrics.footerY + 20);
+  drawPlatformMark(context, metrics.contentX, metrics.footerY + 20, theme);
 
   context.fillStyle = theme.brand;
   context.font = "700 24px Georgia, serif";
@@ -456,13 +456,13 @@ function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {
   return undefined;
 }
 
-function drawPlatformMark(context: CanvasRenderingContext2D, x: number, y: number): void {
-  context.fillStyle = "#1f1a16";
+function drawPlatformMark(context: CanvasRenderingContext2D, x: number, y: number, theme: CanvasTheme): void {
+  context.fillStyle = theme.platformBackground;
   context.beginPath();
   context.arc(x + 18, y + 18, 18, 0, Math.PI * 2);
   context.fill();
 
-  context.strokeStyle = "#fff";
+  context.strokeStyle = theme.platformText;
   context.lineWidth = 1.5;
   context.beginPath();
   context.moveTo(x + 11, y + 10);
@@ -582,8 +582,8 @@ function getCanvasTheme(cardTheme: CardTheme): CanvasTheme {
       border: "#3a3028",
       brand: "#d8a46f",
       muted: "#b5a99d",
-      platformBackground: "#f6efe4",
-      platformText: "#171411",
+      platformBackground: "rgba(246, 239, 228, 0.12)",
+      platformText: "#f6efe4",
       quote: "#f6efe4",
       surface: "#211c18"
     };
@@ -595,8 +595,8 @@ function getCanvasTheme(cardTheme: CardTheme): CanvasTheme {
     border: "#ddd1c3",
     brand: "#7b3f22",
     muted: "#7a6d5f",
-    platformBackground: "#1f1a16",
-    platformText: "#fff",
+    platformBackground: "rgba(21, 17, 13, 0.12)",
+    platformText: "#15110d",
     quote: "#15110d",
     surface: "#fffaf2"
   };

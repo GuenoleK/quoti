@@ -24,14 +24,14 @@
   --card-light-color-text-secondary: #756f66;
   --card-light-color-border: rgb(36 31 26 / 12%);
   --card-light-color-brand: #744632;
-  --card-light-color-platform: #fffaf2;
-  --card-light-color-platform-background: #241f1a;
+  --card-light-color-platform: #241f1a;
+  --card-light-color-platform-background: rgb(36 31 26 / 12%);
 
   --card-dark-color-surface: #1f1a16;
   --card-dark-color-text-primary: #f8f0e5;
   --card-dark-color-text-secondary: #b9aa9a;
   --card-dark-color-border: rgb(248 240 229 / 14%);
   --card-dark-color-brand: #d8a17f;
-  --card-dark-color-platform: #1f1a16;
-  --card-dark-color-platform-background: #f8f0e5;
+  --card-dark-color-platform: #f8f0e5;
+  --card-dark-color-platform-background: rgb(248 240 229 / 12%);
 }

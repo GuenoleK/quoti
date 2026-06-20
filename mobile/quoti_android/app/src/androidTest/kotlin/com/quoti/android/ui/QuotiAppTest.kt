@@ -38,6 +38,7 @@ class QuotiAppTest {
         }
 
         composeRule.onAllNodesWithText("Quoti").onFirst().assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Gallery").assertIsDisplayed()
         composeRule.onNodeWithText("No post captured").assertIsDisplayed()
         composeRule.onAllNodesWithText("Light").assertCountEquals(0)
         composeRule.onAllNodesWithContentDescription("Copy image").assertCountEquals(0)

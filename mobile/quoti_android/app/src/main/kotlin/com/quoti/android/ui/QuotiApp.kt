@@ -17,16 +17,22 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,21 +53,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
@@ -106,6 +123,7 @@ import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -118,16 +136,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -154,6 +177,8 @@ import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
 import com.quoti.android.core.model.SocialPlatform
+import com.quoti.android.core.model.hasMedia
+import com.quoti.android.data.QuotiGalleryRepository
 import com.quoti.android.export.QuotiExportType
 import com.quoti.android.export.QuotiExportWork
 import com.quoti.android.export.QuotiCardExporter
@@ -176,6 +201,22 @@ import java.util.Locale
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val TwoMediaGridAspectRatio = 2f
 private const val MultiMediaGridAspectRatio = 1.7777778f
+private const val GalleryPageSize = 20
+private val GallerySwipeCommitThreshold = 64.dp
+
+private enum class GalleryLayoutMode {
+    Grid,
+    List,
+}
+
+private enum class GalleryContentFilter(
+    val label: String,
+) {
+    All("Tous"),
+    Images("Images"),
+    Videos("Videos"),
+    Text("Textes"),
+}
 
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
@@ -215,12 +256,20 @@ fun QuotiApp(
     onClear: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val workManager = remember(context) { WorkManager.getInstance(context.applicationContext) }
+    val galleryRepository = remember(context) { QuotiGalleryRepository(context.applicationContext) }
+    var showGallery by rememberSaveable { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var galleryDraft by remember { mutableStateOf<IncomingShareDraft?>(null) }
+    var galleryPosts by remember { mutableStateOf(galleryRepository.loadPosts()) }
+    var galleryLayoutMode by rememberSaveable {
+        mutableStateOf(galleryRepository.loadLayoutModeName().toGalleryLayoutMode())
+    }
     var cardTone by rememberSaveable { mutableStateOf(CardTone.Light) }
     var contentMode by rememberSaveable { mutableStateOf(CardContentMode.WithMedia) }
     var sourceActionsEnabled by rememberSaveable { mutableStateOf(true) }
@@ -255,13 +304,31 @@ fun QuotiApp(
             contentMode = contentMode,
             sourceActionsEnabled = sourceActionsEnabled,
         )
-    val post = (shareState as? QuotiShareState.Ready)?.draft?.post
+    val incomingPost = (shareState as? QuotiShareState.Ready)?.draft?.post
+    val displayedShareState = galleryDraft?.let(QuotiShareState::Ready) ?: shareState
+    val post = (displayedShareState as? QuotiShareState.Ready)?.draft?.post
 
     LaunchedEffect(post?.id) {
         pendingVideoExportPost = null
         selectedVideoExportSourceId = null
         activeMediaViewer = null
-        if (post != null) {
+    }
+
+    LaunchedEffect(galleryRepository) {
+        galleryPosts =
+            withContext(Dispatchers.IO) {
+                galleryRepository.loadPosts()
+            }
+    }
+
+    LaunchedEffect(incomingPost?.id) {
+        val capturedPost = incomingPost ?: return@LaunchedEffect
+        galleryDraft = null
+        galleryPosts =
+            withContext(Dispatchers.IO) {
+                galleryRepository.savePost(capturedPost)
+            }
+        if (post == capturedPost) {
             snackbarHostState.showSnackbar("Shared post captured")
         }
     }
@@ -413,6 +480,13 @@ fun QuotiApp(
         }
     }
 
+    fun setGalleryVisible(visible: Boolean) {
+        if (!visible) {
+            focusManager.clearFocus(force = true)
+        }
+        showGallery = visible
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = {
@@ -422,105 +496,153 @@ fun QuotiApp(
             )
         },
     ) { innerPadding ->
-        QuotiCaptureScreen(
-            shareState = shareState,
-            settings = settings,
-            isExportProcessing = isExportProcessing,
-            activeExportType = activeExportType,
-            activeExportProgress = activeExportProgress,
-            onCancelExport = ::cancelActiveExport,
-            onOpenMedia = { request -> activeMediaViewer = request },
-            onCardToneChange = { cardTone = it },
-            onContentModeChange = { contentMode = it },
-            onSettingsClick = { showSettings = true },
-            onCopyImage = {
-                val activePost = post ?: return@QuotiCaptureScreen
-                scope.launch {
-                    runCatching {
-                        copyCardImage(
-                            context = context,
-                            clipboard = clipboard,
-                            post = activePost,
-                            settings = settings,
-                        )
-                    }.fold(
-                        onSuccess = {
-                            snackbarHostState.showSnackbar(
-                                if (activePost.sourceUrl == null) {
-                                    "Image copied"
-                                } else {
-                                    "Image and source link copied"
+        QuotiSwipePager(
+            showGallery = showGallery,
+            gesturesEnabled = !isExportProcessing,
+            onShowGalleryChange = ::setGalleryVisible,
+            captureContent = {
+                QuotiCaptureScreen(
+                    shareState = displayedShareState,
+                    settings = settings,
+                    isExportProcessing = isExportProcessing,
+                    activeExportType = activeExportType,
+                    activeExportProgress = activeExportProgress,
+                    onCancelExport = ::cancelActiveExport,
+                    onOpenMedia = { request -> activeMediaViewer = request },
+                    onCardToneChange = { cardTone = it },
+                    onContentModeChange = { contentMode = it },
+                    onGalleryClick = { setGalleryVisible(true) },
+                    onSettingsClick = { showSettings = true },
+                    onCopyImage = {
+                        val activePost = post ?: return@QuotiCaptureScreen
+                        scope.launch {
+                            runCatching {
+                                copyCardImage(
+                                    context = context,
+                                    clipboard = clipboard,
+                                    post = activePost,
+                                    settings = settings,
+                                )
+                            }.fold(
+                                onSuccess = {
+                                    snackbarHostState.showSnackbar(
+                                        if (activePost.sourceUrl == null) {
+                                            "Image copied"
+                                        } else {
+                                            "Image and source link copied"
+                                        },
+                                    )
+                                },
+                                onFailure = {
+                                    snackbarHostState.showSnackbar("Unable to copy image")
                                 },
                             )
-                        },
-                        onFailure = {
-                            snackbarHostState.showSnackbar("Unable to copy image")
-                        },
-                    )
-                }
-            },
-            onDownloadVideo = {
-                val activePost = post ?: return@QuotiCaptureScreen
-                requestVideoExport(activePost)
-            },
-            onDownloadPng = {
-                val activePost = post ?: return@QuotiCaptureScreen
-                startExport(activePost, QuotiExportType.Image, settings.contentMode)
-            },
-            onShareImage = {
-                val activePost = post ?: return@QuotiCaptureScreen
-                scope.launch {
-                    runCatching {
-                        shareCardImage(
-                            context = context,
-                            post = activePost,
-                            settings = settings,
+                        }
+                    },
+                    onDownloadVideo = {
+                        val activePost = post ?: return@QuotiCaptureScreen
+                        requestVideoExport(activePost)
+                    },
+                    onDownloadPng = {
+                        val activePost = post ?: return@QuotiCaptureScreen
+                        startExport(activePost, QuotiExportType.Image, settings.contentMode)
+                    },
+                    onShareImage = {
+                        val activePost = post ?: return@QuotiCaptureScreen
+                        scope.launch {
+                            runCatching {
+                                shareCardImage(
+                                    context = context,
+                                    post = activePost,
+                                    settings = settings,
+                                )
+                            }.fold(
+                                onSuccess = {
+                                    snackbarHostState.showSnackbar("Share sheet ready")
+                                },
+                                onFailure = {
+                                    snackbarHostState.showSnackbar("Unable to share image")
+                                },
+                            )
+                        }
+                    },
+                    onCopyText = {
+                        val activePost = post ?: return@QuotiCaptureScreen
+                        clipboard.setPrimaryClip(
+                            ClipData.newPlainText(
+                                "Quoti post text",
+                                activePost.content,
+                            ),
                         )
-                    }.fold(
-                        onSuccess = {
-                            snackbarHostState.showSnackbar("Share sheet ready")
-                        },
-                        onFailure = {
-                            snackbarHostState.showSnackbar("Unable to share image")
-                        },
-                    )
-                }
-            },
-            onCopyText = {
-                val activePost = post ?: return@QuotiCaptureScreen
-                clipboard.setPrimaryClip(
-                    ClipData.newPlainText(
-                        "Quoti post text",
-                        activePost.content,
-                    ),
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Text copied")
+                        }
+                    },
+                    onCopySource = {
+                        val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Quoti source link", sourceUrl))
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Source link copied")
+                        }
+                    },
+                    onOpenSource = {
+                        val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
+                        uriHandler.openUri(sourceUrl)
+                    },
+                    onClear = {
+                        if (galleryDraft != null) {
+                            galleryDraft = null
+                        } else {
+                            onClear()
+                        }
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Post cleared")
+                        }
+                    },
+                    onRefresh = {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Refresh will reprocess the next shared post")
+                        }
+                    },
+                    contentPadding = innerPadding,
                 )
-                scope.launch {
-                    snackbarHostState.showSnackbar("Text copied")
-                }
             },
-            onCopySource = {
-                val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
-                clipboard.setPrimaryClip(ClipData.newPlainText("Quoti source link", sourceUrl))
-                scope.launch {
-                    snackbarHostState.showSnackbar("Source link copied")
-                }
+            galleryContent = {
+                QuotiGalleryScreen(
+                    posts = galleryPosts,
+                    layoutMode = galleryLayoutMode,
+                    backHandlerEnabled = showGallery,
+                    onBack = { setGalleryVisible(false) },
+                    onLayoutModeChange = { mode ->
+                        galleryLayoutMode = mode
+                        galleryRepository.saveLayoutModeName(mode.name)
+                    },
+                    onOpenPost = { selectedPost ->
+                        galleryDraft = selectedPost.toGalleryDraft()
+                        setGalleryVisible(false)
+                    },
+                    onDeletePosts = { selectedKeys ->
+                        scope.launch {
+                            galleryPosts =
+                                withContext(Dispatchers.IO) {
+                                    galleryRepository.deletePosts(selectedKeys)
+                                }
+                            val displayedPostKey = post?.galleryKey
+                            if (displayedPostKey != null && displayedPostKey in selectedKeys) {
+                                galleryDraft = null
+                            }
+                            snackbarHostState.showSnackbar(
+                                if (selectedKeys.size == 1) {
+                                    "Card deleted"
+                                } else {
+                                    "${selectedKeys.size} cards deleted"
+                                },
+                            )
+                        }
+                    },
+                    contentPadding = innerPadding,
+                )
             },
-            onOpenSource = {
-                val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
-                uriHandler.openUri(sourceUrl)
-            },
-            onClear = {
-                onClear()
-                scope.launch {
-                    snackbarHostState.showSnackbar("Post cleared")
-                }
-            },
-            onRefresh = {
-                scope.launch {
-                    snackbarHostState.showSnackbar("Refresh will reprocess the next shared post")
-                }
-            },
-            contentPadding = innerPadding,
         )
     }
 
@@ -569,6 +691,101 @@ fun QuotiApp(
             },
             onDismiss = { showSettings = false },
         )
+    }
+}
+
+@Composable
+private fun QuotiSwipePager(
+    showGallery: Boolean,
+    gesturesEnabled: Boolean,
+    onShowGalleryChange: (Boolean) -> Unit,
+    captureContent: @Composable () -> Unit,
+    galleryContent: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val pageWidthPx = with(density) { maxWidth.toPx() }
+        val commitThresholdPx = with(density) { GallerySwipeCommitThreshold.toPx() }
+        var isDragging by remember { mutableStateOf(false) }
+        var settleVersion by remember { mutableStateOf(0) }
+        var pagerOffsetPx by remember { mutableStateOf(if (showGallery) -pageWidthPx else 0f) }
+        val settledOffsetPx = if (showGallery) -pageWidthPx else 0f
+
+        LaunchedEffect(showGallery, pageWidthPx, settleVersion) {
+            if (isDragging || pageWidthPx <= 0f) {
+                return@LaunchedEffect
+            }
+
+            val animation = Animatable(pagerOffsetPx)
+            animation.animateTo(
+                targetValue = settledOffsetPx,
+                animationSpec = tween(150),
+            ) {
+                pagerOffsetPx = value
+            }
+            pagerOffsetPx = settledOffsetPx
+        }
+
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(showGallery, gesturesEnabled, pageWidthPx, commitThresholdPx) {
+                        if (!gesturesEnabled || pageWidthPx <= 0f) {
+                            return@pointerInput
+                        }
+
+                        detectHorizontalDragGestures(
+                            onDragStart = {
+                                isDragging = true
+                            },
+                            onHorizontalDrag = { _, dragAmount ->
+                                pagerOffsetPx =
+                                    (pagerOffsetPx + dragAmount)
+                                        .coerceIn(-pageWidthPx, 0f)
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                settleVersion += 1
+                            },
+                            onDragEnd = {
+                                val targetShowGallery =
+                                    if (showGallery) {
+                                        pagerOffsetPx <= -pageWidthPx + commitThresholdPx
+                                    } else {
+                                        pagerOffsetPx <= -commitThresholdPx
+                                    }
+
+                                if (targetShowGallery != showGallery) {
+                                    onShowGalleryChange(targetShowGallery)
+                                }
+                                isDragging = false
+                                settleVersion += 1
+                            },
+                        )
+                    },
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = pagerOffsetPx
+                        },
+            ) {
+                captureContent()
+            }
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = pagerOffsetPx + pageWidthPx
+                        },
+            ) {
+                galleryContent()
+            }
+        }
     }
 }
 
@@ -860,6 +1077,7 @@ private fun QuotiCaptureScreen(
     onOpenMedia: (MediaViewerRequest) -> Unit,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
+    onGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onCopyImage: () -> Unit,
     onDownloadVideo: () -> Unit,
@@ -913,7 +1131,10 @@ private fun QuotiCaptureScreen(
                     .padding(bottom = 112.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Header(onSettingsClick = onSettingsClick)
+            Header(
+                onGalleryClick = onGalleryClick,
+                onSettingsClick = onSettingsClick,
+            )
             when (shareState) {
                 QuotiShareState.Empty -> EmptyCaptureState()
                 is QuotiShareState.Loading -> LoadingCaptureState()
@@ -968,6 +1189,789 @@ private fun QuotiCaptureScreen(
                             .widthIn(max = 440.dp)
                             .fillMaxWidth()
                             .padding(horizontal = 20.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuotiGalleryScreen(
+    posts: List<QuotiPost>,
+    layoutMode: GalleryLayoutMode,
+    backHandlerEnabled: Boolean,
+    onBack: () -> Unit,
+    onLayoutModeChange: (GalleryLayoutMode) -> Unit,
+    onOpenPost: (QuotiPost) -> Unit,
+    onDeletePosts: (Set<String>) -> Unit,
+    contentPadding: PaddingValues,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var selectedFilter by rememberSaveable { mutableStateOf(GalleryContentFilter.All) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
+    var visibleCount by rememberSaveable(query, selectedFilter, posts.size) { mutableStateOf(GalleryPageSize) }
+    val listState = rememberLazyListState()
+    val availableKeys = remember(posts) { posts.map { post -> post.galleryKey }.toSet() }
+    val filteredPosts =
+        remember(posts, query, selectedFilter) {
+            posts.filter { post ->
+                post.matchesGalleryQuery(query) && post.matchesGalleryFilter(selectedFilter)
+            }
+        }
+    val visiblePosts =
+        remember(filteredPosts, visibleCount) {
+            filteredPosts.take(visibleCount)
+        }
+    val visibleGridRows =
+        remember(visiblePosts) {
+            visiblePosts.chunked(2)
+        }
+    val shouldLoadMore by remember(listState, visiblePosts.size, visibleCount, filteredPosts.size) {
+        derivedStateOf {
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisibleIndex >= listState.layoutInfo.totalItemsCount - 3 &&
+                visibleCount < filteredPosts.size
+        }
+    }
+
+    fun toggleSelection(post: QuotiPost) {
+        val key = post.galleryKey
+        selectedKeys =
+            if (key in selectedKeys) {
+                selectedKeys - key
+            } else {
+                selectedKeys + key
+            }
+    }
+
+    fun deleteSelectedPosts() {
+        val keysToDelete = selectedKeys
+        if (keysToDelete.isEmpty()) {
+            return
+        }
+
+        selectedKeys = emptySet()
+        selectionMode = false
+        onDeletePosts(keysToDelete)
+    }
+
+    BackHandler(enabled = backHandlerEnabled, onBack = onBack)
+
+    LaunchedEffect(posts) {
+        val retainedKeys = selectedKeys.intersect(availableKeys)
+        selectedKeys = retainedKeys
+        if (retainedKeys.isEmpty()) {
+            selectionMode = false
+        }
+    }
+
+    LaunchedEffect(shouldLoadMore, filteredPosts.size, visibleCount) {
+        if (shouldLoadMore) {
+            visibleCount = (visibleCount + GalleryPageSize).coerceAtMost(filteredPosts.size)
+        }
+    }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(contentPadding),
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier =
+                Modifier
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                GalleryHeader(
+                    selectionCount = selectedKeys.size,
+                    selectionMode = selectionMode,
+                    layoutMode = layoutMode,
+                    onBack = onBack,
+                    onLayoutModeChange = {
+                        onLayoutModeChange(
+                            if (layoutMode == GalleryLayoutMode.Grid) {
+                                GalleryLayoutMode.List
+                            } else {
+                                GalleryLayoutMode.Grid
+                            },
+                        )
+                    },
+                    onSelectionCancel = {
+                        selectionMode = false
+                        selectedKeys = emptySet()
+                    },
+                    onDelete = ::deleteSelectedPosts,
+                )
+            }
+            item {
+                GallerySearchField(
+                    query = query,
+                    onQueryChange = { value -> query = value },
+                )
+            }
+            item {
+                GalleryFilterTabs(
+                    selectedFilter = selectedFilter,
+                    resultCount = filteredPosts.size,
+                    onFilterChange = { filter -> selectedFilter = filter },
+                )
+            }
+
+            if (posts.isEmpty()) {
+                item {
+                    StateFrame {
+                        Icon(
+                            imageVector = Icons.Outlined.PhotoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(34.dp),
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Aucune carte",
+                            style = MaterialTheme.typography.titleMediumEmphasized,
+                        )
+                        Text(
+                            text = "Les posts partages apparaitront ici.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else if (filteredPosts.isEmpty()) {
+                item {
+                    StateFrame {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(34.dp),
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Aucun resultat",
+                            style = MaterialTheme.typography.titleMediumEmphasized,
+                        )
+                        Text(
+                            text = "Essaie une autre recherche.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else if (layoutMode == GalleryLayoutMode.Grid) {
+                items(
+                    items = visibleGridRows,
+                    key = { row -> row.joinToString("|") { post -> post.galleryKey } },
+                ) { rowPosts ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        rowPosts.forEach { post ->
+                            GalleryGridTile(
+                                post = post,
+                                selected = post.galleryKey in selectedKeys,
+                                selectionMode = selectionMode,
+                                onOpen = { onOpenPost(post) },
+                                onToggleSelection = { toggleSelection(post) },
+                                onStartSelection = {
+                                    selectionMode = true
+                                    selectedKeys = selectedKeys + post.galleryKey
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (rowPosts.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            } else {
+                items(
+                    items = visiblePosts,
+                    key = { post -> post.galleryKey },
+                ) { post ->
+                    GalleryPostRow(
+                        post = post,
+                        selected = post.galleryKey in selectedKeys,
+                        selectionMode = selectionMode,
+                        onOpen = { onOpenPost(post) },
+                        onToggleSelection = { toggleSelection(post) },
+                        onStartSelection = {
+                            selectionMode = true
+                            selectedKeys = selectedKeys + post.galleryKey
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryHeader(
+    selectionCount: Int,
+    selectionMode: Boolean,
+    layoutMode: GalleryLayoutMode,
+    onBack: () -> Unit,
+    onLayoutModeChange: () -> Unit,
+    onSelectionCancel: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            GalleryCircleIconButton(
+                onClick = onBack,
+                contentDescription = "Retour",
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = null,
+                )
+            }
+            if (selectionMode) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    GalleryCircleIconButton(
+                        onClick = onDelete,
+                        enabled = selectionCount > 0,
+                        contentDescription = "Supprimer les cartes selectionnees",
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Delete,
+                            contentDescription = null,
+                        )
+                    }
+                    TextButton(onClick = onSelectionCancel) {
+                        Text("Annuler")
+                    }
+                }
+            } else {
+                GalleryCircleIconButton(
+                    onClick = onLayoutModeChange,
+                    contentDescription =
+                        if (layoutMode == GalleryLayoutMode.Grid) {
+                            "Afficher en liste"
+                        } else {
+                            "Afficher en grille"
+                        },
+                ) {
+                    Icon(
+                        imageVector =
+                            if (layoutMode == GalleryLayoutMode.Grid) {
+                                Icons.AutoMirrored.Outlined.ViewList
+                            } else {
+                                Icons.Outlined.GridView
+                            },
+                        contentDescription = null,
+                    )
+                }
+            }
+        }
+        Text(
+            text =
+                if (selectionMode) {
+                    "$selectionCount selectionnee${if (selectionCount > 1) "s" else ""}"
+                } else {
+                    "Bibliotheque"
+                },
+            modifier = Modifier.padding(horizontal = 82.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.titleLargeEmphasized,
+        )
+    }
+}
+
+@Composable
+private fun GalleryCircleIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier =
+            modifier
+                .size(52.dp)
+                .clip(CircleShape),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor =
+            if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+        tonalElevation = 1.dp,
+    ) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryFilterTabs(
+    selectedFilter: GalleryContentFilter,
+    resultCount: Int,
+    onFilterChange: (GalleryContentFilter) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        GalleryContentFilter.entries.forEach { filter ->
+            val selected = filter == selectedFilter
+            Surface(
+                modifier =
+                    Modifier
+                        .clip(CircleShape)
+                        .clickable { onFilterChange(filter) },
+                shape = CircleShape,
+                color =
+                    if (selected) {
+                        MaterialTheme.colorScheme.surfaceContainerHighest
+                    } else {
+                        Color.Transparent
+                    },
+                contentColor =
+                    if (selected) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+            ) {
+                Text(
+                    text = filter.label,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    maxLines = 1,
+                    style =
+                        MaterialTheme.typography.labelLargeEmphasized.copy(
+                            fontFamily = FontFamily.SansSerif,
+                        ),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+            text = resultCount.toString(),
+            maxLines = 1,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun GallerySearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+) {
+    val searchTextStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.SansSerif)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle =
+                    searchTextStyle.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.weight(1f),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                text = "Rechercher texte ou URL",
+                                style = searchTextStyle,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryGridTile(
+    post: QuotiPost,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onOpen: () -> Unit,
+    onToggleSelection: () -> Unit,
+    onStartSelection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val onClick = if (selectionMode) onToggleSelection else onOpen
+    val previewSource = remember(post) { post.galleryPreviewSource() }
+    val bitmap by produceState<Bitmap?>(initialValue = null, previewSource?.url) {
+        value = previewSource?.url?.let { url -> loadRemoteBitmap(url) }
+    }
+    val shape = RoundedCornerShape(26.dp)
+    val borderColor by animateColorAsState(
+        targetValue =
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.62f)
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.10f)
+            },
+        label = "Gallery grid border",
+    )
+    val clickModifier =
+        if (selected) {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onToggleSelection,
+            )
+        } else {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onStartSelection,
+            )
+        }
+
+    Surface(
+        modifier =
+            modifier
+                .aspectRatio(0.92f)
+                .clip(shape)
+                .then(clickModifier),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = post.content,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                GalleryTileFallback(
+                    post = post,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (previewSource?.isVideo == true) {
+                VideoBadge(
+                    compact = true,
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(10.dp),
+                )
+            }
+            if (selectionMode || selected) {
+                GallerySelectionBadge(
+                    selected = selected,
+                    modifier =
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryTileFallback(
+    post: QuotiPost,
+    modifier: Modifier = Modifier,
+) {
+    val icon =
+        when {
+            post.containsVideo() -> Icons.Outlined.Movie
+            post.hasMedia -> Icons.Outlined.Image
+            else -> Icons.AutoMirrored.Outlined.Article
+        }
+    Box(
+        modifier =
+            modifier
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .padding(18.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier =
+                Modifier
+                    .align(Alignment.TopStart)
+                    .size(30.dp),
+        )
+        Column(
+            modifier = Modifier.align(Alignment.BottomStart),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = post.authorName.displayTextOrNull() ?: post.authorHandle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLargeEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = post.content,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GallerySelectionBadge(
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.size(24.dp),
+        shape = CircleShape,
+        color =
+            if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHighest
+            },
+        contentColor =
+            if (selected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.outline
+            },
+        border =
+            if (selected) {
+                null
+            } else {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.54f))
+            },
+    ) {
+        if (selected) {
+            Icon(
+                imageVector = Icons.Outlined.Check,
+                contentDescription = null,
+                modifier =
+                    Modifier
+                        .padding(5.dp)
+                        .size(14.dp),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryPostRow(
+    post: QuotiPost,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onOpen: () -> Unit,
+    onToggleSelection: () -> Unit,
+    onStartSelection: () -> Unit,
+) {
+    val onClick = if (selectionMode) onToggleSelection else onOpen
+    val containerColor by animateColorAsState(
+        targetValue =
+            if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+        label = "Gallery card container",
+    )
+    val borderColor by animateColorAsState(
+        targetValue =
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+            },
+        label = "Gallery card border",
+    )
+    val tonalElevation by animateDpAsState(
+        targetValue = if (selected) 3.dp else 0.dp,
+        label = "Gallery card elevation",
+    )
+    val shape = RoundedCornerShape(24.dp)
+    val clickModifier =
+        if (selected) {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onToggleSelection,
+            )
+        } else {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onStartSelection,
+            )
+        }
+
+    Surface(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .then(clickModifier),
+        shape = shape,
+        color = containerColor,
+        tonalElevation = tonalElevation,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            GalleryPostThumbnail(
+                post = post,
+                selected = selected,
+                selectionMode = selectionMode,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = post.authorName.displayTextOrNull() ?: post.authorHandle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                )
+                Text(
+                    text = post.content,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = post.sourceUrl ?: formatDate(post.capturedAt),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryPostThumbnail(
+    post: QuotiPost,
+    selected: Boolean,
+    selectionMode: Boolean,
+) {
+    val previewSource = remember(post) { post.galleryPreviewSource() }
+    val bitmap by produceState<Bitmap?>(initialValue = null, previewSource?.url) {
+        value = previewSource?.url?.let { url -> loadRemoteBitmap(url) }
+    }
+    val shape = RoundedCornerShape(22.dp)
+    Surface(
+        modifier = Modifier.size(72.dp),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = post.content,
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .clip(shape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(
+                    imageVector =
+                        when {
+                            post.containsVideo() -> Icons.Outlined.Movie
+                            post.hasMedia -> Icons.Outlined.Image
+                            else -> Icons.AutoMirrored.Outlined.Article
+                        },
+                    contentDescription = null,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+            if (previewSource?.isVideo == true) {
+                VideoBadge(
+                    compact = true,
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(5.dp)
+                            .size(26.dp),
+                )
+            }
+            if (selectionMode || selected) {
+                GallerySelectionBadge(
+                    selected = selected,
+                    modifier =
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(7.dp)
+                            .size(22.dp),
                 )
             }
         }
@@ -1167,7 +2171,10 @@ private fun StateFrame(
 }
 
 @Composable
-private fun Header(onSettingsClick: () -> Unit) {
+private fun Header(
+    onGalleryClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
@@ -1197,6 +2204,12 @@ private fun Header(onSettingsClick: () -> Unit) {
                 text = "Capture the post. Keep the context.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onGalleryClick) {
+            Icon(
+                imageVector = Icons.Outlined.PhotoLibrary,
+                contentDescription = "Gallery",
             )
         }
         IconButton(onClick = onSettingsClick) {
@@ -2558,6 +3571,61 @@ private fun selectPreviewPost(posts: List<QuotiPost>): QuotiPost? {
     return posts.firstOrNull { it.relatedPost != null } ?: posts.firstOrNull()
 }
 
+private val QuotiPost.galleryKey: String
+    get() = sourceUrl ?: id
+
+private fun QuotiPost.toGalleryDraft(): IncomingShareDraft {
+    return IncomingShareDraft(
+        post = this,
+        rawText = sourceUrl ?: content,
+    )
+}
+
+private fun String?.toGalleryLayoutMode(): GalleryLayoutMode {
+    return GalleryLayoutMode.entries.firstOrNull { mode -> mode.name == this }
+        ?: GalleryLayoutMode.Grid
+}
+
+private fun QuotiPost.matchesGalleryQuery(query: String): Boolean {
+    val normalizedQuery = query.trim().lowercase(Locale.US)
+    if (normalizedQuery.isEmpty()) {
+        return true
+    }
+
+    return gallerySearchText().contains(normalizedQuery)
+}
+
+private fun QuotiPost.matchesGalleryFilter(filter: GalleryContentFilter): Boolean {
+    return when (filter) {
+        GalleryContentFilter.All -> true
+        GalleryContentFilter.Images -> containsImage()
+        GalleryContentFilter.Videos -> containsVideo()
+        GalleryContentFilter.Text -> !hasMedia
+    }
+}
+
+private fun QuotiPost.gallerySearchText(): String {
+    return listOfNotNull(
+        platform.label,
+        authorName,
+        authorHandle,
+        content,
+        relatedPost?.authorName,
+        relatedPost?.authorHandle,
+        relatedPost?.content,
+        sourceUrl,
+        relatedPost?.sourceUrl,
+        publishedAt,
+        capturedAt,
+    ).joinToString(" ").lowercase(Locale.US)
+}
+
+private fun QuotiPost.galleryPreviewSource(): MediaPreviewSource? {
+    return (media + relatedPost?.media.orEmpty())
+        .mapNotNull { item -> item.previewSource() }
+        .firstOrNull()
+}
+
 private fun avatarInitials(label: String): String {
     val parts =
         label
@@ -2577,6 +3645,11 @@ private fun String?.displayTextOrNull(): String? = this?.trim()?.takeIf { value 
 private fun QuotiPost.containsVideo(): Boolean {
     return media.any { it is PostMedia.Video } ||
         relatedPost?.media?.any { it is PostMedia.Video } == true
+}
+
+private fun QuotiPost.containsImage(): Boolean {
+    return media.any { it is PostMedia.Image } ||
+        relatedPost?.media?.any { it is PostMedia.Image } == true
 }
 
 private val QuotiExportType.processingTitle: String

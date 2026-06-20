@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { ArrowLeft, Settings } from "lucide-react";
+import { ArrowLeft, Images, Settings } from "lucide-react";
 import type { QuotiMessageResponse } from "../shared/types/extension-message.types";
 import type { CardContentMode, CardTheme, ExtractedPost, PostMedia, VideoPostMedia } from "../shared/types/post.types";
 import {
@@ -15,10 +15,12 @@ import { exportNodeToPngBlob, exportNodeToPngDataUrl } from "../shared/utils/ima
 import { downloadBlob } from "../shared/utils/video-export.util";
 import type { VideoRenderProgress } from "../rendering/video/video-render.types";
 import { EmptyState } from "./components/EmptyState/EmptyState";
+import { GalleryView } from "./components/GalleryView/GalleryView";
 import { CardContentToggle } from "./components/CardContentToggle/CardContentToggle";
 import { CardThemeToggle } from "./components/CardThemeToggle/CardThemeToggle";
 import { PostCardActions } from "./components/PostCardPreview/PostCardActions/PostCardActions";
 import { PostCardPreview } from "./components/PostCardPreview/PostCardPreview";
+import { deleteGalleryCards, mergeGalleryCard, readGalleryCards, upsertGalleryCard, type GalleryCard } from "./gallery-storage";
 import "./Popup.css";
 
 type CaptureState = {
@@ -29,6 +31,7 @@ type CaptureState = {
 
 type VideoWarmupStatus = "idle" | "loading" | "ready" | "error";
 type MediaRecoveryStatus = "idle" | "loading";
+type PopupView = "capture" | "gallery" | "settings";
 type VideoRenderController = typeof import("../rendering/video/video-render.controller");
 type CachedPostMedia = {
   media: PostMedia[];
@@ -40,10 +43,12 @@ let videoRenderControllerPromise: Promise<VideoRenderController> | null = null;
 
 export function Popup() {
   const exportRef = useRef<HTMLDivElement>(null);
+  const contentModeOverrideRef = useRef<CardContentMode | null>(null);
   const isMountedRef = useRef(true);
   const mediaRecoveryPostKeyRef = useRef<string | null>(null);
   const postMediaCacheRef = useRef<Map<string, CachedPostMedia>>(new Map());
   const settingsRef = useRef<QuotiSettings>(defaultQuotiSettings);
+  const skipNextGallerySaveRef = useRef(false);
   const videoExportRef = useRef<HTMLDivElement>(null);
   const videoWarmupPromiseRef = useRef<Promise<void> | null>(null);
   const [capture, setCapture] = useState<CaptureState>({
@@ -58,7 +63,12 @@ export function Popup() {
   const [cardTheme, setCardTheme] = useState<CardTheme>(defaultQuotiSettings.cardTheme);
   const [settings, setSettings] = useState<QuotiSettings>(defaultQuotiSettings);
   const [settingsStatus, setSettingsStatus] = useState("Saved automatically.");
-  const [settingsViewOpen, setSettingsViewOpen] = useState(false);
+  const [activeView, setActiveView] = useState<PopupView>("capture");
+  const [galleryCards, setGalleryCards] = useState<GalleryCard[]>([]);
+  const [galleryStatus, setGalleryStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [galleryQuery, setGalleryQuery] = useState("");
+  const [galleryNotice, setGalleryNotice] = useState("");
+  const [selectedGalleryIds, setSelectedGalleryIds] = useState<Set<string>>(() => new Set());
   const [notice, setNotice] = useState<string>("");
   const [mediaRecoveryStatus, setMediaRecoveryStatus] = useState<MediaRecoveryStatus>("idle");
   const [videoWarmupStatus, setVideoWarmupStatus] = useState<VideoWarmupStatus>("idle");
@@ -94,9 +104,79 @@ export function Popup() {
     });
   }, []);
 
+  const loadGalleryCards = useCallback(async () => {
+    setGalleryStatus("loading");
+
+    try {
+      const cards = await readGalleryCards();
+
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      setGalleryCards(cards);
+      setGalleryStatus("ready");
+    } catch (error) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      console.error("[Quoti] gallery read failed", error);
+      setGalleryStatus("error");
+      setGalleryNotice("Gallery could not be loaded.");
+    }
+  }, []);
+
   useEffect(() => {
-    setContentMode(resolveCardContentModePreference(capture.post, settings.cardContentMode));
+    void loadGalleryCards();
+  }, [loadGalleryCards]);
+
+  useEffect(() => {
+    const preferredMode = contentModeOverrideRef.current ?? settings.cardContentMode;
+    contentModeOverrideRef.current = null;
+    setContentMode(resolveCardContentModePreference(capture.post, preferredMode));
   }, [capture.post, settings.cardContentMode]);
+
+  useEffect(() => {
+    if (!capture.post || capture.status !== "ready") {
+      return;
+    }
+
+    if (skipNextGallerySaveRef.current) {
+      skipNextGallerySaveRef.current = false;
+      return;
+    }
+
+    let cancelled = false;
+
+    void upsertGalleryCard(capture.post, { cardTheme, contentMode })
+      .then((savedCard) => {
+        if (!isMountedRef.current || cancelled) {
+          return;
+        }
+
+        setGalleryCards((cards) => mergeGalleryCard(cards, savedCard));
+      })
+      .catch((error) => {
+        console.error("[Quoti] gallery save failed", error);
+        if (isMountedRef.current) {
+          setNotice("Quoti could not save this card to the gallery.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [capture.post, capture.status, cardTheme, contentMode]);
+
+  useEffect(() => {
+    setSelectedGalleryIds((currentSelection) => {
+      const availableIds = new Set(galleryCards.map((card) => card.id));
+      const nextSelection = new Set([...currentSelection].filter((id) => availableIds.has(id)));
+
+      return nextSelection.size === currentSelection.size ? currentSelection : nextSelection;
+    });
+  }, [galleryCards]);
 
   const updateSetting = <Key extends keyof QuotiSettings>(key: Key, value: QuotiSettings[Key]) => {
     const nextSettings = {
@@ -496,11 +576,98 @@ export function Popup() {
   };
 
   const handleOpenOptions = () => {
-    setSettingsViewOpen(true);
+    setActiveView("settings");
+    setGalleryNotice("");
+  };
+
+  const handleOpenGallery = () => {
+    setActiveView("gallery");
+    setNotice("");
+    setGalleryNotice("");
+    void loadGalleryCards();
+  };
+
+  const handleBackToCapture = () => {
+    setActiveView("capture");
+    setGalleryNotice("");
+    setSelectedGalleryIds(new Set());
+  };
+
+  const handleOpenGalleryCard = (card: GalleryCard) => {
+    const post = preserveSessionMedia(postMediaCacheRef.current, card.post);
+
+    contentModeOverrideRef.current = card.contentMode;
+    mediaRecoveryPostKeyRef.current = null;
+    skipNextGallerySaveRef.current = true;
+    setCapture({
+      post,
+      status: "ready",
+      message: "Card loaded from gallery."
+    });
+    setCardTheme(card.cardTheme);
+    setContentMode(resolveCardContentModePreference(post, card.contentMode));
+    setActiveView("capture");
+    setSelectedGalleryIds(new Set());
+    setNotice("Card loaded from gallery.");
+    void recoverMissingVideoMedia(post);
+  };
+
+  const handleToggleGallerySelection = (cardId: string) => {
+    setSelectedGalleryIds((currentSelection) => {
+      const nextSelection = new Set(currentSelection);
+
+      if (nextSelection.has(cardId)) {
+        nextSelection.delete(cardId);
+      } else {
+        nextSelection.add(cardId);
+      }
+
+      return nextSelection;
+    });
+  };
+
+  const handleDeleteSelectedGalleryCards = () => {
+    const selectedIds = [...selectedGalleryIds];
+
+    if (selectedIds.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${selectedIds.length} saved card${selectedIds.length > 1 ? "s" : ""}?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    void deleteGalleryCards(selectedIds)
+      .then((cards) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        setGalleryCards(cards);
+        setSelectedGalleryIds(new Set());
+        setGalleryNotice(`${selectedIds.length} card${selectedIds.length > 1 ? "s" : ""} deleted.`);
+      })
+      .catch((error) => {
+        console.error("[Quoti] gallery delete failed", error);
+        if (isMountedRef.current) {
+          setGalleryNotice("Selected cards could not be deleted.");
+        }
+      });
   };
 
   const isRecoveringVideoMedia = mediaRecoveryStatus === "loading";
   const isBusy = Boolean(busyAction) || capture.status === "loading" || isRecoveringVideoMedia;
+  const isCaptureView = activeView === "capture";
+  const isGalleryView = activeView === "gallery";
+  const isSettingsView = activeView === "settings";
+  const headerTitle = isSettingsView ? "Settings" : isGalleryView ? "Gallery" : "Quoti";
+  const headerSubtitle = isSettingsView
+    ? "Tune capture and export."
+    : isGalleryView
+      ? `${galleryCards.length} saved card${galleryCards.length === 1 ? "" : "s"}`
+      : "Capture the post. Keep the context.";
   const statusNotice =
     notice ||
     (isRecoveringVideoMedia
@@ -512,34 +679,52 @@ export function Popup() {
   return (
     <main className="popup">
       <header className="popup__header">
-        {settingsViewOpen ? (
+        {!isCaptureView ? (
           <div className="popup__brand">
-            <button className="popup__settings-button" onClick={() => setSettingsViewOpen(false)} type="button" title="Back" aria-label="Back">
+            <button className="popup__settings-button" onClick={handleBackToCapture} type="button" title="Back" aria-label="Back">
               <ArrowLeft size={17} aria-hidden="true" />
             </button>
             <div>
-              <h1 className="popup__title">Settings</h1>
-              <p className="popup__subtitle">Tune capture and export.</p>
+              <h1 className="popup__title">{headerTitle}</h1>
+              <p className="popup__subtitle">{headerSubtitle}</p>
             </div>
           </div>
         ) : (
           <div className="popup__brand">
             <img className="popup__logo" src="/icons/quoti-icon.svg" alt="" aria-hidden="true" draggable={false} />
             <div>
-              <h1 className="popup__title">Quoti</h1>
-              <p className="popup__subtitle">Capture the post. Keep the context.</p>
+              <h1 className="popup__title">{headerTitle}</h1>
+              <p className="popup__subtitle">{headerSubtitle}</p>
             </div>
           </div>
         )}
-        {settingsViewOpen ? null : (
-          <button className="popup__settings-button" onClick={handleOpenOptions} type="button" title="Open settings" aria-label="Open settings">
-            <Settings size={17} aria-hidden="true" />
-          </button>
-        )}
+        {isCaptureView ? (
+          <div className="popup__header-actions">
+            <button className="popup__settings-button" onClick={handleOpenGallery} type="button" title="Open gallery" aria-label="Open gallery">
+              <Images size={17} aria-hidden="true" />
+            </button>
+            <button className="popup__settings-button" onClick={handleOpenOptions} type="button" title="Open settings" aria-label="Open settings">
+              <Settings size={17} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
       </header>
 
-      {settingsViewOpen ? (
+      {isSettingsView ? (
         <PopupSettings settings={settings} status={settingsStatus} onChange={updateSetting} />
+      ) : isGalleryView ? (
+        <GalleryView
+          cards={galleryCards}
+          isLoading={galleryStatus === "loading"}
+          notice={galleryNotice}
+          onClearSelection={() => setSelectedGalleryIds(new Set())}
+          onDeleteSelected={handleDeleteSelectedGalleryCards}
+          onOpenCard={handleOpenGalleryCard}
+          onQueryChange={setGalleryQuery}
+          onToggleSelection={handleToggleGallerySelection}
+          query={galleryQuery}
+          selectedIds={selectedGalleryIds}
+        />
       ) : capture.post ? (
         <div className="popup__content">
           <PostCardPreview post={capture.post} contentMode={contentMode} cardTheme={cardTheme} exportRef={exportRef} />
@@ -576,8 +761,8 @@ export function Popup() {
         />
       )}
 
-      {!settingsViewOpen && statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
-      {!settingsViewOpen && capture.post && getPrimaryVideo(capture.post) ? (
+      {isCaptureView && statusNotice ? <p className="popup__notice" aria-live="polite">{statusNotice}</p> : null}
+      {isCaptureView && capture.post && getPrimaryVideo(capture.post) ? (
         <div className="popup__video-export-host" aria-hidden="true">
           <PostCardPreview post={capture.post} contentMode="with-media" cardTheme={cardTheme} exportRef={videoExportRef} />
         </div>

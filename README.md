@@ -26,9 +26,11 @@ It supports:
 - normalizing the post into a shared data model
 - extracting attached post images and videos
 - rendering an Editorial Craft context card
+- saving generated cards in a local gallery
+- searching and deleting saved gallery cards
 - switching the generated card between light and dark themes
 - switching the generated card between text-only and media layouts
-- downloading the card as JPG
+- downloading the card as PNG or video when source media allows it
 - copying the generated image
 - copying the source text
 - opening the original post when a source URL is available
@@ -115,8 +117,10 @@ The native renderer does not use FFmpeg from `PATH`; the binary must be present 
 8. Hover a post.
 9. Click the Quoti extension icon.
 10. Verify that the popup shows a context card.
-11. Try Copy image, Download JPG, Copy text, Source, Light/Dark, and Text only/With media.
-12. Right-click a post and choose Create Quoti card.
-13. Open the extension options from the popup settings button to enable or disable hover capture, right-click capture, and the inline Quoti button.
+11. Open the gallery from the popup header and verify the card is saved locally.
+12. Search the gallery, select one or more cards, and delete them.
+13. Try Copy image, Download PNG or video, Copy text, Source, Light/Dark, and Text only/With media.
+14. Right-click a post and choose Create Quoti card.
+15. Open the extension options from the popup settings button to enable or disable hover capture, right-click capture, and the inline Quoti button.
 
 For local UI-only checks, open the Vite preview at `http://localhost:5173/popup.html`. Outside Chrome Extension runtime, the popup uses a built-in preview post.

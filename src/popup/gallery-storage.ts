@@ -10,16 +10,30 @@ export type GalleryCard = {
   searchText: string;
 };
 
+export type GalleryLayoutMode = "grid" | "list";
+
 type GalleryCardOptions = {
   cardTheme: CardTheme;
   contentMode: CardContentMode;
 };
 
 const galleryStorageKey = "quoti-gallery-cards";
+const galleryLayoutModeStorageKey = "quoti-gallery-layout-mode";
 const galleryLocalStorageKey = "quoti:gallery-cards";
+const galleryLayoutModeLocalStorageKey = "quoti:gallery-layout-mode";
+
+export async function readGalleryLayoutMode(): Promise<GalleryLayoutMode> {
+  const stored = await readStoredValue(galleryLayoutModeStorageKey, galleryLayoutModeLocalStorageKey, "grid");
+
+  return isGalleryLayoutMode(stored) ? stored : "grid";
+}
+
+export async function writeGalleryLayoutMode(mode: GalleryLayoutMode): Promise<void> {
+  await writeStoredValue(galleryLayoutModeStorageKey, galleryLayoutModeLocalStorageKey, mode);
+}
 
 export async function readGalleryCards(): Promise<GalleryCard[]> {
-  const stored = await readStoredGalleryValue();
+  const stored = await readStoredValue(galleryStorageKey, galleryLocalStorageKey, []);
 
   return normalizeGalleryCards(stored);
 }
@@ -102,32 +116,36 @@ function normalizeSourceUrl(sourceUrl: string | undefined): string | undefined {
   }
 }
 
-async function readStoredGalleryValue(): Promise<unknown> {
+async function readStoredValue(storageKey: string, localStorageKey: string, fallback: unknown): Promise<unknown> {
   if (typeof chrome !== "undefined" && chrome.storage?.local) {
-    const stored = await chrome.storage.local.get(galleryStorageKey);
+    const stored = await chrome.storage.local.get(storageKey);
 
-    return stored[galleryStorageKey];
+    return stored[storageKey] ?? fallback;
   }
 
   if (typeof window === "undefined" || !window.localStorage) {
-    return [];
+    return fallback;
   }
 
   try {
-    const rawValue = window.localStorage.getItem(galleryLocalStorageKey);
+    const rawValue = window.localStorage.getItem(localStorageKey);
 
-    return rawValue ? JSON.parse(rawValue) : [];
+    return rawValue ? JSON.parse(rawValue) : fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
 async function writeGalleryCards(cards: GalleryCard[]): Promise<void> {
   const normalizedCards = normalizeGalleryCards(cards);
 
+  await writeStoredValue(galleryStorageKey, galleryLocalStorageKey, normalizedCards);
+}
+
+async function writeStoredValue(storageKey: string, localStorageKey: string, value: unknown): Promise<void> {
   if (typeof chrome !== "undefined" && chrome.storage?.local) {
     await chrome.storage.local.set({
-      [galleryStorageKey]: normalizedCards
+      [storageKey]: value
     });
     return;
   }
@@ -136,7 +154,7 @@ async function writeGalleryCards(cards: GalleryCard[]): Promise<void> {
     return;
   }
 
-  window.localStorage.setItem(galleryLocalStorageKey, JSON.stringify(normalizedCards));
+  window.localStorage.setItem(localStorageKey, JSON.stringify(value));
 }
 
 function normalizeGalleryCards(value: unknown): GalleryCard[] {
@@ -222,6 +240,10 @@ function isCardTheme(value: unknown): value is CardTheme {
 
 function isCardContentMode(value: unknown): value is CardContentMode {
   return value === "text-only" || value === "with-media";
+}
+
+function isGalleryLayoutMode(value: unknown): value is GalleryLayoutMode {
+  return value === "grid" || value === "list";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

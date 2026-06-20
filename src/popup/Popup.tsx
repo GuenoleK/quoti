@@ -602,13 +602,13 @@ export function Popup() {
     setCapture({
       post,
       status: "ready",
-      message: "Card loaded from gallery."
+      message: "Carte chargee depuis la bibliotheque."
     });
     setCardTheme(card.cardTheme);
     setContentMode(resolveCardContentModePreference(post, card.contentMode));
     setActiveView("capture");
     setSelectedGalleryIds(new Set());
-    setNotice("Card loaded from gallery.");
+    setNotice("Carte chargee depuis la bibliotheque.");
     void recoverMissingVideoMedia(post);
   };
 
@@ -633,7 +633,7 @@ export function Popup() {
       return;
     }
 
-    const confirmed = window.confirm(`Delete ${selectedIds.length} saved card${selectedIds.length > 1 ? "s" : ""}?`);
+    const confirmed = window.confirm(`Supprimer ${selectedIds.length} carte${selectedIds.length > 1 ? "s" : ""} sauvegardee${selectedIds.length > 1 ? "s" : ""} ?`);
 
     if (!confirmed) {
       return;
@@ -647,12 +647,12 @@ export function Popup() {
 
         setGalleryCards(cards);
         setSelectedGalleryIds(new Set());
-        setGalleryNotice(`${selectedIds.length} card${selectedIds.length > 1 ? "s" : ""} deleted.`);
+        setGalleryNotice(`${selectedIds.length} carte${selectedIds.length > 1 ? "s" : ""} supprimee${selectedIds.length > 1 ? "s" : ""}.`);
       })
       .catch((error) => {
         console.error("[Quoti] gallery delete failed", error);
         if (isMountedRef.current) {
-          setGalleryNotice("Selected cards could not be deleted.");
+          setGalleryNotice("Les cartes selectionnees n'ont pas pu etre supprimees.");
         }
       });
   };
@@ -662,11 +662,11 @@ export function Popup() {
   const isCaptureView = activeView === "capture";
   const isGalleryView = activeView === "gallery";
   const isSettingsView = activeView === "settings";
-  const headerTitle = isSettingsView ? "Settings" : isGalleryView ? "Gallery" : "Quoti";
+  const headerTitle = isSettingsView ? "Settings" : isGalleryView ? "Bibliotheque" : "Quoti";
   const headerSubtitle = isSettingsView
     ? "Tune capture and export."
     : isGalleryView
-      ? `${galleryCards.length} saved card${galleryCards.length === 1 ? "" : "s"}`
+      ? `${galleryCards.length} carte${galleryCards.length === 1 ? "" : "s"} sauvegardee${galleryCards.length === 1 ? "" : "s"}`
       : "Capture the post. Keep the context.";
   const statusNotice =
     notice ||

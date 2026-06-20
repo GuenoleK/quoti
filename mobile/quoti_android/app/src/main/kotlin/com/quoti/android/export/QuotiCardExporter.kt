@@ -2456,7 +2456,7 @@ private object QuotiCardBitmapRenderer {
                 text = "Quoti",
                 paint = brandPaint,
                 width = 190,
-                alignment = Layout.Alignment.ALIGN_NORMAL,
+                alignment = Layout.Alignment.ALIGN_OPPOSITE,
                 maxLines = 1,
             )
         val footerHeight = 72f

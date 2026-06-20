@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quoti Commit Push"
+  short_description: "Commit and push Quoti changes"
+  default_prompt: "Use $quoti-commit-push to commit and push Quoti repository changes with the right scope-based message convention."

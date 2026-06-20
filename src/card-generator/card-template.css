@@ -35,7 +35,7 @@
 }
 
 .context-card[data-card-layout="portrait"] {
-  --card-export-width: 600px;
+  --card-export-width: 540px;
 }
 
 .context-card[data-card-layout="compact"] {
@@ -85,6 +85,11 @@
   white-space: pre-wrap;
   word-break: normal;
   transition: color var(--duration-slow) ease;
+}
+
+.context-card[data-card-layout="portrait"] .context-card__quote {
+  font-size: 1.5625rem;
+  line-height: 1.34;
 }
 
 .context-card__emoji {

@@ -217,7 +217,7 @@ function getExportWidth(node: HTMLElement): number {
     return 500;
   }
 
-  return 720;
+  return 540;
 }
 
 async function clipPngDataUrlToNodeRadius(dataUrl: string, node: HTMLElement): Promise<string> {

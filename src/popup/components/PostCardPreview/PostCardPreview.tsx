@@ -540,7 +540,7 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
           src={posterUrl}
           alt={media.alt ?? ""}
           onLoad={(event) => {
-            const size = getVisibleImageSize(event.currentTarget);
+            const size = getImageNaturalSize(event.currentTarget);
             posterSizeRef.current = size;
             onSize(size);
           }}
@@ -556,75 +556,11 @@ function VideoMedia({ active, media, onSize }: { active: boolean; media: Extract
   );
 }
 
-function getVisibleImageSize(image: HTMLImageElement): MediaSize {
-  const fallbackSize = {
+function getImageNaturalSize(image: HTMLImageElement): MediaSize {
+  return {
     height: image.naturalHeight,
     width: image.naturalWidth
   };
-
-  if (!image.naturalWidth || !image.naturalHeight) {
-    return fallbackSize;
-  }
-
-  try {
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-
-    if (!context) {
-      return fallbackSize;
-    }
-
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    context.drawImage(image, 0, 0);
-
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    const top = findFirstNonLetterboxRow(pixels, canvas.width, canvas.height);
-    const bottom = findFirstNonLetterboxRow(pixels, canvas.width, canvas.height, true);
-    const visibleHeight = bottom >= top ? bottom - top + 1 : canvas.height;
-
-    if (visibleHeight / canvas.height > 0.92 || visibleHeight < canvas.height * 0.35) {
-      return fallbackSize;
-    }
-
-    return {
-      height: visibleHeight,
-      width: canvas.width
-    };
-  } catch {
-    return fallbackSize;
-  }
-}
-
-function findFirstNonLetterboxRow(pixels: Uint8ClampedArray, width: number, height: number, reverse = false): number {
-  for (let step = 0; step < height; step += 1) {
-    const row = reverse ? height - 1 - step : step;
-
-    if (!isLetterboxRow(pixels, width, row)) {
-      return row;
-    }
-  }
-
-  return reverse ? height - 1 : 0;
-}
-
-function isLetterboxRow(pixels: Uint8ClampedArray, width: number, row: number): boolean {
-  let darkPixels = 0;
-  const offset = row * width * 4;
-
-  for (let column = 0; column < width; column += 1) {
-    const index = offset + column * 4;
-    const alpha = pixels[index + 3];
-    const red = pixels[index];
-    const green = pixels[index + 1];
-    const blue = pixels[index + 2];
-
-    if (alpha < 8 || (red < 18 && green < 18 && blue < 18)) {
-      darkPixels += 1;
-    }
-  }
-
-  return darkPixels / width > 0.92;
 }
 
 function resolveCardLayout(content: string, media: PostMedia | undefined, mediaSize: MediaSize | null): CardLayout {
@@ -641,7 +577,7 @@ function resolveCardLayout(content: string, media: PostMedia | undefined, mediaS
   const isLongText = estimatedLineCount > 3;
 
   if (!mediaSize) {
-    return isLongText ? "square" : "portrait";
+    return "portrait";
   }
 
   const mediaRatio = mediaSize.height / mediaSize.width;
@@ -653,7 +589,7 @@ function resolveCardLayout(content: string, media: PostMedia | undefined, mediaS
   }
 
   if (isTallMedia || isLongText) {
-    return "square";
+    return "portrait";
   }
 
   return "portrait";

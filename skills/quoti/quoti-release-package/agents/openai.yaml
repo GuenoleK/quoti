@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quoti Release Package"
+  short_description: "Package Quoti GitHub releases"
+  default_prompt: "Use $quoti-release-package to version, package, and draft a Quoti GitHub release."

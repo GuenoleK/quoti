@@ -1,6 +1,6 @@
 ---
 name: quoti-android-release
-description: Build, test, version, package, and publish installable Quoti Android debug APKs to Google Drive after Android app changes. Use when the user asks Codex to modify the Quoti Android app and expects an APK, asks to upload a build to Drive/dev/quoti, asks for a downloadable/installable version, or asks to bump/release a Quoti Android build.
+description: Build, test, version, package, and publish installable Quoti Android debug APKs to Google Drive after Android app changes. Use when the user asks Codex to modify only the Quoti Android app and expects a Drive APK upload. For GitHub/community release packages that include release notes or extension assets, use quoti-release-package instead.
 ---
 
 # Quoti Android Release
@@ -11,11 +11,13 @@ Use this skill for the Quoti Android app in `C:\dev\open-source\quoti\mobile\quo
 
 The expected outcome is an installable debug APK uploaded to Google Drive, with a versioned APK file plus the stable latest APK replaced in place.
 
+For GitHub releases, Android plus extension packages, or community release notes, use `skills/quoti/quoti-release-package/` instead.
+
 ## Release Workflow
 
 1. Implement the requested Android change using normal repo patterns.
 2. Run focused tests while iterating.
-3. Bump `versionCode` and `versionName` in `mobile/quoti_android/app/build.gradle.kts`.
+3. Synchronize the Android release version in `mobile/quoti_android/app/build.gradle.kts`.
 4. Run the final build and tests.
 5. Upload the APK to Drive as both a versioned artifact and the latest artifact.
 6. Clean Codex temporary artifacts from the project workspace.
@@ -23,13 +25,18 @@ The expected outcome is an installable debug APK uploaded to Google Drive, with 
 
 ## Versioning
 
-Use the current `defaultConfig` in `app/build.gradle.kts`.
+Use the current release strategy in `docs/release/release-strategy.md`.
 
-- Increment `versionCode` by 1.
-- Set `versionName` to the next `0.1.x-meaningful-slug`.
-- Keep the slug short, lowercase, and kebab-case, for example `0.1.12-clear-and-media-fix`.
+- Keep `versionName` aligned with the public release version, currently `0.1.0` unless the user asks for a visible version bump.
+- Increment `versionCode` by 1 for each installable Android package.
+- Prefer the release sync script:
+
+```powershell
+npm run release:sync-version -- -- --release-version=0.1.0 --increment-android-code
+```
+
 - Use this Drive filename for the versioned APK:
-  `quoti-android-debug-v<versionName>.apk`
+  `quoti-android-debug-v<versionName>+<versionCode>.apk`
 - Keep the latest Drive filename:
   `quoti-android-debug.apk`
 
@@ -88,7 +95,7 @@ Latest APK file:
 Publishing steps:
 
 1. Read metadata for the target folder and latest file to verify IDs.
-2. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>.apk` into folder `REDACTED_DRIVE_FOLDER_ID`.
+2. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>+<versionCode>.apk` into folder `REDACTED_DRIVE_FOLDER_ID`.
 3. Replace the bytes of file `REDACTED_DRIVE_FILE_ID` with the same APK, keeping the name `quoti-android-debug.apk`.
 4. Read metadata for both Drive files after upload and use only returned Drive URLs in the final answer.
 
@@ -132,10 +139,10 @@ Keep the final answer concise and include:
 Example shape:
 
 ```text
-Build published in 0.1.x-slug.
+Build published in 0.1.0+<versionCode>.
 
 Latest: [quoti-android-debug.apk](...)
-Versioned: [quoti-android-debug-v0.1.x-slug.apk](...)
+Versioned: [quoti-android-debug-v0.1.0+<versionCode>.apk](...)
 SHA256: `...`
 
 Tests: `testDebugUnitTest`, `assembleDebug`, `connectedDebugAndroidTest` OK.

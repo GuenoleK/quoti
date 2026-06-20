@@ -57,5 +57,7 @@ Project skill organization:
 Current repo-owned Quoti skills:
 
 - skills/quoti/quoti-android-release/
+- skills/quoti/quoti-commit-push/
+- skills/quoti/quoti-release-package/
 
 Always follow the instructions defined in these documents.

@@ -143,6 +143,9 @@ vite.config.ts.timestamp-*
 .vite/
 error.txt
 
+# Generated release packages
+release/packages/
+
 # Native renderer vendor binaries
 native/quoti-renderer/vendor/ffmpeg/**
 !native/quoti-renderer/vendor/ffmpeg/

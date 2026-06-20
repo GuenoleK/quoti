@@ -21,34 +21,6 @@
   box-shadow: var(--shadow-sm);
 }
 
-.post-card-preview .context-card__inner {
-  gap: var(--space-6);
-  padding: var(--space-6);
-}
-
-.post-card-preview .context-card__quote {
-  font-size: var(--font-size-xl);
-}
-
-.post-card-preview .context-card__related-post {
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-}
-
-.post-card-preview .context-card__related-content {
-  font-size: var(--font-size-md);
-}
-
-.post-card-preview .context-card__avatar--author {
-  width: 36px;
-  height: 36px;
-}
-
-.post-card-preview .context-card__avatar--related {
-  width: 24px;
-  height: 24px;
-}
-
 .post-card-preview .context-card[data-card-layout="wide"] .context-card__inner {
   grid-template-columns: 1fr;
   grid-template-areas:

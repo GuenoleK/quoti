@@ -389,6 +389,9 @@ function renderVideoFrame(
     drawCircularImage(context, authorAvatar, metrics.contentX, cardPadding + 6, 44);
   }
 
+  const authorName = getDisplayText(post.authorName);
+  const authorHandle = getDisplayText(post.authorHandle);
+
   context.fillStyle = theme.muted;
   context.font = "500 15px Arial, sans-serif";
   context.textAlign = "right";
@@ -397,12 +400,20 @@ function renderVideoFrame(
   context.textAlign = "left";
   context.fillStyle = theme.author;
   context.font = "700 18px Arial, sans-serif";
-  drawEllipsizedText(context, post.authorName, metrics.authorTextX, metrics.authorNameY, metrics.authorTextWidth);
+  if (authorName) {
+    drawEllipsizedText(context, authorName, metrics.authorTextX, metrics.authorNameY, metrics.authorTextWidth);
+  }
 
-  if (post.authorHandle) {
+  if (authorHandle) {
     context.fillStyle = theme.muted;
     context.font = "15px Arial, sans-serif";
-    drawEllipsizedText(context, post.authorHandle, metrics.authorTextX, metrics.authorHandleY, metrics.authorTextWidth);
+    drawEllipsizedText(
+      context,
+      authorHandle,
+      metrics.authorTextX,
+      authorName ? metrics.authorHandleY : metrics.authorNameY,
+      metrics.authorTextWidth
+    );
   }
 
   context.fillStyle = theme.quote;
@@ -481,19 +492,31 @@ function drawImageCover(context: CanvasRenderingContext2D, image: HTMLImageEleme
 }
 
 function drawEllipsizedText(context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number): void {
-  if (context.measureText(text).width <= maxWidth) {
-    context.fillText(text, x, y);
+  const displayText = getDisplayText(text);
+
+  if (!displayText) {
+    return;
+  }
+
+  if (context.measureText(displayText).width <= maxWidth) {
+    context.fillText(displayText, x, y);
     return;
   }
 
   const ellipsis = "...";
-  let end = text.length;
+  let end = displayText.length;
 
-  while (end > 0 && context.measureText(`${text.slice(0, end)}${ellipsis}`).width > maxWidth) {
+  while (end > 0 && context.measureText(`${displayText.slice(0, end)}${ellipsis}`).width > maxWidth) {
     end -= 1;
   }
 
-  context.fillText(`${text.slice(0, end)}${ellipsis}`, x, y);
+  if (end > 0) {
+    context.fillText(`${displayText.slice(0, end)}${ellipsis}`, x, y);
+  }
+}
+
+function getDisplayText(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number, maxWordsPerLine: number): string[] {

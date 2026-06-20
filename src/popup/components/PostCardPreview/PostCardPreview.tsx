@@ -34,6 +34,9 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
   const relatedMediaKey = getMediaCollectionKey(relatedMediaItems);
   const hasBodyContent = Boolean(post.content.trim() || post.relatedPost);
   const cardLayout = useMemo(() => resolveCardLayout(getLayoutContent(post), layoutMedia, layoutMediaSize), [layoutMedia, layoutMediaSize, post]);
+  const authorName = getDisplayText(post.authorName);
+  const authorHandle = getDisplayText(post.authorHandle);
+  const authorLabel = authorName ?? authorHandle ?? "";
 
   useEffect(() => {
     return () => {
@@ -80,11 +83,13 @@ export function PostCardPreview({ post, contentMode, cardTheme, exportRef }: Pos
           <div className="context-card__inner">
             <header className="context-card__source">
               <div className="context-card__author-group context-card__author-group--primary">
-                <PostAvatar avatarUrl={post.authorAvatarUrl} label={post.authorName} variant="author" />
-                <div className="context-card__author">
-                  <span className="context-card__author-name">{post.authorName}</span>
-                  {post.authorHandle ? <span className="context-card__author-handle">{post.authorHandle}</span> : null}
-                </div>
+                <PostAvatar avatarUrl={post.authorAvatarUrl} label={authorLabel} variant="author" />
+                {authorName || authorHandle ? (
+                  <div className="context-card__author">
+                    {authorName ? <span className="context-card__author-name">{authorName}</span> : null}
+                    {authorHandle ? <span className="context-card__author-handle">{authorHandle}</span> : null}
+                  </div>
+                ) : null}
               </div>
               <span className="context-card__date">{formatPublishedDate(post.publishedAt)}</span>
             </header>
@@ -171,7 +176,7 @@ function PostCardMediaFigure({
       data-media-layout={visibleMedia.length > 1 ? "grid" : "single"}
       data-media-type={mediaType}
       hidden={!showMedia}
-      style={getMediaStyle(layoutMedia, mediaSize, visibleMedia.length)}
+      style={getMediaStyle(layoutMedia, mediaSize, visibleMedia.length, related)}
     >
       <PostCardMediaCollection active={active} layoutMedia={layoutMedia} media={visibleMedia} onSize={onMediaSize} />
     </figure>
@@ -193,14 +198,18 @@ function RelatedPostCard({
 }) {
   const media = getRenderableMedia(relatedPost.media ?? []);
   const layoutMedia = getPrimaryMedia(media);
+  const authorName = getDisplayText(relatedPost.authorName);
+  const authorHandle = getDisplayText(relatedPost.authorHandle);
+  const authorLabel = authorName ?? authorHandle ?? "";
+
   return (
     <aside className="context-card__related-post" aria-label="Post auquel l'auteur répond">
       <div className="context-card__related-meta">
-        <PostAvatar avatarUrl={relatedPost.authorAvatarUrl} label={relatedPost.authorName ?? relatedPost.authorHandle ?? ""} variant="related" />
+        <PostAvatar avatarUrl={relatedPost.authorAvatarUrl} label={authorLabel} variant="related" />
         <div className="context-card__related-copy">
           <span className="context-card__related-label">Répond à</span>
-          {relatedPost.authorName ? <span className="context-card__related-author">{relatedPost.authorName}</span> : null}
-          {relatedPost.authorHandle ? <span className="context-card__related-handle">{relatedPost.authorHandle}</span> : null}
+          {authorName ? <span className="context-card__related-author">{authorName}</span> : null}
+          {authorHandle ? <span className="context-card__related-handle">{authorHandle}</span> : null}
         </div>
       </div>
       <p className="context-card__related-content">
@@ -687,7 +696,7 @@ function ignoreMediaSize(): void {
   return undefined;
 }
 
-function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null, mediaCount = 1): React.CSSProperties | undefined {
+function getMediaStyle(media: PostMedia, mediaSize: MediaSize | null, mediaCount = 1, related = false): React.CSSProperties | undefined {
   if (mediaCount > 1) {
     return {
       aspectRatio: `${getMediaGridAspectRatio(mediaCount)} / 1`
@@ -699,7 +708,7 @@ function getMediaStyle(_media: PostMedia, mediaSize: MediaSize | null, mediaCoun
   }
 
   const mediaRatio = mediaSize.height / mediaSize.width;
-  const maxHeight = getVideoMediaMaxHeight(mediaRatio);
+  const maxHeight = getVideoMediaMaxHeight(media, mediaRatio, related);
 
   if (maxHeight) {
     return {
@@ -717,7 +726,15 @@ function getMediaGridAspectRatio(mediaCount: number): number {
   return mediaCount === 2 ? 2 : 16 / 9;
 }
 
-function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {
+function getVideoMediaMaxHeight(media: PostMedia, mediaRatio: number, related: boolean): number | undefined {
+  if (media.type !== "video") {
+    return undefined;
+  }
+
+  if (related && mediaRatio >= 1) {
+    return 420;
+  }
+
   if (mediaRatio >= 1.45) {
     return 560;
   }
@@ -727,6 +744,10 @@ function getVideoMediaMaxHeight(mediaRatio: number): number | undefined {
   }
 
   return undefined;
+}
+
+function getDisplayText(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 function getPlayableVideoUrl(source: string | undefined): string | undefined {

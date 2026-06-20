@@ -1264,7 +1264,7 @@ private fun QuotiCardPreview(
                 val authorMaxWidth = maxWidth * 0.56f
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.Top,
                 ) {
                     AuthorIdentity(
                         avatarUrl = post.authorAvatarUrl,
@@ -1352,6 +1352,9 @@ private fun AuthorIdentity(
     mutedColor: Color,
     modifier: Modifier = Modifier,
 ) {
+    val displayName = authorName.displayTextOrNull()
+    val displayHandle = authorHandle.displayTextOrNull()
+
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -1359,27 +1362,33 @@ private fun AuthorIdentity(
         avatarUrl?.let { url ->
             RemoteAvatar(
                 avatarUrl = url,
-                fallbackLabel = authorName,
+                fallbackLabel = displayName ?: displayHandle.orEmpty(),
                 contentColor = contentColor,
                 size = 40.dp,
             )
             Spacer(modifier = Modifier.width(10.dp))
         }
-        Column(modifier = Modifier.weight(1f, fill = false)) {
-            Text(
-                text = authorName,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.labelLargeEmphasized,
-                color = contentColor,
-            )
-            Text(
-                text = authorHandle,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                color = mutedColor,
-            )
+        if (displayName != null || displayHandle != null) {
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                displayName?.let { name ->
+                    Text(
+                        text = name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelLargeEmphasized,
+                        color = contentColor,
+                    )
+                }
+                displayHandle?.let { handle ->
+                    Text(
+                        text = handle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = mutedColor,
+                    )
+                }
+            }
         }
     }
 }
@@ -1427,7 +1436,7 @@ private fun RelatedPostBlock(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val author =
-            listOfNotNull(relatedPost.authorName, relatedPost.authorHandle)
+            listOfNotNull(relatedPost.authorName.displayTextOrNull(), relatedPost.authorHandle.displayTextOrNull())
                 .joinToString("  ")
                 .ifBlank { "Original post" }
         Row(
@@ -2562,6 +2571,8 @@ private fun avatarInitials(label: String): String {
         .joinToString("")
         .ifBlank { "?" }
 }
+
+private fun String?.displayTextOrNull(): String? = this?.trim()?.takeIf { value -> value.isNotEmpty() }
 
 private fun QuotiPost.containsVideo(): Boolean {
     return media.any { it is PostMedia.Video } ||

@@ -21,6 +21,10 @@ Before making any modification, read the following documents.
 
 - docs/development/developer-guide.md
 
+Extension build rule:
+
+- After any browser extension source, style, asset, or generated-card change, run `npm run build` before finishing so `dist/` reflects the latest implementation.
+
 ## Design
 
 - DESIGN.md

@@ -103,6 +103,87 @@ class QuotiCardExporterTest {
     }
 
     @Test
+    fun `related single square media keeps source aspect ratio`() {
+        assertEquals(
+            868f,
+            relatedMediaHeightFor(
+                contentWidth = 868f,
+                mediaCount = 1,
+                firstMediaWidth = 720,
+                firstMediaHeight = 720,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun `related single landscape media keeps source aspect ratio`() {
+        assertEquals(
+            488.25f,
+            relatedMediaHeightFor(
+                contentWidth = 868f,
+                mediaCount = 1,
+                firstMediaWidth = 1280,
+                firstMediaHeight = 720,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun `related single tall video uses compact max height`() {
+        assertEquals(
+            420f,
+            relatedMediaHeightFor(
+                contentWidth = 868f,
+                mediaCount = 1,
+                firstMediaWidth = 720,
+                firstMediaHeight = 1280,
+                isFirstMediaVideo = true,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun `gpu video frame texture coordinates leave vertical transform to SurfaceTexture`() {
+        val vertices = FloatArray(GpuVideoFrameVertexFloatCount)
+
+        populateGpuVideoFrameVertices(
+            vertices = vertices,
+            rectLeft = 10f,
+            rectTop = 20f,
+            rectRight = 110f,
+            rectBottom = 220f,
+            surfaceWidth = 200,
+            surfaceHeight = 400,
+        )
+
+        assertEquals(0f, vertices[2], 0.001f)
+        assertEquals(0f, vertices[3], 0.001f)
+        assertEquals(1f, vertices[8], 0.001f)
+        assertEquals(0f, vertices[9], 0.001f)
+        assertEquals(0f, vertices[14], 0.001f)
+        assertEquals(1f, vertices[15], 0.001f)
+        assertEquals(1f, vertices[20], 0.001f)
+        assertEquals(1f, vertices[21], 0.001f)
+    }
+
+    @Test
+    fun `related media grid keeps compact grid ratio`() {
+        assertEquals(
+            434f,
+            relatedMediaHeightFor(
+                contentWidth = 868f,
+                mediaCount = 2,
+                firstMediaWidth = 720,
+                firstMediaHeight = 720,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
     fun `file name keeps safe post id characters`() {
         assertEquals(
             "quoti-post_123-42.png",

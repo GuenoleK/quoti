@@ -63,8 +63,8 @@ class XPostEnrichmentAdapter {
         visibleText: String? = null,
     ): XPostEnrichment? {
         val oEmbed = fetchOEmbed(sourceUrl) ?: return null
-        val canonicalUrl = oEmbed.optString("url").takeIf { it.isNotBlank() }
-        val authorUrl = oEmbed.optString("author_url").takeIf { it.isNotBlank() }
+        val canonicalUrl = oEmbed.optString("url").displayTextOrNull()
+        val authorUrl = oEmbed.optString("author_url").displayTextOrNull()
         val authorHandle = authorUrl?.toAuthorHandle() ?: canonicalUrl?.toAuthorHandle()
         val oEmbedContent = XPostOEmbedParser.extractTweetText(oEmbed.optString("html"))
         val html = canonicalUrl?.let(::fetchText)
@@ -104,7 +104,7 @@ class XPostEnrichmentAdapter {
 
         return XPostEnrichment(
             canonicalUrl = canonicalUrl,
-            authorName = oEmbed.optString("author_name").takeIf { it.isNotBlank() },
+            authorName = oEmbed.optString("author_name").displayTextOrNull(),
             authorHandle = authorHandle,
             authorAvatarUrl = authorAvatarUrl,
             content = content,
@@ -151,8 +151,8 @@ data class XPostEnrichment(
     fun toRelatedPost(): RelatedPost? {
         val relatedContent = content?.takeIf { it.isNotBlank() } ?: return null
         return RelatedPost(
-            authorHandle = authorHandle,
-            authorName = authorName,
+            authorHandle = authorHandle.displayTextOrNull(),
+            authorName = authorName.displayTextOrNull(),
             authorAvatarUrl = authorAvatarUrl,
             content = relatedContent,
             media = media,
@@ -792,6 +792,8 @@ private fun String.isLikelySourceOnlyText(): Boolean {
 
     return trimmed.startsWith("http://") || trimmed.startsWith("https://")
 }
+
+private fun String?.displayTextOrNull(): String? = this?.trim()?.takeIf { value -> value.isNotEmpty() }
 
 private fun String.toTweetComparisonPrefix(): String {
     return cleanTweetText()

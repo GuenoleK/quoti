@@ -174,7 +174,7 @@ private fun resolveAuthorName(
     authorHandle: String?,
     platform: SocialPlatform,
 ): String {
-    return authorHandle?.removePrefix("@")?.takeIf { it.isNotBlank() }
+    return authorHandle?.removePrefix("@")?.trim()?.takeIf { it.isNotEmpty() }
         ?: "Shared ${platform.label} post"
 }
 

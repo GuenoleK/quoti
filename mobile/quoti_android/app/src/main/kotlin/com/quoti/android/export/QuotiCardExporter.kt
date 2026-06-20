@@ -81,8 +81,10 @@ private const val AuthorAvatarSize = 64f
 private const val RelatedAvatarSize = 48f
 private const val AvatarGap = 20f
 private const val MinMediaHeight = 260f
+private const val TallVideoMediaMaxHeight = 560f
+private const val MediumTallVideoMediaMaxHeight = 520f
+private const val RelatedVideoMediaMaxHeight = 420f
 private const val RelatedMediaMinHeight = 150f
-private const val RelatedMediaMaxHeight = 340f
 private const val RelatedMediaThumbnailSize = 300f
 private const val PlaceholderMediaAspectRatio = 1.85f
 private const val MediaGridGap = 6f
@@ -99,6 +101,7 @@ internal const val VideoExportMaxDurationMs = 180_000L
 private const val VideoExportMinBitRate = 3_000_000L
 private const val VideoExportMaxBitRate = 12_000_000L
 private const val VideoExportBitsPerPixelFrame = 0.22
+internal const val GpuVideoFrameVertexFloatCount = 24
 private const val VideoEncoderTimeoutUs = 10_000L
 private const val VideoCodecMaxStalledPolls = 1_000
 private const val DefaultIoBufferSize = 8 * 1024
@@ -410,7 +413,7 @@ object QuotiCardExporter {
                             main = listOf(
                                 ExportMediaBitmap(
                                     bitmap = videoPlaceholder,
-                                    isVideo = false,
+                                    isVideo = true,
                                 ),
                             ),
                         )
@@ -823,7 +826,7 @@ private fun List<ExportVideoMediaSlot>.toMediaBitmaps(videoFrame: Bitmap): List<
             ExportVideoMediaSlot.DynamicVideo ->
                 ExportMediaBitmap(
                     bitmap = videoFrame,
-                    isVideo = false,
+                    isVideo = true,
                 )
             is ExportVideoMediaSlot.StaticBitmap ->
                 slot.bitmap?.let { bitmap ->
@@ -903,6 +906,52 @@ private data class VideoTextureFrame(
     val sourceWidth: Int,
     val sourceHeight: Int,
 )
+
+internal fun populateGpuVideoFrameVertices(
+    vertices: FloatArray,
+    rectLeft: Float,
+    rectTop: Float,
+    rectRight: Float,
+    rectBottom: Float,
+    surfaceWidth: Int,
+    surfaceHeight: Int,
+) {
+    require(vertices.size >= GpuVideoFrameVertexFloatCount) {
+        "GPU video frame vertices must contain at least $GpuVideoFrameVertexFloatCount floats."
+    }
+
+    val surfaceWidthFloat = surfaceWidth.toFloat().coerceAtLeast(1f)
+    val surfaceHeightFloat = surfaceHeight.toFloat().coerceAtLeast(1f)
+    val left = (rectLeft / surfaceWidthFloat) * 2f - 1f
+    val right = (rectRight / surfaceWidthFloat) * 2f - 1f
+    val top = 1f - (rectTop / surfaceHeightFloat) * 2f
+    val bottom = 1f - (rectBottom / surfaceHeightFloat) * 2f
+
+    vertices[0] = left
+    vertices[1] = bottom
+    vertices[2] = 0f
+    vertices[3] = 0f
+    vertices[4] = 0f
+    vertices[5] = 1f
+    vertices[6] = right
+    vertices[7] = bottom
+    vertices[8] = 1f
+    vertices[9] = 0f
+    vertices[10] = 1f
+    vertices[11] = 1f
+    vertices[12] = left
+    vertices[13] = top
+    vertices[14] = 0f
+    vertices[15] = 1f
+    vertices[16] = 0f
+    vertices[17] = 0f
+    vertices[18] = right
+    vertices[19] = top
+    vertices[20] = 1f
+    vertices[21] = 1f
+    vertices[22] = 1f
+    vertices[23] = 0f
+}
 
 private fun decodeVideoFramesToTexture(
     videoSource: String,
@@ -1848,35 +1897,15 @@ private class EncoderInputSurface(
     }
 
     private fun putVideoVertices(rect: RectF) {
-        val left = (rect.left / width.toFloat()) * 2f - 1f
-        val right = (rect.right / width.toFloat()) * 2f - 1f
-        val top = 1f - (rect.top / height.toFloat()) * 2f
-        val bottom = 1f - (rect.bottom / height.toFloat()) * 2f
-
-        videoFrameVertices[0] = left
-        videoFrameVertices[1] = bottom
-        videoFrameVertices[2] = 0f
-        videoFrameVertices[3] = 1f
-        videoFrameVertices[4] = 0f
-        videoFrameVertices[5] = 1f
-        videoFrameVertices[6] = right
-        videoFrameVertices[7] = bottom
-        videoFrameVertices[8] = 1f
-        videoFrameVertices[9] = 1f
-        videoFrameVertices[10] = 1f
-        videoFrameVertices[11] = 1f
-        videoFrameVertices[12] = left
-        videoFrameVertices[13] = top
-        videoFrameVertices[14] = 0f
-        videoFrameVertices[15] = 0f
-        videoFrameVertices[16] = 0f
-        videoFrameVertices[17] = 0f
-        videoFrameVertices[18] = right
-        videoFrameVertices[19] = top
-        videoFrameVertices[20] = 1f
-        videoFrameVertices[21] = 0f
-        videoFrameVertices[22] = 1f
-        videoFrameVertices[23] = 0f
+        populateGpuVideoFrameVertices(
+            vertices = videoFrameVertices,
+            rectLeft = rect.left,
+            rectTop = rect.top,
+            rectRight = rect.right,
+            rectBottom = rect.bottom,
+            surfaceWidth = width,
+            surfaceHeight = height,
+        )
         videoVertexBuffer.clear()
         videoVertexBuffer.put(videoFrameVertices)
         videoVertexBuffer.position(0)
@@ -2121,7 +2150,7 @@ private class EncoderInputSurface(
                 1f,
                 0f,
             )
-        private val VideoFrameVertices = FloatArray(24)
+        private val VideoFrameVertices = FloatArray(GpuVideoFrameVertexFloatCount)
         private const val VertexShader =
             """
             attribute vec4 aPosition;
@@ -2368,6 +2397,8 @@ private object QuotiCardBitmapRenderer {
         val authorPaint = textPaint(palette.textPrimary, 34f, Typeface.SANS_SERIF, bold = true)
         val handlePaint = textPaint(palette.textSecondary, 31f, Typeface.SANS_SERIF)
         val brandPaint = textPaint(palette.brand, 40f, Typeface.SERIF, bold = true)
+        val authorNameText = post.authorName.displayTextOrNull().orEmpty()
+        val authorHandleText = post.authorHandle.displayTextOrNull().orEmpty()
 
         val related = post.relatedPost?.let { relatedPost ->
             val relatedAvatarSlot = if (avatarBitmaps.related != null) RelatedAvatarSize + AvatarGap else 0f
@@ -2408,14 +2439,14 @@ private object QuotiCardBitmapRenderer {
             }
         val authorNameLayout =
             textLayout(
-                text = post.authorName,
+                text = authorNameText,
                 paint = authorPaint,
                 width = authorWidth,
                 maxLines = 1,
             )
         val authorHandleLayout =
             textLayout(
-                text = post.authorHandle,
+                text = authorHandleText,
                 paint = handlePaint,
                 width = authorWidth,
                 maxLines = 1,
@@ -2460,7 +2491,9 @@ private object QuotiCardBitmapRenderer {
             mediaHeight = mediaHeight,
             authorAvatar = avatarBitmaps.author,
             authorNameLayout = authorNameLayout,
+            authorNameVisible = authorNameText.isNotEmpty(),
             authorHandleLayout = authorHandleLayout,
+            authorHandleVisible = authorHandleText.isNotEmpty(),
             markLayout = markLayout,
             footerHeight = footerHeight,
             height = ceil(height).toInt(),
@@ -2485,8 +2518,31 @@ private object QuotiCardBitmapRenderer {
             }
         var y = CardPadding
 
-        val authorStackHeight = measure.authorNameLayout.height + 10f + measure.authorHandleLayout.height
-        val authorTextY = y + ((HeaderHeight - authorStackHeight) / 2f)
+        val authorNameHeight =
+            if (measure.authorNameVisible) {
+                measure.authorNameLayout.height.toFloat()
+            } else {
+                0f
+            }
+        val authorHandleHeight =
+            if (measure.authorHandleVisible) {
+                measure.authorHandleLayout.height.toFloat()
+            } else {
+                0f
+            }
+        val authorLineGap =
+            if (measure.authorNameVisible && measure.authorHandleVisible) {
+                10f
+            } else {
+                0f
+            }
+        val authorStackHeight = authorNameHeight + authorLineGap + authorHandleHeight
+        val authorTextY =
+            if (authorStackHeight > 0f) {
+                y + ((HeaderHeight - authorStackHeight) / 2f)
+            } else {
+                y
+            }
         val authorTextX =
             if (measure.authorAvatar != null) {
                 CardPadding + AuthorAvatarSize + AvatarGap
@@ -2501,18 +2557,27 @@ private object QuotiCardBitmapRenderer {
                 rect = RectF(CardPadding, avatarTop, CardPadding + AuthorAvatarSize, avatarTop + AuthorAvatarSize),
             )
         }
-        drawLayout(canvas, measure.authorNameLayout, authorTextX, authorTextY)
-        drawLayout(
-            canvas = canvas,
-            layout = measure.authorHandleLayout,
-            x = authorTextX,
-            y = authorTextY + measure.authorNameLayout.height + 10f,
-        )
+        var authorLineY = authorTextY
+        if (measure.authorNameVisible) {
+            drawLayout(canvas, measure.authorNameLayout, authorTextX, authorLineY)
+            authorLineY += measure.authorNameLayout.height.toFloat()
+        }
+        if (measure.authorHandleVisible) {
+            if (measure.authorNameVisible) {
+                authorLineY += 10f
+            }
+            drawLayout(
+                canvas = canvas,
+                layout = measure.authorHandleLayout,
+                x = authorTextX,
+                y = authorLineY,
+            )
+        }
         drawLayout(
             canvas = canvas,
             layout = measure.dateLayout,
             x = ExportBitmapWidth - CardPadding - measure.dateLayout.width,
-            y = y + ((HeaderHeight - measure.dateLayout.height) / 2f),
+            y = authorTextY,
         )
 
         y += HeaderHeight + SectionGap
@@ -2724,9 +2789,18 @@ private object QuotiCardBitmapRenderer {
         }
 
         if (mediaBitmaps.size == 1) {
-            val bitmap = mediaBitmaps.first().bitmap
+            val media = mediaBitmaps.first()
+            val bitmap = media.bitmap
             val ratio = bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
-            return max(MinMediaHeight, contentWidth / ratio.coerceIn(0.62f, 2.35f))
+            val mediaHeight = max(MinMediaHeight, contentWidth / ratio.coerceIn(0.62f, 2.35f))
+            val maxHeight =
+                if (media.isVideo) {
+                    mainVideoMediaMaxHeight((bitmap.height.toFloat() / bitmap.width.toFloat().coerceAtLeast(1f)))
+                } else {
+                    null
+                }
+
+            return maxHeight?.let { height -> min(mediaHeight, height) } ?: mediaHeight
         }
 
         return if (mediaBitmaps.size == 2) {
@@ -2740,11 +2814,25 @@ private object QuotiCardBitmapRenderer {
         contentWidth: Float,
         mediaBitmaps: List<ExportMediaBitmap>,
     ): Float {
-        if (mediaBitmaps.isEmpty()) {
-            return RelatedMediaThumbnailSize
+        return relatedMediaHeightFor(
+            contentWidth = contentWidth,
+            mediaCount = mediaBitmaps.size,
+            firstMediaWidth = mediaBitmaps.firstOrNull()?.bitmap?.width,
+            firstMediaHeight = mediaBitmaps.firstOrNull()?.bitmap?.height,
+            isFirstMediaVideo = mediaBitmaps.firstOrNull()?.isVideo == true,
+        )
+    }
+
+    private fun mainVideoMediaMaxHeight(mediaRatio: Float): Float? {
+        if (mediaRatio >= 1.45f) {
+            return TallVideoMediaMaxHeight
         }
-        return min(RelatedMediaThumbnailSize, contentWidth * 0.36f)
-            .coerceIn(RelatedMediaMinHeight, RelatedMediaMaxHeight)
+
+        if (mediaRatio >= 1.18f) {
+            return MediumTallVideoMediaMaxHeight
+        }
+
+        return null
     }
 
     private fun drawPlatformMark(
@@ -3010,7 +3098,9 @@ private data class MeasuredCard(
     val mediaHeight: Float,
     val authorAvatar: Bitmap?,
     val authorNameLayout: StaticLayout,
+    val authorNameVisible: Boolean,
     val authorHandleLayout: StaticLayout,
+    val authorHandleVisible: Boolean,
     val markLayout: StaticLayout,
     val footerHeight: Float,
     val height: Int,
@@ -3190,8 +3280,10 @@ private fun textLayout(
         .setEllipsize(if (maxLines != Int.MAX_VALUE) TextUtils.TruncateAt.END else null)
         .build()
 
+private fun String?.displayTextOrNull(): String? = this?.trim()?.takeIf { value -> value.isNotEmpty() }
+
 private fun RelatedPost.authorLabel(): String =
-    "$ReplyRelationshipLabel " + listOfNotNull(authorName, authorHandle)
+    "$ReplyRelationshipLabel " + listOfNotNull(authorName.displayTextOrNull(), authorHandle.displayTextOrNull())
         .joinToString("  ")
         .ifBlank { "Original post" }
 
@@ -3470,6 +3562,42 @@ private fun String.videoResolution(): VideoResolution? {
                 height = match.groupValues[2].toInt(),
             )
         }
+}
+
+internal fun relatedMediaHeightFor(
+    contentWidth: Float,
+    mediaCount: Int,
+    firstMediaWidth: Int?,
+    firstMediaHeight: Int?,
+    isFirstMediaVideo: Boolean = false,
+): Float {
+    if (mediaCount <= 0) {
+        return RelatedMediaThumbnailSize
+    }
+
+    if (mediaCount == 1) {
+        val ratio =
+            firstMediaWidth
+                ?.takeIf { width -> width > 0 }
+                ?.let { width ->
+                    val height = firstMediaHeight?.takeIf { value -> value > 0 } ?: return@let null
+                    width.toFloat() / height.toFloat()
+                }
+                ?: PlaceholderMediaAspectRatio
+
+        val mediaHeight = max(RelatedMediaMinHeight, contentWidth / ratio.coerceIn(0.56f, 2.35f))
+        return if (isFirstMediaVideo) {
+            min(mediaHeight, RelatedVideoMediaMaxHeight)
+        } else {
+            mediaHeight
+        }
+    }
+
+    return if (mediaCount == 2) {
+        max(RelatedMediaMinHeight, contentWidth / TwoMediaGridAspectRatio)
+    } else {
+        max(RelatedMediaMinHeight, contentWidth / MultiMediaGridAspectRatio)
+    }
 }
 
 private fun findAudioTrackFormat(sourcePath: String): MediaFormat? {

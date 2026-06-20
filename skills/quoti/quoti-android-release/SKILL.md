@@ -85,18 +85,25 @@ Use the Google Drive connector. If the Drive skill is available, read it before 
 Target Drive folder:
 
 - Folder name: `dev/quoti`
-- Folder ID: `REDACTED_DRIVE_FOLDER_ID`
+- Resolve the folder at runtime. Prefer private environment/config values when they are available, or search Drive by the folder name and verify that the result is unique.
 
 Latest APK file:
 
 - File name: `quoti-android-debug.apk`
-- File ID: `REDACTED_DRIVE_FILE_ID`
+- Resolve the file at runtime inside the target folder. Prefer private environment/config values when they are available, or search Drive by file name and verify that the result is unique.
+
+Private configuration names, if the environment provides them:
+
+- `QUOTI_ANDROID_RELEASE_DRIVE_FOLDER_ID`
+- `QUOTI_ANDROID_RELEASE_LATEST_APK_FILE_ID`
+
+Never commit concrete Drive IDs, account identifiers, credentials, links, or local user paths to the repository. If runtime Drive resolution is ambiguous, stop and ask the user to identify the correct folder or file.
 
 Publishing steps:
 
-1. Read metadata for the target folder and latest file to verify IDs.
-2. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>+<versionCode>.apk` into folder `REDACTED_DRIVE_FOLDER_ID`.
-3. Replace the bytes of file `REDACTED_DRIVE_FILE_ID` with the same APK, keeping the name `quoti-android-debug.apk`.
+1. Resolve the target folder and latest APK file from private configuration or Drive search, then read metadata to verify both resources.
+2. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>+<versionCode>.apk` into the resolved folder.
+3. Replace the bytes of the resolved latest APK file with the same APK, keeping the name `quoti-android-debug.apk`.
 4. Read metadata for both Drive files after upload and use only returned Drive URLs in the final answer.
 
 Use MIME type:

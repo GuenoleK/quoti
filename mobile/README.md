@@ -24,7 +24,7 @@ cd mobile/quoti_android
 To test the Android share flow:
 
 ```powershell
-%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe shell am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "Regarde ca https://x.com/dexerto/status/123" -p com.quoti.android
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" shell am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "Regarde ca https://x.com/dexerto/status/123" -p com.quoti.android
 ```
 
 Keep the app aligned with `docs/architecture/mobile-app-architecture.md`, `contracts/post.schema.json`, and `fixtures/posts`.

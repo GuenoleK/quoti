@@ -76,12 +76,13 @@
 }
 
 .context-card__quote {
+  min-width: 0;
   margin: 0;
   color: var(--card-color-text-primary);
   font-family: var(--font-family-serif);
   font-size: clamp(1.75rem, 4.8vw, 2.35rem);
   line-height: 1.36;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: normal;
   transition: color var(--duration-slow) ease;
@@ -193,12 +194,13 @@
 }
 
 .context-card__related-content {
+  min-width: 0;
   margin: 0;
   color: var(--card-color-text-primary);
   font-family: var(--font-family-serif);
   font-size: clamp(var(--font-size-md), 2.4vw, var(--font-size-lg));
   line-height: 1.46;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: normal;
 }

@@ -20,7 +20,7 @@ The current MVP is a Chrome Extension built with React, TypeScript, Vite, and Ma
 
 It supports:
 
-- capturing a visible post on X/Twitter
+- capturing a visible post on X/Twitter, Threads, LinkedIn, and Facebook
 - capturing a post from the right-click menu
 - optionally showing a Quoti button inside supported posts
 - normalizing the post into a shared data model
@@ -113,7 +113,7 @@ The native renderer does not use FFmpeg from `PATH`; the binary must be present 
 4. Enable Developer mode.
 5. Click Load unpacked.
 6. Select the `dist/` folder.
-7. Open `https://x.com` or `https://twitter.com`.
+7. Open `https://x.com`, `https://www.threads.com`, `https://www.linkedin.com`, or `https://www.facebook.com`.
 8. Hover a post.
 9. Click the Quoti extension icon.
 10. Verify that the popup shows a context card.

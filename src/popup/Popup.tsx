@@ -38,7 +38,7 @@ type CachedPostMedia = {
   relatedMedia?: PostMedia[];
 };
 
-const unsupportedPageMessage = "Open x.com or twitter.com, hover a post, then open Quoti again.";
+const unsupportedPageMessage = "Open X, Threads, LinkedIn, or Facebook, hover a post, then open Quoti again.";
 let videoRenderControllerPromise: Promise<VideoRenderController> | null = null;
 
 export function Popup() {
@@ -1449,7 +1449,31 @@ function isSupportedUrl(url: string | undefined): boolean {
     return false;
   }
 
-  return url.startsWith("https://x.com/") || url.startsWith("https://twitter.com/");
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+
+    return isSupportedSocialHostname(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isSupportedSocialHostname(hostname: string): boolean {
+  return (
+    hostname === "x.com" ||
+    hostname.endsWith(".x.com") ||
+    hostname === "twitter.com" ||
+    hostname.endsWith(".twitter.com") ||
+    hostname === "threads.net" ||
+    hostname.endsWith(".threads.net") ||
+    hostname === "threads.com" ||
+    hostname.endsWith(".threads.com") ||
+    hostname === "linkedin.com" ||
+    hostname.endsWith(".linkedin.com") ||
+    hostname === "facebook.com" ||
+    hostname.endsWith(".facebook.com") ||
+    hostname === "fb.watch"
+  );
 }
 
 function isChromeExtensionRuntime(): boolean {

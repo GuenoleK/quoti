@@ -74,6 +74,7 @@ private fun JSONObject.toPostMedia(): PostMedia {
         "image" ->
             PostMedia.Image(
                 url = getString("url"),
+                variants = optionalArray("variants").toStringList(),
                 alt = optionalString("alt"),
             )
 

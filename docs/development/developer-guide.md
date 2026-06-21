@@ -67,7 +67,7 @@ Load the extension in Chrome:
 3. Enable Developer mode.
 4. Click `Load unpacked`.
 5. Select the `dist/` folder.
-6. Open `https://x.com` or `https://twitter.com`.
+6. Open `https://x.com`, `https://www.threads.com`, `https://www.linkedin.com`, or `https://www.facebook.com`.
 7. Capture a visible post with the Quoti extension.
 
 For UI-only checks, run the dev server and open:
@@ -93,7 +93,7 @@ After changing code:
 1. Run `npm run typecheck` for logic-only changes.
 2. Run `npm run build` for extension/runtime changes.
 3. Manually reload the unpacked extension in Chrome.
-4. Test the popup against real X posts when capture logic changes.
+4. Test the popup against real supported-platform posts when capture logic changes.
 
 ## Phase 1 Video Rendering Development
 
@@ -316,7 +316,7 @@ Keep generated build outputs out of version control and update `docs/roadmap/mob
 
 ### Content Script
 
-- Test against real X timeline posts.
+- Test against real X, Threads, LinkedIn, and Facebook timeline posts.
 - Watch for virtualized timeline behavior.
 - Be careful with hovered post state, visible post state, and context menu state.
 

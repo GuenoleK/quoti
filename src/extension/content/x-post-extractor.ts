@@ -1,4 +1,12 @@
-import type { ExtractedPost, ImagePostMedia, PostExtractionResult, PostMedia, RelatedPost, VideoPostMedia } from "../../shared/types/post.types";
+import type {
+  ExtractedPost,
+  ImagePostMedia,
+  PostExtractionResult,
+  PostMedia,
+  RelatedPost,
+  SocialPlatform,
+  VideoPostMedia
+} from "../../shared/types/post.types";
 
 type ContentScriptSettings = {
   hoverCaptureEnabled: boolean;
@@ -16,11 +24,19 @@ type InlineButtonPlacement = {
   target: HTMLElement;
 };
 
+type PlatformConfig = {
+  isX: boolean;
+  label: string;
+  platform: SocialPlatform;
+};
+
 const inlineButtonClassName = "quoti-inline-button";
 const inlineButtonInsertedClassName = "quoti-inline-button-inserted";
 const settingsStorageKey = "quoti-settings";
 const inlineButtonPreferenceVersion = 1;
 const maxLocalObservedVideoUrls = 120;
+const postElementSelector =
+  'article, [role="article"], .feed-shared-update-v2, [data-urn^="urn:li:activity"], [data-pagelet^="FeedUnit_"]';
 const avatarImageSelector =
   '[data-testid="Tweet-User-Avatar"] img, [data-testid^="UserAvatar-Container"] img, [data-testid="UserAvatar-Container-unknown"] img, img[src*="/profile_images/"], img[srcset*="/profile_images/"]';
 const avatarContainerSelector = '[data-testid="Tweet-User-Avatar"], [data-testid^="UserAvatar-Container"], [data-testid="UserAvatar-Container-unknown"]';
@@ -79,7 +95,7 @@ export function disposeXPostExtractor(): void {
 }
 
 export function extractSelectedXPost(observedVideoUrls: string[] = []): PostExtractionResult {
-  return extractArticle(getCandidateArticle(), "Open an X post or hover a post before opening Quoti.", observedVideoUrls);
+  return extractArticle(getCandidateArticle(), "Open a supported social post or hover a post before opening Quoti.", observedVideoUrls);
 }
 
 export function extractContextXPost(observedVideoUrls: string[] = []): PostExtractionResult {
@@ -91,7 +107,7 @@ export function extractContextXPost(observedVideoUrls: string[] = []): PostExtra
 }
 
 export function extractInlineXPost(postId: string, observedVideoUrls: string[] = []): PostExtractionResult {
-  const article = document.querySelector<HTMLElement>(`article[data-quoti-post-id="${postId}"]`);
+  const article = document.querySelector<HTMLElement>(`[data-quoti-post-id="${postId}"]`);
 
   return extractArticle(article, "Quoti could not read this post.", observedVideoUrls);
 }
@@ -107,9 +123,9 @@ function handleMouseOver(event: MouseEvent): void {
     return;
   }
 
-  const article = target.closest("article");
+  const article = findClosestPostElement(target);
 
-  hoveredArticle = article instanceof HTMLElement ? article : null;
+  hoveredArticle = article;
 }
 
 function handleContextMenu(event: MouseEvent): void {
@@ -119,9 +135,9 @@ function handleContextMenu(event: MouseEvent): void {
     return;
   }
 
-  const article = target.closest("article");
+  const article = findClosestPostElement(target);
 
-  contextArticle = article instanceof HTMLElement ? article : null;
+  contextArticle = article;
 }
 
 function handleDocumentClick(event: MouseEvent): void {
@@ -235,7 +251,7 @@ function removeInlineButtons(): void {
 }
 
 function injectInlineButtons(): void {
-  const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
+  const articles = getPostElements();
 
   articles.forEach((article, index) => {
     if (!shouldInjectInlineButton(article)) {
@@ -271,7 +287,13 @@ function injectInlineButtons(): void {
 }
 
 function shouldInjectInlineButton(article: HTMLElement): boolean {
-  return Boolean(article.querySelector('[data-testid="tweetText"], time, img[src*="/media/"], video'));
+  const platform = getCurrentPlatform();
+
+  if (platform.isX) {
+    return Boolean(article.querySelector('[data-testid="tweetText"], time, img[src*="/media/"], video'));
+  }
+
+  return Boolean(readGenericPostContent(article, platform.platform) || readGenericPostMedia(article).length > 0);
 }
 
 function removeArticleInlineButtons(article: HTMLElement): void {
@@ -387,6 +409,17 @@ function getInlineButtonPlacement(article: HTMLElement): InlineButtonPlacement |
     };
   }
 
+  const sourceLink = findGenericSourceLink(article, getCurrentPlatform().platform);
+  const sourceLinkContainer = sourceLink?.parentElement;
+
+  if (sourceLinkContainer instanceof HTMLElement && sourceLink) {
+    return {
+      after: sourceLink,
+      kind: "meta",
+      target: sourceLinkContainer
+    };
+  }
+
   return null;
 }
 
@@ -404,6 +437,58 @@ function findViewsElement(article: HTMLElement): HTMLElement | null {
 
 function isViewsText(text: string): boolean {
   return text.length <= 80 && /\d[\d\s.,]*\s*[km]?\s*(?:vues?|views?)\b/i.test(text);
+}
+
+function getPostElements(): HTMLElement[] {
+  return [...new Set(Array.from(document.querySelectorAll<HTMLElement>(postElementSelector)))];
+}
+
+function findClosestPostElement(element: HTMLElement): HTMLElement | null {
+  const postElement = element.closest(postElementSelector);
+
+  return postElement instanceof HTMLElement ? postElement : null;
+}
+
+function getCurrentPlatform(): PlatformConfig {
+  const hostname = window.location.hostname.toLowerCase();
+
+  if (hostname === "x.com" || hostname.endsWith(".x.com") || hostname === "twitter.com" || hostname.endsWith(".twitter.com")) {
+    return {
+      isX: true,
+      label: "X",
+      platform: "x"
+    };
+  }
+
+  if (hostname === "threads.net" || hostname.endsWith(".threads.net") || hostname === "threads.com" || hostname.endsWith(".threads.com")) {
+    return {
+      isX: false,
+      label: "Threads",
+      platform: "threads"
+    };
+  }
+
+  if (hostname === "linkedin.com" || hostname.endsWith(".linkedin.com")) {
+    return {
+      isX: false,
+      label: "LinkedIn",
+      platform: "linkedin"
+    };
+  }
+
+  if (hostname === "facebook.com" || hostname.endsWith(".facebook.com") || hostname === "fb.watch") {
+    return {
+      isX: false,
+      label: "Facebook",
+      platform: "facebook"
+    };
+  }
+
+  return {
+    isX: true,
+    label: "X",
+    platform: "x"
+  };
 }
 
 function getCandidateArticle(): HTMLElement | null {
@@ -431,13 +516,13 @@ function getSelectionArticle(): HTMLElement | null {
 
   const node = selection.anchorNode;
   const element = node instanceof HTMLElement ? node : node?.parentElement;
-  const article = element?.closest("article");
+  const article = element ? findClosestPostElement(element) : null;
 
-  return article instanceof HTMLElement ? article : null;
+  return article;
 }
 
 function getMostVisibleArticle(): HTMLElement | null {
-  const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
+  const articles = getPostElements();
   const viewportCenter = window.innerHeight / 2;
 
   return articles
@@ -465,6 +550,16 @@ function pruneDisconnectedArticleReferences(): void {
 }
 
 function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[]): ExtractedPost {
+  const platform = getCurrentPlatform();
+
+  if (!platform.isX) {
+    return extractGenericPostFromElement(article, platform, observedVideoUrls);
+  }
+
+  return extractXPostFromArticle(article, observedVideoUrls);
+}
+
+function extractXPostFromArticle(article: HTMLElement, observedVideoUrls: string[]): ExtractedPost {
   const authorBlock = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   const authorName = readAuthorName(authorBlock);
   const authorHandle = readAuthorHandle(authorBlock);
@@ -487,6 +582,566 @@ function extractPostFromArticle(article: HTMLElement, observedVideoUrls: string[
     media,
     capturedAt: new Date().toISOString()
   };
+}
+
+function extractGenericPostFromElement(article: HTMLElement, platform: PlatformConfig, _observedVideoUrls: string[]): ExtractedPost {
+  const sourceUrl = readGenericSourceUrl(article, platform.platform);
+  const authorLink = readGenericAuthorLink(article, platform.platform, sourceUrl);
+  const authorHandle = readGenericAuthorHandle(platform.platform, sourceUrl, authorLink);
+  const authorName = readGenericAuthorName(article, platform, authorLink, authorHandle);
+  const authorAvatarUrl = readGenericAuthorAvatarUrl(article, authorLink);
+  const content = readGenericPostContent(article, platform.platform);
+  const media = readGenericPostMedia(article, authorAvatarUrl);
+  const publishedAt = readGenericPublishedAt(article);
+
+  return {
+    id: sourceUrl ?? `${platform.platform}-${authorHandle}-${content.slice(0, 32)}`,
+    platform: platform.platform,
+    authorName,
+    authorHandle,
+    authorAvatarUrl,
+    content,
+    publishedAt,
+    sourceUrl,
+    media,
+    capturedAt: new Date().toISOString()
+  };
+}
+
+function readGenericSourceUrl(article: HTMLElement, platform: SocialPlatform): string | undefined {
+  const timeUrl = readSourceUrl(article.querySelector<HTMLTimeElement>("time"));
+
+  if (timeUrl && isLikelyGenericSourceUrl(timeUrl, platform)) {
+    return normalizeGenericUrl(timeUrl);
+  }
+
+  const sourceLink = findGenericSourceLink(article, platform);
+  const sourceUrl = normalizeGenericUrl(sourceLink?.getAttribute("href"));
+
+  if (sourceUrl) {
+    return sourceUrl;
+  }
+
+  return isLikelyGenericSourceUrl(window.location.href, platform) ? normalizeGenericUrl(window.location.href) : undefined;
+}
+
+function findGenericSourceLink(article: HTMLElement, platform: SocialPlatform): HTMLAnchorElement | null {
+  const candidates = queryGenericAll<HTMLAnchorElement>(article, getGenericSourceLinkSelectors(platform))
+    .map((link) => ({
+      link,
+      url: normalizeGenericUrl(link.getAttribute("href"))
+    }))
+    .filter((candidate): candidate is { link: HTMLAnchorElement; url: string } => Boolean(candidate.url))
+    .filter(({ url }) => isLikelyGenericSourceUrl(url, platform))
+    .sort((left, right) => scoreGenericSourceUrl(right.url, platform) - scoreGenericSourceUrl(left.url, platform));
+
+  return candidates[0]?.link ?? null;
+}
+
+function getGenericSourceLinkSelectors(platform: SocialPlatform): string[] {
+  if (platform === "threads") {
+    return ['a[href*="/post/"]'];
+  }
+
+  if (platform === "linkedin") {
+    return ['a[href*="/feed/update/"]', 'a[href*="/posts/"]', 'a[href*="urn:li:activity"]', 'a[href*="/pulse/"]'];
+  }
+
+  if (platform === "facebook") {
+    return [
+      'a[href*="/posts/"]',
+      'a[href*="/permalink.php"]',
+      'a[href*="/story.php"]',
+      'a[href*="story_fbid="]',
+      'a[href*="/photo.php"]',
+      'a[href*="/videos/"]',
+      'a[href*="/watch/"]',
+      'a[href*="/share/"]'
+    ];
+  }
+
+  return [];
+}
+
+function scoreGenericSourceUrl(value: string, platform: SocialPlatform): number {
+  try {
+    const url = new URL(value);
+    const path = url.pathname.toLowerCase();
+
+    if (platform === "threads" && /\/@[^/]+\/post\//.test(path)) {
+      return 100;
+    }
+
+    if (platform === "linkedin" && path.includes("/feed/update/")) {
+      return 100;
+    }
+
+    if (platform === "facebook" && (path.includes("/posts/") || path.includes("/story.php") || url.searchParams.has("story_fbid"))) {
+      return 100;
+    }
+
+    if (platform === "facebook" && url.hostname.toLowerCase() === "fb.watch") {
+      return 100;
+    }
+
+    return 10;
+  } catch {
+    return 0;
+  }
+}
+
+function isLikelyGenericSourceUrl(value: string, platform: SocialPlatform): boolean {
+  try {
+    const url = new URL(value, window.location.origin);
+    const path = url.pathname.toLowerCase();
+
+    if (platform === "threads") {
+      return /\/@[^/]+\/post\//.test(path) || path.includes("/post/");
+    }
+
+    if (platform === "linkedin") {
+      return path.includes("/feed/update/") || path.includes("/posts/") || path.includes("/pulse/") || value.includes("urn:li:activity");
+    }
+
+    if (platform === "facebook") {
+      return (
+        url.hostname.toLowerCase() === "fb.watch" ||
+        path.includes("/posts/") ||
+        path.includes("/permalink.php") ||
+        path.includes("/story.php") ||
+        path.includes("/photo.php") ||
+        path.includes("/videos/") ||
+        path.includes("/watch/") ||
+        path.includes("/share/") ||
+        url.searchParams.has("story_fbid")
+      );
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function readGenericAuthorLink(article: HTMLElement, platform: SocialPlatform, sourceUrl: string | undefined): HTMLAnchorElement | null {
+  const sourceUrlNormalized = normalizeGenericUrl(sourceUrl);
+  const candidates = queryGenericAll<HTMLAnchorElement>(article, getGenericAuthorLinkSelectors(platform))
+    .map((link) => ({
+      link,
+      text: cleanGenericAuthorName(link.textContent),
+      url: normalizeGenericUrl(link.getAttribute("href"))
+    }))
+    .filter(({ text, url }) => Boolean(text || url))
+    .filter(({ url }) => !url || url !== sourceUrlNormalized)
+    .filter(({ url }) => !url || !isLikelyGenericSourceUrl(url, platform))
+    .filter(({ text }) => !text || !isGenericUiNoise(text));
+
+  return candidates[0]?.link ?? null;
+}
+
+function getGenericAuthorLinkSelectors(platform: SocialPlatform): string[] {
+  if (platform === "threads") {
+    return ['a[href^="/@"]', 'a[href*="threads.com/@"]', 'a[href*="threads.net/@"]'];
+  }
+
+  if (platform === "linkedin") {
+    return ['a[href*="/in/"]', 'a[href*="/company/"]', 'a[href*="/school/"]'];
+  }
+
+  if (platform === "facebook") {
+    return [
+      '[data-ad-rendering-role="profile_name"] a[href]',
+      'h2 a[href]',
+      'h3 a[href]',
+      'strong a[href]',
+      'a[role="link"][href*="facebook.com"]'
+    ];
+  }
+
+  return [];
+}
+
+function readGenericAuthorHandle(platform: SocialPlatform, sourceUrl: string | undefined, authorLink: HTMLAnchorElement | null): string {
+  return (
+    resolveGenericHandleFromUrl(sourceUrl, platform) ??
+    resolveGenericHandleFromUrl(authorLink?.getAttribute("href"), platform) ??
+    getCurrentPlatform().label
+  );
+}
+
+function readGenericAuthorName(
+  article: HTMLElement,
+  platform: PlatformConfig,
+  authorLink: HTMLAnchorElement | null,
+  authorHandle: string
+): string {
+  const selectorName = queryGenericAll<HTMLElement>(article, getGenericAuthorNameSelectors(platform.platform))
+    .map((element) => cleanGenericAuthorName(element.textContent))
+    .find((name): name is string => Boolean(name));
+
+  const linkName = cleanGenericAuthorName(authorLink?.textContent);
+  const handleName = authorHandle.startsWith("@") ? authorHandle.slice(1) : "";
+
+  return selectorName ?? linkName ?? (handleName || `Shared ${platform.label} post`);
+}
+
+function getGenericAuthorNameSelectors(platform: SocialPlatform): string[] {
+  if (platform === "threads") {
+    return ['a[href^="/@"] span', 'a[href*="threads.com/@"] span', 'a[href*="threads.net/@"] span', 'a[href^="/@"]'];
+  }
+
+  if (platform === "linkedin") {
+    return [
+      '[data-test-id="actor-name"]',
+      ".update-components-actor__name",
+      ".feed-shared-actor__name",
+      ".update-components-actor__title span[aria-hidden='true']",
+      ".feed-shared-actor__title span[aria-hidden='true']"
+    ];
+  }
+
+  if (platform === "facebook") {
+    return [
+      '[data-ad-rendering-role="profile_name"]',
+      'h2 strong',
+      'h3 strong',
+      'strong a[role="link"]',
+      'h2 a[role="link"]',
+      'h3 a[role="link"]'
+    ];
+  }
+
+  return [];
+}
+
+function readGenericAuthorAvatarUrl(article: HTMLElement, authorLink: HTMLAnchorElement | null): string | undefined {
+  const authorImage =
+    authorLink?.querySelector<HTMLImageElement>("img") ??
+    authorLink?.closest<HTMLElement>("div, header")?.querySelector<HTMLImageElement>("img");
+  const url = normalizeGenericImageUrl(authorImage ? readImageSourceUrl(authorImage) : undefined);
+
+  if (url) {
+    return url;
+  }
+
+  const firstSmallImage = Array.from(article.querySelectorAll<HTMLImageElement>("img"))
+    .filter((image) => {
+      const rect = image.getBoundingClientRect();
+
+      return rect.width > 0 && rect.height > 0 && Math.max(rect.width, rect.height) <= 96;
+    })
+    .map((image) => normalizeGenericImageUrl(readImageSourceUrl(image)))
+    .find((candidate): candidate is string => Boolean(candidate));
+
+  return firstSmallImage;
+}
+
+function readGenericPostContent(article: HTMLElement, platform: SocialPlatform): string {
+  const selectorCandidates = queryGenericAll<HTMLElement>(article, getGenericContentSelectors(platform))
+    .map((element) => cleanGenericPostContent(readElementText(element)))
+    .filter((content) => isGenericPostContentText(content));
+  const fallbackCandidates = queryGenericAll<HTMLElement>(article, ["p", '[dir="auto"]', ".break-words"])
+    .filter(isGenericTextCandidateElement)
+    .map((element) => cleanGenericPostContent(readElementText(element)))
+    .filter((content) => isGenericPostContentText(content));
+
+  return [...uniqueStrings(selectorCandidates), ...uniqueStrings(fallbackCandidates)]
+    .sort((left, right) => scoreGenericPostContent(right) - scoreGenericPostContent(left))[0] ?? "";
+}
+
+function getGenericContentSelectors(platform: SocialPlatform): string[] {
+  if (platform === "threads") {
+    return ['div[dir="auto"]', 'span[dir="auto"]'];
+  }
+
+  if (platform === "linkedin") {
+    return [
+      ".update-components-text",
+      ".feed-shared-update-v2__description",
+      ".feed-shared-inline-show-more-text",
+      ".break-words"
+    ];
+  }
+
+  if (platform === "facebook") {
+    return [
+      '[data-ad-comet-preview="message"]',
+      '[data-ad-preview="message"]',
+      '[data-ad-rendering-role="story_message"]',
+      'div[dir="auto"]'
+    ];
+  }
+
+  return ["p", '[dir="auto"]'];
+}
+
+function readGenericPostMedia(article: HTMLElement, authorAvatarUrl?: string): ImagePostMedia[] {
+  const imageUrls = new Set<string>();
+  const normalizedAvatarUrl = normalizeGenericImageUrl(authorAvatarUrl);
+
+  return Array.from(article.querySelectorAll<HTMLImageElement>("img"))
+    .map((image): ImagePostMedia | null => {
+      const url = normalizeGenericImageUrl(readImageSourceUrl(image));
+
+      if (!url || url === normalizedAvatarUrl || imageUrls.has(url) || !isLikelyGenericPostImage(image)) {
+        return null;
+      }
+
+      imageUrls.add(url);
+
+      return {
+        type: "image",
+        url,
+        alt: normalizeText(image.alt)
+      };
+    })
+    .filter((media): media is ImagePostMedia => media !== null);
+}
+
+function readGenericPublishedAt(article: HTMLElement): string | undefined {
+  const dateTime = article.querySelector<HTMLTimeElement>("time")?.dateTime;
+
+  if (!dateTime) {
+    return undefined;
+  }
+
+  const time = Date.parse(dateTime);
+
+  return Number.isFinite(time) ? new Date(time).toISOString() : dateTime;
+}
+
+function queryGenericAll<T extends Element>(root: ParentNode, selectors: string[]): T[] {
+  return selectors.flatMap((selector) => {
+    try {
+      return Array.from(root.querySelectorAll<T>(selector));
+    } catch {
+      return [];
+    }
+  });
+}
+
+function readElementText(element: HTMLElement): string {
+  const parts: string[] = [];
+  const visit = (node: ChildNode): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+
+    if (!(node instanceof HTMLElement) || isHiddenElement(node) || ["BUTTON", "SCRIPT", "STYLE", "SVG"].includes(node.tagName)) {
+      return;
+    }
+
+    if (node.tagName === "BR") {
+      parts.push("\n");
+      return;
+    }
+
+    if (node instanceof HTMLImageElement && node.alt && node.alt.length <= 8) {
+      parts.push(node.alt);
+      return;
+    }
+
+    node.childNodes.forEach(visit);
+  };
+
+  element.childNodes.forEach(visit);
+
+  return normalizePostContent(parts.join(""));
+}
+
+function isHiddenElement(element: HTMLElement): boolean {
+  return element.hidden || element.getAttribute("aria-hidden") === "true";
+}
+
+function isGenericTextCandidateElement(element: HTMLElement): boolean {
+  if (element.closest(`.${inlineButtonClassName}`) || ["A", "BUTTON"].includes(element.tagName)) {
+    return false;
+  }
+
+  const text = cleanGenericPostContent(readElementText(element));
+
+  if (!isGenericPostContentText(text)) {
+    return false;
+  }
+
+  const childTextElements = Array.from(element.children).filter((child): child is HTMLElement => {
+    if (!(child instanceof HTMLElement)) {
+      return false;
+    }
+
+    return isGenericPostContentText(cleanGenericPostContent(readElementText(child)));
+  });
+
+  return childTextElements.length <= 2;
+}
+
+function cleanGenericPostContent(value: string | null | undefined): string {
+  return normalizePostContent(value)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => Boolean(line) && !isGenericUiNoise(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function cleanGenericAuthorName(value: string | null | undefined): string | undefined {
+  const name = normalizeText(value)
+    .split(/\n|\u00b7|\u2022/)
+    .map((part) => part.trim())
+    .find((part) => Boolean(part) && !part.startsWith("@") && !isGenericUiNoise(part));
+
+  return name && name.length <= 120 ? name : undefined;
+}
+
+function isGenericPostContentText(value: string): boolean {
+  const compact = compactText(value);
+
+  if (compact.length < 3 || compact.length > 2800) {
+    return false;
+  }
+
+  if (/^https?:\/\/\S+$/i.test(compact)) {
+    return false;
+  }
+
+  return !isGenericUiNoise(compact);
+}
+
+function isGenericUiNoise(value: string): boolean {
+  const compact = compactText(value).replace(/[.,:;]+$/, "").toLowerCase();
+
+  return (
+    compact.length <= 80 &&
+    /^(like|comment|share|send|follow|following|followers?|repost|quote|reply|replies|views?|view|see more|see translation|open profile|j'aime|commenter|partager|envoyer|suivre|abonnes?|voir plus|voir la traduction|\d+\s+(comments?|replies|shares?|reposts?|likes?|views?))$/.test(compact)
+  );
+}
+
+function scoreGenericPostContent(value: string): number {
+  const compact = compactText(value);
+  const lineCount = value.split("\n").filter(Boolean).length;
+
+  return compact.length + Math.min(lineCount, 6) * 12;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isLikelyGenericPostImage(image: HTMLImageElement): boolean {
+  if (image.closest(`.${inlineButtonClassName}`)) {
+    return false;
+  }
+
+  const rect = image.getBoundingClientRect();
+
+  if (rect.width === 0 || rect.height === 0 || Math.max(rect.width, rect.height) < 96) {
+    return false;
+  }
+
+  const url = normalizeGenericImageUrl(readImageSourceUrl(image));
+
+  if (!url) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    const path = parsedUrl.pathname.toLowerCase();
+
+    if (path.includes("/emoji/") || path.includes("/profile_images/") || path.includes("profile-displayphoto")) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
+function normalizeGenericImageUrl(value: string | undefined): string | null {
+  if (!value || value.startsWith("blob:") || value.startsWith("data:")) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value, window.location.origin);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return null;
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeGenericUrl(value: string | null | undefined): string | undefined {
+  if (!value || value.startsWith("#")) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value, window.location.origin);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return undefined;
+    }
+
+    url.hash = "";
+
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveGenericHandleFromUrl(value: string | null | undefined, platform: SocialPlatform): string | undefined {
+  const normalizedUrl = normalizeGenericUrl(value);
+
+  if (!normalizedUrl) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(normalizedUrl);
+    const segments = url.pathname.split("/").filter(Boolean);
+
+    if (platform === "threads") {
+      const handle = segments.find((segment) => segment.startsWith("@")) ?? segments[0];
+
+      return handle ? `@${handle.replace(/^@/, "")}` : undefined;
+    }
+
+    if (platform === "linkedin") {
+      const scope = segments[0]?.toLowerCase();
+      const slug = segments[1];
+
+      if (slug && ["in", "company", "school"].includes(scope)) {
+        return `@${slug}`;
+      }
+    }
+
+    if (platform === "facebook") {
+      const slug = segments[0];
+
+      if (slug && !isReservedFacebookPathSegment(slug)) {
+        return `@${slug}`;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function isReservedFacebookPathSegment(value: string): boolean {
+  return ["permalink.php", "story.php", "photo.php", "watch", "groups", "share", "reel", "events", "pages", "profile.php"].includes(
+    value.toLowerCase()
+  );
 }
 
 function hasExtractedPostContent(post: ExtractedPost): boolean {

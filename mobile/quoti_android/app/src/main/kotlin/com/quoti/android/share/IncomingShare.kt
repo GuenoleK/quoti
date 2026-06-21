@@ -142,9 +142,13 @@ private fun resolvePlatform(sourceUrl: String?): SocialPlatform {
     return when {
         host == "x.com" || host.endsWith(".x.com") -> SocialPlatform.X
         host == "twitter.com" || host.endsWith(".twitter.com") -> SocialPlatform.X
+        host == "threads.com" || host.endsWith(".threads.com") -> SocialPlatform.Threads
         host == "threads.net" || host.endsWith(".threads.net") -> SocialPlatform.Threads
         host == "bsky.app" || host.endsWith(".bsky.app") -> SocialPlatform.Bluesky
         host == "linkedin.com" || host.endsWith(".linkedin.com") -> SocialPlatform.LinkedIn
+        host == "facebook.com" || host.endsWith(".facebook.com") -> SocialPlatform.Facebook
+        host == "fb.com" || host.endsWith(".fb.com") -> SocialPlatform.Facebook
+        host == "fb.watch" -> SocialPlatform.Facebook
         else -> SocialPlatform.X
     }
 }
@@ -163,8 +167,25 @@ private fun resolveAuthorHandle(sourceUrl: String?): String? {
         return "@${segments.first()}"
     }
 
-    if ((host == "threads.net" || host.endsWith(".threads.net")) && segments.isNotEmpty()) {
+    if ((host == "threads.com" || host.endsWith(".threads.com") || host == "threads.net" || host.endsWith(".threads.net")) && segments.isNotEmpty()) {
         return segments.first().let { if (it.startsWith("@")) it else "@$it" }
+    }
+
+    if ((host == "linkedin.com" || host.endsWith(".linkedin.com")) && segments.size >= 2) {
+        val scope = segments[0].lowercase(Locale.US)
+        val slug = segments[1]
+
+        if (scope in setOf("in", "company", "school") && slug.isNotBlank()) {
+            return "@$slug"
+        }
+    }
+
+    if ((host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.com" || host.endsWith(".fb.com")) && segments.isNotEmpty()) {
+        val slug = segments.first()
+
+        if (!slug.isReservedFacebookPathSegment()) {
+            return "@$slug"
+        }
     }
 
     return null
@@ -185,7 +206,9 @@ private fun extractSourceUrl(value: String): String? {
             .map { match -> match.value.cleanSharedUrl() }
             .toList()
 
-    return urls.firstOrNull { url -> url.isXStatusUrl() } ?: urls.firstOrNull()
+    return urls.firstOrNull { url -> url.isSupportedSocialPostUrl() }
+        ?: urls.firstOrNull { url -> url.isSupportedSocialUrl() }
+        ?: urls.firstOrNull()
 }
 
 private fun parseUri(value: String?): URI? {
@@ -296,6 +319,22 @@ private fun String.isReservedXPathSegment(): Boolean {
         )
 }
 
+private fun String.isReservedFacebookPathSegment(): Boolean {
+    return lowercase(Locale.US) in
+        setOf(
+            "permalink.php",
+            "story.php",
+            "photo.php",
+            "watch",
+            "groups",
+            "share",
+            "reel",
+            "events",
+            "pages",
+            "profile.php",
+        )
+}
+
 private fun String.cleanSharedUrl(): String {
     return replace(Regex("""[\])}>,.;"']+$"""), "")
 }
@@ -308,6 +347,56 @@ private fun String.isXStatusUrl(): Boolean {
     return (host == "x.com" || host.endsWith(".x.com") || host == "twitter.com" || host.endsWith(".twitter.com")) &&
         segments.size >= 3 &&
         segments[1] == "status"
+}
+
+private fun String.isSupportedSocialUrl(): Boolean {
+    val host = parseUri(this)?.host?.lowercase(Locale.US).orEmpty()
+
+    return host == "x.com" ||
+        host.endsWith(".x.com") ||
+        host == "twitter.com" ||
+        host.endsWith(".twitter.com") ||
+        host == "threads.com" ||
+        host.endsWith(".threads.com") ||
+        host == "threads.net" ||
+        host.endsWith(".threads.net") ||
+        host == "linkedin.com" ||
+        host.endsWith(".linkedin.com") ||
+        host == "facebook.com" ||
+        host.endsWith(".facebook.com") ||
+        host == "fb.com" ||
+        host.endsWith(".fb.com") ||
+        host == "fb.watch"
+}
+
+private fun String.isSupportedSocialPostUrl(): Boolean {
+    val uri = parseUri(this) ?: return false
+    val host = uri.host?.lowercase(Locale.US).orEmpty()
+    val segments = uri.path.split("/").filter { it.isNotBlank() }
+    val path = uri.path.lowercase(Locale.US)
+
+    return when {
+        (host == "x.com" || host.endsWith(".x.com") || host == "twitter.com" || host.endsWith(".twitter.com")) ->
+            segments.size >= 3 && segments[1] == "status"
+
+        (host == "threads.com" || host.endsWith(".threads.com") || host == "threads.net" || host.endsWith(".threads.net")) ->
+            segments.size >= 3 && segments.any { it == "post" }
+
+        (host == "linkedin.com" || host.endsWith(".linkedin.com")) ->
+            path.contains("/feed/update/") || path.contains("/posts/") || path.contains("/pulse/")
+
+        (host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.com" || host.endsWith(".fb.com") || host == "fb.watch") ->
+            path.contains("/posts/") ||
+                path.contains("/permalink.php") ||
+                path.contains("/story.php") ||
+                path.contains("/photo.php") ||
+                path.contains("/videos/") ||
+                path.contains("/watch/") ||
+                host == "fb.watch" ||
+                uri.rawQuery.orEmpty().contains("story_fbid=")
+
+        else -> false
+    }
 }
 
 private fun Intent.textExtra(name: String): String? {

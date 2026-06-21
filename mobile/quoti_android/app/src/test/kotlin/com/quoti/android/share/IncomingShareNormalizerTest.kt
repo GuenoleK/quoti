@@ -128,4 +128,75 @@ class IncomingShareNormalizerTest {
         assertEquals("https://x.com/i/status/2066866642169036946", draft!!.post.sourceUrl)
         assertEquals("Mais comment ca « on » ? Vous avez pas gagné hein", draft.post.content)
     }
+
+    @Test
+    fun normalizesThreadsPostUrlIntoCardDraft() {
+        val normalizer =
+            IncomingShareNormalizer(
+                clock = { Instant.parse("2026-06-15T10:00:00.000Z") },
+            )
+
+        val draft =
+            normalizer.normalize(
+                IncomingSharePayload(
+                    text = "Regarde ca https://www.threads.com/@jonas/post/Cu123",
+                    mimeType = "text/plain",
+                ),
+            )
+
+        assertNotNull(draft)
+        assertEquals(SocialPlatform.Threads, draft!!.post.platform)
+        assertEquals("Regarde ca", draft.post.content)
+        assertEquals("jonas", draft.post.authorName)
+        assertEquals("@jonas", draft.post.authorHandle)
+        assertEquals("https://www.threads.com/@jonas/post/Cu123", draft.post.sourceUrl)
+    }
+
+    @Test
+    fun normalizesLinkedInPostShareMetadata() {
+        val normalizer =
+            IncomingShareNormalizer(
+                clock = { Instant.parse("2026-06-15T10:00:00.000Z") },
+            )
+
+        val draft =
+            normalizer.normalize(
+                IncomingSharePayload(
+                    text = "https://www.linkedin.com/feed/update/urn:li:activity:123",
+                    subject = "Ada Lovelace on LinkedIn: \"Shipping context beats posting screenshots.\"",
+                    mimeType = "text/plain",
+                ),
+            )
+
+        assertNotNull(draft)
+        assertEquals(SocialPlatform.LinkedIn, draft!!.post.platform)
+        assertEquals("Ada Lovelace", draft.post.authorName)
+        assertEquals("LinkedIn", draft.post.authorHandle)
+        assertEquals("Shipping context beats posting screenshots.", draft.post.content)
+        assertEquals("https://www.linkedin.com/feed/update/urn:li:activity:123", draft.post.sourceUrl)
+    }
+
+    @Test
+    fun normalizesFacebookPostShareMetadata() {
+        val normalizer =
+            IncomingShareNormalizer(
+                clock = { Instant.parse("2026-06-15T10:00:00.000Z") },
+            )
+
+        val draft =
+            normalizer.normalize(
+                IncomingSharePayload(
+                    text = "Marie Dupont on Facebook: \"Le contexte change tout.\" https://www.facebook.com/marie/posts/123",
+                    mimeType = "text/plain",
+                ),
+            )
+
+        assertNotNull(draft)
+        assertEquals(SocialPlatform.Facebook, draft!!.post.platform)
+        assertEquals("Marie Dupont", draft.post.authorName)
+        assertEquals("@marie", draft.post.authorHandle)
+        assertEquals("Le contexte change tout.", draft.post.content)
+        assertEquals("https://www.facebook.com/marie/posts/123", draft.post.sourceUrl)
+        assertTrue(draft.missingFields.isEmpty())
+    }
 }

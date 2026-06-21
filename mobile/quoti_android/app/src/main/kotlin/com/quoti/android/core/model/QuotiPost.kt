@@ -7,7 +7,8 @@ enum class SocialPlatform(
     X("x", "X"),
     Threads("threads", "Threads"),
     Bluesky("bluesky", "Bluesky"),
-    LinkedIn("linkedin", "LinkedIn");
+    LinkedIn("linkedin", "LinkedIn"),
+    Facebook("facebook", "Facebook");
 
     companion object {
         fun fromJson(value: String): SocialPlatform {
@@ -55,6 +56,7 @@ sealed interface PostMedia {
 
     data class Image(
         val url: String,
+        val variants: List<String> = emptyList(),
         override val alt: String? = null,
     ) : PostMedia
 

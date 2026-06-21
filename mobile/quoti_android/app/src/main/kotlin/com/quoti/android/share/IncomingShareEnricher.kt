@@ -10,15 +10,38 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 class IncomingShareEnricher(
     private val xAdapter: XPostEnrichmentAdapter = XPostEnrichmentAdapter(),
+    private val openGraphAdapter: OpenGraphPostEnrichmentAdapter = OpenGraphPostEnrichmentAdapter(),
 ) {
     suspend fun enrich(draft: IncomingShareDraft): IncomingShareDraft {
         val sourceUrl = draft.post.sourceUrl ?: return draft
         if (draft.post.platform != SocialPlatform.X) {
-            return draft
+            val enrichment =
+                openGraphAdapter.fetch(
+                    sourceUrl = sourceUrl,
+                    platform = draft.post.platform,
+                ) ?: return draft
+
+            return draft.copy(
+                post =
+                    draft.post.copy(
+                        authorName = enrichment.authorName ?: draft.post.authorName,
+                        authorHandle = enrichment.authorHandle ?: draft.post.authorHandle,
+                        authorAvatarUrl = enrichment.authorAvatarUrl ?: draft.post.authorAvatarUrl,
+                        content = enrichment.content ?: draft.post.content,
+                        sourceUrl = enrichment.canonicalUrl ?: draft.post.sourceUrl,
+                        media = enrichment.media.ifEmpty { draft.post.media },
+                    ),
+                missingFields =
+                    draft.missingFields
+                        .removeIfPresent(IncomingShareMissingField.AuthorName, enrichment.authorName)
+                        .removeIfPresent(IncomingShareMissingField.AuthorHandle, enrichment.authorHandle)
+                        .removeIfPresent(IncomingShareMissingField.Content, enrichment.content),
+            )
         }
 
         val enrichment = xAdapter.fetch(sourceUrl, visibleText = draft.post.content) ?: return draft
@@ -40,6 +63,454 @@ class IncomingShareEnricher(
                     .removeIfPresent(IncomingShareMissingField.Content, enrichment.content),
         )
     }
+}
+
+class OpenGraphPostEnrichmentAdapter {
+    suspend fun fetch(
+        sourceUrl: String,
+        platform: SocialPlatform,
+    ): OpenGraphPostEnrichment? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val html = fetchText(sourceUrl) ?: return@runCatching null
+                OpenGraphPostPageParser.extract(
+                    html = html,
+                    sourceUrl = sourceUrl,
+                    platform = platform,
+                )
+            }.getOrNull()
+        }
+
+    private fun fetchText(url: String): String? {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        return try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 7_000
+            connection.setRequestProperty("User-Agent", "Quoti Android")
+            connection.setRequestProperty("Accept", "application/activity+json, application/json, text/html;q=0.8")
+
+            if (connection.responseCode !in 200..299) {
+                return null
+            }
+
+            connection.inputStream.bufferedReader().use { reader -> reader.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+
+data class OpenGraphPostEnrichment(
+    val canonicalUrl: String?,
+    val authorName: String?,
+    val authorHandle: String?,
+    val authorAvatarUrl: String?,
+    val content: String?,
+    val media: List<PostMedia>,
+)
+
+internal object OpenGraphPostPageParser {
+    private val tagPattern =
+        Regex(
+            pattern = """<(meta|link)\b[^>]*>""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+    private val attributePattern =
+        Regex(
+            pattern = """([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(["'])(.*?)\2""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+    private val remoteUrlPattern =
+        Regex("""https?://[^"'<\\\s]+""")
+    private val jsonScriptPattern =
+        Regex(
+            pattern = """<script\b(?=[^>]*\btype\s*=\s*(["'])application/json\1)[^>]*>(.*?)</script>""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+
+    fun extract(
+        html: String,
+        sourceUrl: String,
+        platform: SocialPlatform,
+    ): OpenGraphPostEnrichment? {
+        val title =
+            readMetaContent(html, "og:title")
+                ?: readMetaContent(html, "twitter:title")
+        val description =
+            readMetaContent(html, "og:description")
+                ?: readMetaContent(html, "description")
+                ?: readMetaContent(html, "twitter:description")
+        val canonicalUrl =
+            readMetaContent(html, "og:url")
+                ?: readCanonicalUrl(html)
+                ?: sourceUrl
+        val imageUrls =
+            (
+                readMetaContents(html, "og:image") +
+                    readMetaContents(html, "og:image:url") +
+                    readMetaContents(html, "og:image:secure_url") +
+                    readMetaContents(html, "twitter:image") +
+                    readMetaContents(html, "twitter:image:src")
+            )
+                .distinctBy { url -> url.normalizedRemoteAssetUrl().remoteAssetIdentity() }
+        val videoUrls =
+            (
+                readMetaContents(html, "og:video") +
+                    readMetaContents(html, "og:video:url") +
+                    readMetaContents(html, "og:video:secure_url") +
+                    readMetaContents(html, "twitter:player:stream")
+            )
+                .distinctBy { url -> url.normalizedRemoteAssetUrl().remoteAssetIdentity() }
+        val titleMetadata = parseTitleMetadata(title, platform)
+        val content = description.displayTextOrNull() ?: titleMetadata.content
+        val authorHandle = titleMetadata.authorHandle ?: canonicalUrl.toPlatformAuthorHandle(platform)
+        val authorName = titleMetadata.authorName ?: authorHandle?.removePrefix("@")
+        val allRemoteUrls = extractRemoteUrls(html)
+        val authorAvatarUrl = findAuthorAvatarUrl(platform, imageUrls, allRemoteUrls)
+        val media =
+            extractStructuredMedia(
+                platform = platform,
+                html = html,
+                sourceUrl = sourceUrl,
+                canonicalUrl = canonicalUrl,
+                authorAvatarUrl = authorAvatarUrl,
+            ).ifEmpty {
+                buildMedia(platform, imageUrls, videoUrls + allRemoteUrls, allRemoteUrls, authorAvatarUrl)
+            }
+
+        if (content.isNullOrBlank() && authorName.isNullOrBlank() && authorHandle.isNullOrBlank()) {
+            return null
+        }
+
+        return OpenGraphPostEnrichment(
+            canonicalUrl = canonicalUrl,
+            authorName = authorName,
+            authorHandle = authorHandle,
+            authorAvatarUrl = authorAvatarUrl,
+            content = content,
+            media = media,
+        )
+    }
+
+    fun readMetaContent(
+        html: String,
+        name: String,
+    ): String? = readMetaContents(html, name).firstOrNull()
+
+    private fun readMetaContents(
+        html: String,
+        name: String,
+    ): List<String> {
+        return tagPattern
+            .findAll(html)
+            .filter { match -> match.groupValues[1].equals("meta", ignoreCase = true) }
+            .map { match -> match.value.readHtmlAttributes() }
+            .filter { attributes ->
+                attributes["property"]?.equals(name, ignoreCase = true) == true ||
+                    attributes["name"]?.equals(name, ignoreCase = true) == true
+            }
+            .mapNotNull { attributes ->
+                attributes["content"]
+                    ?.decodeHtmlEntities()
+                    ?.displayTextOrNull()
+            }
+            .distinctBy { value -> value.normalizedRemoteAssetUrl() }
+            .toList()
+    }
+
+    private fun readCanonicalUrl(html: String): String? {
+        return tagPattern
+            .findAll(html)
+            .filter { match -> match.groupValues[1].equals("link", ignoreCase = true) }
+            .map { match -> match.value.readHtmlAttributes() }
+            .firstOrNull { attributes ->
+                attributes["rel"]
+                    ?.split(Regex("""\s+"""))
+                    ?.any { rel -> rel.equals("canonical", ignoreCase = true) } == true
+            }
+            ?.get("href")
+            ?.decodeHtmlEntities()
+            ?.displayTextOrNull()
+    }
+
+    private fun parseTitleMetadata(
+        title: String?,
+        platform: SocialPlatform,
+    ): OpenGraphTitleMetadata {
+        val cleanedTitle = title?.decodeHtmlEntities()?.displayTextOrNull()
+            ?: return OpenGraphTitleMetadata()
+        val platformName = Regex.escape(platform.label)
+
+        if (platform == SocialPlatform.Threads) {
+            Regex("""^(.+?)\s+\((@[^)]+)\)\s+on\s+Threads$""", RegexOption.IGNORE_CASE)
+                .find(cleanedTitle)
+                ?.let { match ->
+                    return OpenGraphTitleMetadata(
+                        authorName = match.groupValues[1].displayTextOrNull(),
+                        authorHandle = match.groupValues[2].displayTextOrNull(),
+                    )
+                }
+        }
+
+        Regex("""^(.+?)\s+on\s+$platformName:\s*"?(.*?)"?$""", RegexOption.IGNORE_CASE)
+            .find(cleanedTitle)
+            ?.let { match ->
+                return OpenGraphTitleMetadata(
+                    authorName = match.groupValues[1].displayTextOrNull(),
+                    content = match.groupValues[2].displayTextOrNull(),
+                )
+            }
+
+        Regex("""^(.+?)\s+on\s+$platformName$""", RegexOption.IGNORE_CASE)
+            .find(cleanedTitle)
+            ?.let { match ->
+                return OpenGraphTitleMetadata(
+                    authorName = match.groupValues[1].displayTextOrNull(),
+                )
+            }
+
+        return OpenGraphTitleMetadata(content = cleanedTitle)
+    }
+
+    private fun String.readHtmlAttributes(): Map<String, String> {
+        return attributePattern
+            .findAll(this)
+            .associate { match ->
+                match.groupValues[1].lowercase() to match.groupValues[3]
+            }
+    }
+
+    private fun extractRemoteUrls(html: String): List<String> {
+        return html
+            .replace("\\/", "/")
+            .replace("\\u002F", "/")
+            .replace("\\u0026", "&")
+            .replace("\\u003D", "=")
+            .decodeHtmlEntities()
+            .let { normalizedHtml -> remoteUrlPattern.findAll(normalizedHtml) }
+            .map { match -> match.value.normalizedRemoteAssetUrl() }
+            .filter { url -> url.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
+    private fun findAuthorAvatarUrl(
+        platform: SocialPlatform,
+        imageUrls: List<String>,
+        remoteUrls: List<String>,
+    ): String? {
+        val candidates = (remoteUrls + imageUrls).map { url -> url.normalizedRemoteAssetUrl() }
+
+        return candidates.firstOrNull { url -> url.isPlatformProfileImageUrl(platform) }
+    }
+
+    private fun buildMedia(
+        platform: SocialPlatform,
+        imageUrls: List<String>,
+        videoUrls: List<String>,
+        remoteUrls: List<String>,
+        authorAvatarUrl: String?,
+    ): List<PostMedia> {
+        val postImageVariants =
+            (imageUrls + remoteUrls)
+                .map { url -> url.normalizedRemoteAssetUrl() }
+                .filter { url -> url.isPlatformImageAssetUrl(platform) }
+                .filterNot { url -> url.sameRemoteAssetAs(authorAvatarUrl) }
+                .filterNot { url -> url.isPlatformProfileImageUrl(platform) }
+                .groupBy { url -> url.remoteAssetIdentity() }
+                .values
+                .map { variants ->
+                    variants
+                        .distinct()
+                        .sortedWith(
+                            compareByDescending<String> { url -> url.remoteAssetScore(platform) }
+                                .thenByDescending { url -> url.length },
+                        )
+                }
+                .sortedByDescending { variants -> variants.firstOrNull()?.remoteAssetScore(platform) ?: 0 }
+                .take(4)
+                .toList()
+        val videos =
+            videoUrls
+                .map { url -> url.normalizedRemoteAssetUrl() }
+                .filter { url -> url.isPlatformVideoAssetUrl(platform) }
+                .distinctBy { url -> url.remoteAssetIdentity() }
+                .take(4)
+                .toList()
+
+        if (videos.isNotEmpty()) {
+            val video =
+                PostMedia.Video(
+                    variants = videos,
+                    url = videos.firstOrNull { url -> ".mp4" in url.lowercase() } ?: videos.firstOrNull(),
+                    posterUrl = postImageVariants.firstOrNull()?.firstOrNull(),
+                )
+            val remainingImages =
+                postImageVariants
+                    .drop(1)
+                    .mapNotNull { variants ->
+                        val primaryUrl = variants.firstOrNull() ?: return@mapNotNull null
+                        PostMedia.Image(
+                            url = primaryUrl,
+                            variants = variants.drop(1),
+                        )
+                    }
+
+            return (listOf(video) + remainingImages).take(4)
+        }
+
+        return postImageVariants.mapNotNull { variants ->
+            val primaryUrl = variants.firstOrNull() ?: return@mapNotNull null
+            PostMedia.Image(
+                url = primaryUrl,
+                variants = variants.drop(1),
+            )
+        }
+    }
+
+    private fun extractStructuredMedia(
+        platform: SocialPlatform,
+        html: String,
+        sourceUrl: String,
+        canonicalUrl: String?,
+        authorAvatarUrl: String?,
+    ): List<PostMedia> {
+        if (platform != SocialPlatform.Threads) {
+            return emptyList()
+        }
+
+        val postCode = sourceUrl.threadsPostCode() ?: canonicalUrl.threadsPostCode() ?: return emptyList()
+        return html
+            .extractJsonScripts()
+            .flatMap { root -> root.findObjects { value -> value.optionalString("code") == postCode } }
+            .map { post -> post.toThreadsStructuredMedia(authorAvatarUrl) }
+            .filter { media -> media.isNotEmpty() }
+            .maxByOrNull { media -> media.size }
+            ?.take(4)
+            .orEmpty()
+    }
+
+    private fun String.extractJsonScripts(): List<JSONObject> =
+        jsonScriptPattern
+            .findAll(this)
+            .mapNotNull { match ->
+                runCatching { JSONObject(match.groupValues[2]) }.getOrNull()
+            }
+            .toList()
+
+    private fun JSONObject.findObjects(predicate: (JSONObject) -> Boolean): List<JSONObject> {
+        val matches = mutableListOf<JSONObject>()
+        visitJsonObjects { value ->
+            if (predicate(value)) {
+                matches += value
+            }
+        }
+        return matches
+    }
+
+    private fun JSONObject.visitJsonObjects(visitor: (JSONObject) -> Unit) {
+        visitor(this)
+        val keys = keys()
+        while (keys.hasNext()) {
+            when (val child = get(keys.next())) {
+                is JSONObject -> child.visitJsonObjects(visitor)
+                is JSONArray -> child.visitJsonObjects(visitor)
+            }
+        }
+    }
+
+    private fun JSONArray.visitJsonObjects(visitor: (JSONObject) -> Unit) {
+        for (index in 0 until length()) {
+            when (val child = get(index)) {
+                is JSONObject -> child.visitJsonObjects(visitor)
+                is JSONArray -> child.visitJsonObjects(visitor)
+            }
+        }
+    }
+
+    private fun JSONObject.toThreadsStructuredMedia(authorAvatarUrl: String?): List<PostMedia> {
+        val mediaObjects =
+            optionalArray("carousel_media")
+                ?.jsonObjects()
+                ?.takeIf { media -> media.isNotEmpty() }
+                ?: listOf(this)
+
+        return mediaObjects
+            .mapNotNull { media -> media.toThreadsStructuredMediaItem(authorAvatarUrl) }
+            .take(4)
+    }
+
+    private fun JSONObject.toThreadsStructuredMediaItem(authorAvatarUrl: String?): PostMedia? {
+        val alt = optionalString("accessibility_caption")
+        val imageVariants =
+            optionalObject("image_versions2")
+                ?.optionalArray("candidates")
+                .threadImageCandidateUrls(authorAvatarUrl)
+        val videoVariants =
+            optionalArray("video_versions")
+                .threadVideoCandidateUrls()
+
+        return if (videoVariants.isNotEmpty()) {
+            PostMedia.Video(
+                variants = videoVariants,
+                url = videoVariants.firstOrNull { url -> ".mp4" in url.lowercase() } ?: videoVariants.firstOrNull(),
+                posterUrl = imageVariants.firstOrNull(),
+                alt = alt,
+            )
+        } else {
+            val primaryUrl = imageVariants.firstOrNull() ?: return null
+            PostMedia.Image(
+                url = primaryUrl,
+                variants = imageVariants.drop(1),
+                alt = alt,
+            )
+        }
+    }
+
+    private fun JSONArray?.threadImageCandidateUrls(authorAvatarUrl: String?): List<String> {
+        if (this == null) {
+            return emptyList()
+        }
+
+        return jsonObjects()
+            .mapNotNull { candidate -> candidate.optionalString("url") }
+            .map { url -> url.normalizedRemoteAssetUrl() }
+            .filter { url -> url.isPlatformImageAssetUrl(SocialPlatform.Threads) }
+            .filterNot { url -> url.sameRemoteAssetAs(authorAvatarUrl) }
+            .filterNot { url -> url.isPlatformProfileImageUrl(SocialPlatform.Threads) }
+            .distinct()
+    }
+
+    private fun JSONArray?.threadVideoCandidateUrls(): List<String> {
+        if (this == null) {
+            return emptyList()
+        }
+
+        return jsonObjects()
+            .mapNotNull { candidate -> candidate.optionalString("url") }
+            .map { url -> url.normalizedRemoteAssetUrl() }
+            .filter { url -> url.isPlatformVideoAssetUrl(SocialPlatform.Threads) }
+            .distinct()
+    }
+
+    private fun JSONArray.jsonObjects(): List<JSONObject> =
+        List(length()) { index -> runCatching { getJSONObject(index) }.getOrNull() }.filterNotNull()
+
+    private fun JSONObject.optionalObject(name: String): JSONObject? =
+        if (has(name) && !isNull(name)) runCatching { getJSONObject(name) }.getOrNull() else null
+
+    private fun JSONObject.optionalArray(name: String): JSONArray? =
+        if (has(name) && !isNull(name)) runCatching { getJSONArray(name) }.getOrNull() else null
+
+    private fun JSONObject.optionalString(name: String): String? =
+        if (has(name) && !isNull(name)) getString(name).takeIf { value -> value.isNotBlank() } else null
+
+    private data class OpenGraphTitleMetadata(
+        val authorName: String? = null,
+        val authorHandle: String? = null,
+        val content: String? = null,
+    )
 }
 
 class XPostEnrichmentAdapter {
@@ -577,6 +1048,61 @@ private fun String.toAuthorHandle(): String? {
     return "@$handle"
 }
 
+private fun String?.toPlatformAuthorHandle(platform: SocialPlatform): String? {
+    if (isNullOrBlank()) {
+        return null
+    }
+
+    val uri = runCatching { URI(this) }.getOrNull() ?: return null
+    val segments = uri.path.split("/").filter { it.isNotBlank() }
+
+    return when (platform) {
+        SocialPlatform.Threads ->
+            segments
+                .firstOrNull()
+                ?.removePrefix("@")
+                ?.displayTextOrNull()
+                ?.let { handle -> "@$handle" }
+
+        SocialPlatform.LinkedIn -> {
+            val handleRootIndex =
+                segments.indexOfFirst { segment ->
+                    segment.equals("in", ignoreCase = true) ||
+                        segment.equals("company", ignoreCase = true) ||
+                        segment.equals("school", ignoreCase = true)
+                }
+            if (handleRootIndex == -1) {
+                return null
+            }
+
+            segments
+                .getOrNull(handleRootIndex + 1)
+                ?.displayTextOrNull()
+                ?.let { handle -> "@$handle" }
+        }
+
+        SocialPlatform.Facebook ->
+            segments
+                .firstOrNull { segment -> !segment.isReservedFacebookPathSegment() }
+                ?.displayTextOrNull()
+                ?.let { handle -> "@$handle" }
+
+        else -> null
+    }
+}
+
+private fun String?.threadsPostCode(): String? {
+    if (isNullOrBlank()) {
+        return null
+    }
+
+    val path = runCatching { URI(this).path }.getOrNull() ?: return null
+    val segments = path.split("/").filter { segment -> segment.isNotBlank() }
+    val postIndex = segments.indexOfFirst { segment -> segment.equals("post", ignoreCase = true) }
+
+    return segments.getOrNull(postIndex + 1)?.displayTextOrNull()
+}
+
 private fun String.statusId(): String? {
     val path = runCatching { URI(this).path }.getOrNull() ?: return null
     val segments = path.split("/").filter { it.isNotBlank() }
@@ -708,6 +1234,182 @@ private fun String.isReservedXPathSegment(): Boolean {
             "messages",
             "search",
         )
+}
+
+private fun String.isReservedFacebookPathSegment(): Boolean {
+    return lowercase() in
+        setOf(
+            "permalink.php",
+            "story.php",
+            "photo.php",
+            "watch",
+            "groups",
+            "share",
+            "reel",
+            "reels",
+            "events",
+            "pages",
+            "profile.php",
+        )
+}
+
+private fun String.isLikelyProfileImageUrl(): Boolean {
+    val value = lowercase()
+
+    return "profile_pic" in value ||
+        "profile_images" in value ||
+        "avatar" in value
+}
+
+private fun String.normalizedRemoteAssetUrl(): String {
+    return trim()
+        .trimEnd('\\', '"', '\'', ',', ';', ')', ']', '}')
+        .replace("\\/", "/")
+        .replace("\\u002F", "/")
+        .replace("\\u0026", "&")
+        .replace("\\u003D", "=")
+        .decodeHtmlEntities()
+}
+
+private fun String.remoteAssetIdentity(): String {
+    val normalized = normalizedRemoteAssetUrl()
+    val path = runCatching { URI(normalized).path }.getOrNull()
+    val fileName = path?.substringAfterLast("/")?.takeIf { it.isNotBlank() }
+
+    return fileName ?: normalized.substringBefore("?")
+}
+
+private fun String.remoteAssetScore(platform: SocialPlatform): Int {
+    val value = lowercase()
+    val dimensions =
+        Regex("""[sp](\d+)x(\d+)""")
+            .findAll(value)
+            .mapNotNull { match ->
+                val width = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                val height = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                width * height
+            }
+            .maxOrNull()
+            ?: 0
+    val signatureScore =
+        when (platform) {
+            SocialPlatform.Threads ->
+                (if ("oh=" in value) 1_000_000_000 else 0) +
+                    (if ("oe=" in value) 100_000_000 else 0) +
+                    (if ("ccb=" in value) 10_000_000 else 0)
+
+            else -> 0
+        }
+
+    return signatureScore + dimensions.coerceAtMost(9_000_000)
+}
+
+private fun String.sameRemoteAssetAs(other: String?): Boolean {
+    return !other.isNullOrBlank() && remoteAssetIdentity() == other.remoteAssetIdentity()
+}
+
+private fun String.isPlatformImageAssetUrl(platform: SocialPlatform): Boolean {
+    val value = lowercase()
+
+    if (!value.isPlatformAssetHost(platform) || value.isStaticPlatformAssetUrl(platform)) {
+        return false
+    }
+
+    return when (platform) {
+        SocialPlatform.Threads ->
+            Regex("""\.(?:jpg|jpeg|png|webp)(?:[?#]|$)""").containsMatchIn(value) ||
+                "/t51." in value
+
+        SocialPlatform.LinkedIn ->
+            Regex("""\.(?:jpg|jpeg|png|webp)(?:[?#]|$)""").containsMatchIn(value) ||
+                "/dms/image/" in value
+
+        SocialPlatform.Facebook ->
+            Regex("""\.(?:jpg|jpeg|png|webp)(?:[?#]|$)""").containsMatchIn(value) ||
+                "/lookaside/" in value ||
+                "/v/t" in value
+
+        else -> false
+    }
+}
+
+private fun String.isPlatformVideoAssetUrl(platform: SocialPlatform): Boolean {
+    val value = lowercase()
+
+    return value.isPlatformAssetHost(platform) &&
+        (".mp4" in value || ".m3u8" in value)
+}
+
+private fun String.isPlatformProfileImageUrl(platform: SocialPlatform): Boolean {
+    val value = lowercase()
+
+    return when (platform) {
+        SocialPlatform.Threads ->
+            "/t51.82787-19/" in value ||
+                "/t51.2885-19/" in value ||
+                "profile_pic" in value ||
+                "profilepic" in value ||
+                value.isLikelyProfileImageUrl()
+
+        SocialPlatform.LinkedIn ->
+            "profile-displayphoto" in value ||
+                "profile-framedphoto" in value ||
+                "member-photo" in value ||
+                value.isLikelyProfileImageUrl()
+
+        SocialPlatform.Facebook ->
+            "profile_pic" in value ||
+                "profilepic" in value ||
+                "/t39.30808-1/" in value ||
+                "/t1.6435-1/" in value ||
+                value.isLikelyProfileImageUrl()
+
+        else -> false
+    }
+}
+
+private fun String.isPlatformAssetHost(platform: SocialPlatform): Boolean {
+    val value = lowercase()
+
+    return when (platform) {
+        SocialPlatform.Threads ->
+            "cdninstagram.com" in value ||
+                "fbcdn.net" in value ||
+                "scontent" in value
+
+        SocialPlatform.LinkedIn ->
+            "media.licdn.com" in value ||
+                "media-exp" in value ||
+                "licdn.com/dms/image/" in value
+
+        SocialPlatform.Facebook ->
+            "fbcdn.net" in value ||
+                "fbsbx.com" in value ||
+                "scontent" in value ||
+                "lookaside.facebook.com" in value ||
+                "lookaside.fbsbx.com" in value
+
+        else -> false
+    }
+}
+
+private fun String.isStaticPlatformAssetUrl(platform: SocialPlatform): Boolean {
+    val value = lowercase()
+
+    return when (platform) {
+        SocialPlatform.Threads ->
+            "static.cdninstagram.com/rsrc.php" in value
+
+        SocialPlatform.LinkedIn ->
+            "static.licdn.com" in value ||
+                "/sc/h/" in value
+
+        SocialPlatform.Facebook ->
+            "static.xx.fbcdn.net/rsrc.php" in value ||
+                "/rsrc.php/" in value
+
+        else -> false
+    }
 }
 
 private const val MaxMediaStatusAnchorDistance = 80_000
@@ -851,7 +1553,7 @@ private fun List<PostMedia>.withoutMediaAlreadyOwnedBy(ownedMedia: List<PostMedi
 
 private fun PostMedia.mediaKeys(): List<String> {
     return when (this) {
-        is PostMedia.Image -> listOf(url.mediaIdentity())
+        is PostMedia.Image -> (listOf(url) + variants).map { value -> value.mediaIdentity() }
         is PostMedia.Video -> (listOfNotNull(posterUrl, url) + variants)
             .map { value -> value.mediaIdentity() }
     }

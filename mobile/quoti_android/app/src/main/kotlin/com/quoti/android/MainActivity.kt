@@ -90,8 +90,17 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun IncomingShareDraft.shouldWaitForEnrichment(): Boolean {
-    return post.platform == SocialPlatform.X &&
-        (missingFields.contains(IncomingShareMissingField.Content) || post.sourceUrl.isXStatusUrl())
+    return when (post.platform) {
+        SocialPlatform.X ->
+            missingFields.contains(IncomingShareMissingField.Content) || post.sourceUrl.isXStatusUrl()
+
+        SocialPlatform.Threads,
+        SocialPlatform.LinkedIn,
+        SocialPlatform.Facebook ->
+            missingFields.contains(IncomingShareMissingField.Content) && post.sourceUrl != null
+
+        else -> false
+    }
 }
 
 private fun IncomingShareDraft.toShareState(): QuotiShareState {

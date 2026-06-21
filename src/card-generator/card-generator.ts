@@ -20,5 +20,6 @@ const platformLabels = {
   x: "X",
   threads: "Threads",
   bluesky: "Bluesky",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  facebook: "Facebook"
 } satisfies Record<SocialPlatform, string>;

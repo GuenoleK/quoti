@@ -36,6 +36,10 @@
 }
 
 article:hover .quoti-inline-button,
+[role="article"]:hover .quoti-inline-button,
+.feed-shared-update-v2:hover .quoti-inline-button,
+[data-urn^="urn:li:activity"]:hover .quoti-inline-button,
+[data-pagelet^="FeedUnit_"]:hover .quoti-inline-button,
 .quoti-inline-button:focus-visible {
   opacity: 1;
   pointer-events: auto;

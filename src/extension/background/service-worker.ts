@@ -3,6 +3,21 @@ import type { ExtractedPost, PostMedia, VideoPostMedia } from "../../shared/type
 import { latestPostStorageKey, readQuotiSettings } from "../../shared/settings/quoti-settings";
 
 const contextMenuId = "quoti-create-card";
+const supportedDocumentUrlPatterns = [
+  "https://x.com/*",
+  "https://twitter.com/*",
+  "https://threads.com/*",
+  "https://www.threads.com/*",
+  "https://threads.net/*",
+  "https://www.threads.net/*",
+  "https://linkedin.com/*",
+  "https://www.linkedin.com/*",
+  "https://facebook.com/*",
+  "https://www.facebook.com/*",
+  "https://web.facebook.com/*",
+  "https://m.facebook.com/*",
+  "https://fb.watch/*"
+];
 const observedVideoUrlsStorageKey = "quoti-observed-video-urls";
 const hydratedRelatedPostsStorageKey = "quoti-hydrated-related-posts";
 const maxCachedVideoUrlsPerTab = 80;
@@ -103,7 +118,7 @@ async function syncContextMenu(): Promise<void> {
     id: contextMenuId,
     title: "Create Quoti card",
     contexts: ["page", "selection", "link", "image", "video"],
-    documentUrlPatterns: ["https://x.com/*", "https://twitter.com/*"]
+    documentUrlPatterns: supportedDocumentUrlPatterns
   });
 }
 

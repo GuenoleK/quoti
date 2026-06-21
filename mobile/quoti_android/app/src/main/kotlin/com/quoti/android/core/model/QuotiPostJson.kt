@@ -65,6 +65,7 @@ private fun PostMedia.toJson(): JSONObject =
             JSONObject()
                 .put("type", "image")
                 .put("url", url)
+                .put("variants", JSONArray(variants))
                 .putOptional("alt", alt)
 
         is PostMedia.Video ->
@@ -90,6 +91,7 @@ private fun JSONObject.toPostMedia(): PostMedia =
         "image" ->
             PostMedia.Image(
                 url = getString("url"),
+                variants = optionalArray("variants").toStringList(),
                 alt = optionalString("alt"),
             )
 

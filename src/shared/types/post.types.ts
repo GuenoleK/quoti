@@ -1,4 +1,4 @@
-export type SocialPlatform = "x" | "threads" | "bluesky" | "linkedin";
+export type SocialPlatform = "x" | "threads" | "bluesky" | "linkedin" | "facebook";
 
 export type CardTheme = "light" | "dark";
 export type CardContentMode = "text-only" | "with-media";

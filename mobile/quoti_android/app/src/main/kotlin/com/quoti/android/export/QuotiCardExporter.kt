@@ -274,13 +274,19 @@ object QuotiCardExporter {
             .exportMediaSources()
             .take(4)
             .mapNotNull { source ->
-                fetchRemoteBitmap(source.url)?.let { bitmap ->
+                fetchFirstRemoteBitmap(source.imageUrls)?.let { bitmap ->
                     ExportMediaBitmap(
                         bitmap = bitmap,
                         isVideo = source.isVideo,
                     )
                 }
             }
+    }
+
+    private suspend fun fetchFirstRemoteBitmap(imageUrls: List<String>): Bitmap? {
+        return imageUrls
+            .distinct()
+            .firstNotNullOfOrNull { url -> fetchRemoteBitmap(url) }
     }
 
     private suspend fun fetchRemoteBitmap(imageUrl: String): Bitmap? =
@@ -292,6 +298,8 @@ object QuotiCardExporter {
                     connection.connectTimeout = 5_000
                     connection.readTimeout = 7_000
                     connection.setRequestProperty("User-Agent", "Quoti Android")
+                    connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+                    connection.setRequestProperty("Referer", "https://www.threads.com/")
 
                     if (connection.responseCode !in 200..299) {
                         return@runCatching null
@@ -813,7 +821,7 @@ private suspend fun List<ExportMediaSource>.toVideoMediaSlots(
             ExportVideoMediaSlot.DynamicVideo
         } else {
             ExportVideoMediaSlot.StaticBitmap(
-                bitmap = fetchBitmap(source.url),
+                bitmap = source.imageUrls.firstNotNullOfOrNull { url -> fetchBitmap(url) },
                 isVideo = source.isVideo,
             )
         }
@@ -3247,6 +3255,7 @@ private data class ExportVideoMediaSlots(
 private data class ExportMediaSource(
     val sourceId: String,
     val url: String,
+    val imageUrls: List<String> = listOf(url),
     val isVideo: Boolean,
     val playableVideoUrl: String? = null,
 )
@@ -3295,6 +3304,7 @@ private fun PostMedia.exportSource(): ExportMediaSource? {
             ExportMediaSource(
                 sourceId = url,
                 url = url,
+                imageUrls = (listOf(url) + variants).distinct(),
                 isVideo = false,
             )
 

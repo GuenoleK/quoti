@@ -1657,8 +1657,9 @@ private fun GalleryGridTile(
 ) {
     val onClick = if (selectionMode) onToggleSelection else onOpen
     val previewSource = remember(post) { post.galleryPreviewSource() }
-    val bitmap by produceState<Bitmap?>(initialValue = null, previewSource?.url) {
-        value = previewSource?.url?.let { url -> loadRemoteBitmap(url) }
+    val previewKey = previewSource?.urls?.joinToString("|")
+    val bitmap by produceState<Bitmap?>(initialValue = null, previewKey) {
+        value = previewSource?.urls?.let { urls -> loadFirstRemoteBitmap(urls) }
     }
     val shape = RoundedCornerShape(26.dp)
     val borderColor by animateColorAsState(
@@ -1921,8 +1922,9 @@ private fun GalleryPostThumbnail(
     selectionMode: Boolean,
 ) {
     val previewSource = remember(post) { post.galleryPreviewSource() }
-    val bitmap by produceState<Bitmap?>(initialValue = null, previewSource?.url) {
-        value = previewSource?.url?.let { url -> loadRemoteBitmap(url) }
+    val previewKey = previewSource?.urls?.joinToString("|")
+    val bitmap by produceState<Bitmap?>(initialValue = null, previewKey) {
+        value = previewSource?.urls?.let { urls -> loadFirstRemoteBitmap(urls) }
     }
     val shape = RoundedCornerShape(22.dp)
     Surface(
@@ -2412,9 +2414,18 @@ private fun PlatformBadge(
     contentColor: Color,
 ) {
     Box(contentAlignment = Alignment.Center) {
-        if (platform == SocialPlatform.X) {
+        val logoResource =
+            when (platform) {
+                SocialPlatform.X -> R.drawable.ic_x_logo
+                SocialPlatform.Threads -> R.drawable.ic_threads_logo
+                SocialPlatform.LinkedIn -> R.drawable.ic_linkedin_logo
+                SocialPlatform.Facebook -> R.drawable.ic_facebook_logo
+                else -> null
+            }
+
+        if (logoResource != null) {
             Icon(
-                painter = painterResource(id = R.drawable.ic_x_logo),
+                painter = painterResource(id = logoResource),
                 contentDescription = platform.label,
                 modifier = Modifier.size(17.dp),
                 tint = contentColor,
@@ -2554,7 +2565,7 @@ private fun RemoteMedia(
     modifier: Modifier = Modifier,
 ) {
     val sources = media.mapNotNull(PostMedia::previewSource).take(4)
-    val mediaKey = sources.joinToString("|") { source -> "${source.sourceId}:${source.url}" }
+    val mediaKey = sources.joinToString("|") { source -> "${source.sourceId}:${source.urls.joinToString(",")}" }
     if (sources.isEmpty()) {
         MediaPlaceholder(
             contentColor = contentColor,
@@ -2573,7 +2584,7 @@ private fun RemoteMedia(
         value =
             RemoteMediaLoadState.Ready(
                 sources.mapNotNull { source ->
-                    val bitmap = loadRemoteBitmap(source.url)
+                    val bitmap = loadFirstRemoteBitmap(source.urls)
                     if (bitmap != null || source.playableVideoUrl != null) {
                         LoadedRemoteMedia(
                             sourceId = source.sourceId,
@@ -3001,7 +3012,7 @@ private fun LoadedRemoteMedia.toMediaViewerRequest(): MediaViewerRequest =
 
 private data class MediaPreviewSource(
     val sourceId: String,
-    val url: String,
+    val urls: List<String>,
     val isVideo: Boolean,
     val playableVideoUrl: String? = null,
 )
@@ -3011,7 +3022,7 @@ private fun PostMedia.previewSource(): MediaPreviewSource? {
         is PostMedia.Image ->
             MediaPreviewSource(
                 sourceId = url,
-                url = url,
+                urls = (listOf(url) + variants).distinct(),
                 isVideo = false,
             )
 
@@ -3021,7 +3032,7 @@ private fun PostMedia.previewSource(): MediaPreviewSource? {
                 ?.let { previewUrl ->
                     MediaPreviewSource(
                         sourceId = playableUrl ?: previewUrl,
-                        url = previewUrl,
+                        urls = listOf(previewUrl),
                         isVideo = true,
                         playableVideoUrl = playableUrl,
                     )
@@ -3694,6 +3705,12 @@ private val QuotiExportType.failedSnackbarMessage: String
             QuotiExportType.Video -> "Unable to export video"
         }
 
+private suspend fun loadFirstRemoteBitmap(imageUrls: List<String>): Bitmap? {
+    return imageUrls
+        .distinct()
+        .firstNotNullOfOrNull { url -> loadRemoteBitmap(url) }
+}
+
 private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
     withContext(Dispatchers.IO) {
         runCatching {
@@ -3703,6 +3720,8 @@ private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
                 connection.connectTimeout = 5_000
                 connection.readTimeout = 7_000
                 connection.setRequestProperty("User-Agent", "Quoti Android")
+                connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+                connection.setRequestProperty("Referer", "https://www.threads.com/")
 
                 if (connection.responseCode !in 200..299) {
                     return@runCatching null

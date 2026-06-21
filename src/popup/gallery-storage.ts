@@ -231,7 +231,7 @@ function isExtractedPost(value: unknown): value is ExtractedPost {
 }
 
 function isSocialPlatform(value: unknown): value is SocialPlatform {
-  return value === "x" || value === "threads" || value === "bluesky" || value === "linkedin";
+  return value === "x" || value === "threads" || value === "bluesky" || value === "linkedin" || value === "facebook";
 }
 
 function isCardTheme(value: unknown): value is CardTheme {

@@ -28,11 +28,25 @@
     "type": "module"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; img-src 'self' data: https://pbs.twimg.com https://abs.twimg.com https://images.unsplash.com; media-src 'self' blob: https://video.twimg.com; connect-src 'self' https://video.twimg.com https://pbs.twimg.com https://abs.twimg.com https://images.unsplash.com http://127.0.0.1:* http://localhost:*;"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; img-src 'self' data: https:; media-src 'self' blob: https:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*;"
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://threads.com/*",
+        "https://www.threads.com/*",
+        "https://threads.net/*",
+        "https://www.threads.net/*",
+        "https://linkedin.com/*",
+        "https://www.linkedin.com/*",
+        "https://facebook.com/*",
+        "https://www.facebook.com/*",
+        "https://web.facebook.com/*",
+        "https://m.facebook.com/*",
+        "https://fb.watch/*"
+      ],
       "js": ["content-script.js"],
       "css": ["assets/content-script.css"],
       "run_at": "document_idle"
@@ -41,9 +55,23 @@
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
+    "https://threads.com/*",
+    "https://www.threads.com/*",
+    "https://threads.net/*",
+    "https://www.threads.net/*",
+    "https://linkedin.com/*",
+    "https://www.linkedin.com/*",
+    "https://facebook.com/*",
+    "https://www.facebook.com/*",
+    "https://web.facebook.com/*",
+    "https://m.facebook.com/*",
+    "https://fb.watch/*",
     "https://pbs.twimg.com/*",
     "https://abs.twimg.com/*",
     "https://video.twimg.com/*",
+    "https://*.fbcdn.net/*",
+    "https://*.cdninstagram.com/*",
+    "https://media.licdn.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

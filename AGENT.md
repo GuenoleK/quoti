@@ -60,4 +60,6 @@ Current repo-owned Quoti skills:
 - skills/quoti/quoti-commit-push/
 - skills/quoti/quoti-release-package/
 
+When the user asks to commit, push, or commit and push, read and follow `skills/quoti/quoti-commit-push/SKILL.md` before staging, committing, or pushing.
+
 Always follow the instructions defined in these documents.

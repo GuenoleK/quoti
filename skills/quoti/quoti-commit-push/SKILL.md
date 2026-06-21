@@ -1,6 +1,6 @@
 ---
 name: quoti-commit-push
-description: Commit and push changes in the Quoti repository with the project's scope-based commit message conventions, relevant verification commands, existing unpushed commit checks, and workspace cleanup rules. Use when the user asks Codex to commit, push, or commit and push work in this repo.
+description: Commit and push changes in the Quoti repository with mandatory English commit messages prefixed by Android, Extension, or Android + Extension, plus relevant verification commands, existing unpushed commit checks, and workspace cleanup rules. Use when the user asks Codex to commit, push, or commit and push work in this repo.
 ---
 
 # Quoti Commit Push
@@ -19,29 +19,29 @@ If local commits are already ahead of the remote, identify them before pushing. 
 
 2. Classify the change by touched surface:
 
-- Android app only: files under `mobile/quoti_android/`, Android app docs, Android fixtures, or release metadata.
-- Extension only: files under `src/`, `public/`, extension HTML entrypoints, browser-extension docs, or generated extension assets.
-- Mobile and extension together: meaningful product/runtime changes in both Android and extension surfaces.
-- Repo workflow/docs only: skills, agent instructions, or documentation that does not primarily change Android or extension behavior.
+- Android: files under `mobile/quoti_android/`, Android app docs, Android fixtures, or Android release metadata.
+- Extension: files under `src/`, `public/`, extension HTML entrypoints, browser-extension docs, generated extension assets, or extension release metadata.
+- Android + Extension: meaningful changes across both Android and extension surfaces, or shared repository workflow/docs changes that govern both surfaces.
 
-Supporting docs, skills, tests, or version bumps follow the main product surface. For example, an Android exporter fix plus a repo skill should still use the Android app convention.
+Supporting docs, skills, tests, or version bumps follow the main product surface. For example, an Android exporter fix plus a repo skill should still use the Android prefix.
 
-3. Choose the commit message convention from recent history:
+3. Choose the commit message convention from the required project format:
 
-- Android app: `Android app : <concise change>`
-- Extension: `Extension : <concise change>`
-- Both mobile and extension: `Mobile/Extension : <concise change>`
-- Repo workflow/docs only: use a concise sentence without a product prefix unless recent history shows a better local pattern.
+- Android: `Android: <concise English change>`
+- Extension: `Extension: <concise English change>`
+- Android + Extension: `Android + Extension: <concise English change>`
 
-Prefer lowercase after the colon when it reads naturally, matching recent commits such as:
+The prefix is mandatory. Do not use unprefixed commit subjects for Quoti commits. Do not replace these prefixes with older variants such as `Android app`, `Mobile/Extension`, or repo-only subjects.
+
+Prefer a short, imperative or descriptive English message after the colon:
 
 ```text
-Android app : reduce video source size for exports
-Extension : handle media-only captured posts
-Mobile/Extension : refine app icons
+Android: reduce video source size for exports
+Extension: wrap long card links
+Android + Extension: refine shared fixtures
 ```
 
-Always re-check recent commit subjects before committing; the log is the source of truth when conventions drift.
+Review recent commit subjects for wording style only. The prefix rule above remains the source of truth even when older commits differ.
 
 4. Run relevant verification before committing:
 

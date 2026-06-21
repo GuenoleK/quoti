@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.util.LruCache
 import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -42,13 +43,16 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -128,6 +132,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -135,20 +141,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -219,30 +220,38 @@ private val GalleryPinnedHeaderReservedHeight = 108.dp
 private val GalleryTopEdgeFadeHeight = 96.dp
 private val GalleryBottomEdgeFadeHeight = 132.dp
 private val GalleryBottomSearchReservedHeight = 124.dp
+private val GallerySearchKeyboardGap = 8.dp
+private val GallerySearchRestingBottomPadding = 18.dp
+private val GallerySearchFocusScrimHeight = 196.dp
 private val GalleryFilterTabHeight = 44.dp
 private val GalleryTopGlassBleed = 32.dp
+private const val GalleryPreviewBitmapMaxDimension = 512
+private const val GalleryPreviewBitmapCacheMaxBytes = 12 * 1024 * 1024
 
-private fun Modifier.galleryTopGlassMask(): Modifier =
-    graphicsLayer {
-        compositingStrategy = CompositingStrategy.Offscreen
-    }.drawWithContent {
-        drawContent()
-        drawRect(
-            brush =
-                Brush.verticalGradient(
-                    colorStops =
-                        arrayOf(
-                            0f to Color.Transparent,
-                            0.36f to Color.Transparent,
-                            0.54f to Color.Black.copy(alpha = 0.28f),
-                            0.68f to Color.Black.copy(alpha = 0.38f),
-                            0.88f to Color.Black.copy(alpha = 0.1f),
-                            1f to Color.Transparent,
-                        ),
-                ),
-            blendMode = BlendMode.DstIn,
-        )
+private object GalleryPreviewBitmapCache {
+    private val cache =
+        object : LruCache<String, Bitmap>(GalleryPreviewBitmapCacheMaxBytes) {
+            override fun sizeOf(
+                key: String,
+                value: Bitmap,
+            ): Int {
+                return value.allocationByteCount
+            }
+        }
+
+    @Synchronized
+    fun get(key: String): Bitmap? {
+        return cache.get(key)?.takeUnless { bitmap -> bitmap.isRecycled }
     }
+
+    @Synchronized
+    fun put(
+        key: String,
+        bitmap: Bitmap,
+    ) {
+        cache.put(key, bitmap)
+    }
+}
 
 private enum class GalleryLayoutMode {
     Grid,
@@ -349,9 +358,25 @@ fun QuotiApp(
             contentMode = contentMode,
             sourceActionsEnabled = sourceActionsEnabled,
         )
+    val incomingShareKey =
+        when (shareState) {
+            QuotiShareState.Empty -> null
+            is QuotiShareState.Loading -> shareState.sourceUrl
+            is QuotiShareState.Ready -> shareState.draft.post.sourceUrl ?: shareState.draft.rawText
+        }
     val incomingPost = (shareState as? QuotiShareState.Ready)?.draft?.post
     val displayedShareState = galleryDraft?.let(QuotiShareState::Ready) ?: shareState
     val post = (displayedShareState as? QuotiShareState.Ready)?.draft?.post
+
+    LaunchedEffect(incomingShareKey) {
+        if (incomingShareKey == null) {
+            return@LaunchedEffect
+        }
+
+        galleryDraft = null
+        focusManager.clearFocus(force = true)
+        showGallery = false
+    }
 
     LaunchedEffect(post?.id) {
         pendingVideoExportPost = null
@@ -752,8 +777,8 @@ private fun QuotiSwipePager(
         val pageWidthPx = with(density) { maxWidth.toPx() }
         val commitThresholdPx = with(density) { GallerySwipeCommitThreshold.toPx() }
         var isDragging by remember { mutableStateOf(false) }
-        var settleVersion by remember { mutableStateOf(0) }
-        var pagerOffsetPx by remember { mutableStateOf(if (showGallery) -pageWidthPx else 0f) }
+        var settleVersion by remember { mutableIntStateOf(0) }
+        var pagerOffsetPx by remember { mutableFloatStateOf(if (showGallery) -pageWidthPx else 0f) }
         val settledOffsetPx = if (showGallery) -pageWidthPx else 0f
 
         LaunchedEffect(showGallery, pageWidthPx, settleVersion) {
@@ -1256,8 +1281,15 @@ private fun QuotiGalleryScreen(
     var selectionMode by remember { mutableStateOf(false) }
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
     var visibleCount by rememberSaveable(query, selectedFilter, posts.size) { mutableStateOf(GalleryPageSize) }
+    var searchFocused by remember { mutableStateOf(false) }
+    var searchImeWasVisible by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val galleryFocusManager = LocalFocusManager.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val navigationBottomPx = WindowInsets.navigationBars.getBottom(density)
+    val searchImeVisible = imeBottomPx > navigationBottomPx
+    val searchActive = searchFocused && searchImeVisible
     val listState = rememberLazyListState()
-    val topGlassListState = rememberLazyListState()
     val availableKeys = remember(posts) { posts.map { post -> post.galleryKey }.toSet() }
     val queryMatchedPosts =
         remember(posts, query) {
@@ -1303,13 +1335,24 @@ private fun QuotiGalleryScreen(
             bottom = GalleryBottomSearchReservedHeight,
         )
     val topGlassHeight = GalleryTopEdgeFadeHeight + statusBarPadding + GalleryTopGlassBleed
-    val galleryGlassContentPadding =
-        PaddingValues(
-            start = 20.dp,
-            top = GalleryPinnedHeaderReservedHeight + statusBarPadding + GalleryTopGlassBleed,
-            end = 20.dp,
-            bottom = GalleryBottomSearchReservedHeight,
-        )
+    val searchBottomPadding =
+        if (searchActive) {
+            GallerySearchKeyboardGap
+        } else {
+            GallerySearchRestingBottomPadding
+        }
+    val searchKeyboardOffset =
+        if (searchActive) {
+            bottomContentPadding
+        } else {
+            0.dp
+        }
+    val searchInsetsModifier =
+        if (searchActive) {
+            Modifier.imePadding()
+        } else {
+            Modifier.navigationBarsPadding()
+        }
 
     fun toggleSelection(post: QuotiPost) {
         val key = post.galleryKey
@@ -1457,11 +1500,15 @@ private fun QuotiGalleryScreen(
 
     BackHandler(enabled = backHandlerEnabled, onBack = onBack)
 
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-            .collect { (index, offset) ->
-                topGlassListState.scrollToItem(index, offset)
+    LaunchedEffect(searchFocused, searchImeVisible) {
+        if (searchImeVisible) {
+            searchImeWasVisible = true
+        } else if (searchImeWasVisible) {
+            searchImeWasVisible = false
+            if (searchFocused) {
+                galleryFocusManager.clearFocus(force = true)
             }
+        }
     }
 
     LaunchedEffect(posts) {
@@ -1498,28 +1545,6 @@ private fun QuotiGalleryScreen(
             galleryItems(interactive = true)
         }
 
-        if (showTopEdgeFade) {
-            LazyColumn(
-                state = topGlassListState,
-                userScrollEnabled = false,
-                modifier =
-                    Modifier
-                        .widthIn(max = 440.dp)
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .offset(y = -GalleryTopGlassBleed)
-                        .height(topGlassHeight)
-                        .clipToBounds()
-                        .blur(4.dp)
-                        .galleryTopGlassMask()
-                        .zIndex(0.5f),
-                contentPadding = galleryGlassContentPadding,
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                galleryItems(interactive = false)
-            }
-        }
-
         AnimatedVisibility(
             visible = showTopEdgeFade,
             enter = fadeIn(animationSpec = tween(durationMillis = 180)),
@@ -1548,6 +1573,20 @@ private fun QuotiGalleryScreen(
                     .imePadding()
                     .zIndex(1f),
         )
+
+        if (searchActive) {
+            GallerySearchFocusScrim(
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(GallerySearchFocusScrimHeight)
+                        .then(searchInsetsModifier)
+                        .padding(bottom = searchBottomPadding)
+                        .offset(y = searchKeyboardOffset)
+                        .zIndex(1.5f),
+            )
+        }
 
         GalleryHeader(
             selectionCount = selectedKeys.size,
@@ -1581,15 +1620,16 @@ private fun QuotiGalleryScreen(
         GallerySearchField(
             query = query,
             onQueryChange = { value -> query = value },
+            onFocusChange = { focused -> searchFocused = focused },
             modifier =
                 Modifier
                     .align(Alignment.BottomCenter)
                     .widthIn(max = 440.dp)
                     .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
+                    .then(searchInsetsModifier)
                     .padding(horizontal = 20.dp)
-                    .padding(bottom = 18.dp)
+                    .padding(bottom = searchBottomPadding)
+                    .offset(y = searchKeyboardOffset)
                     .zIndex(2f),
         )
     }
@@ -1661,6 +1701,30 @@ private fun GalleryEdgeFade(
             )
         }
     }
+}
+
+@Composable
+private fun GallerySearchFocusScrim(
+    modifier: Modifier = Modifier,
+) {
+    val background = MaterialTheme.colorScheme.background
+    val dim = MaterialTheme.colorScheme.scrim
+
+    Box(
+        modifier =
+            modifier.background(
+                Brush.verticalGradient(
+                    colorStops =
+                        arrayOf(
+                            0f to Color.Transparent,
+                            0.24f to dim.copy(alpha = 0.2f),
+                            0.5f to background.copy(alpha = 0.72f),
+                            0.76f to background.copy(alpha = 0.94f),
+                            1f to background,
+                        ),
+                ),
+            ),
+    )
 }
 
 @Composable
@@ -1911,6 +1975,7 @@ private fun GalleryFilterTabs(
 private fun GallerySearchField(
     query: String,
     onQueryChange: (String) -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val searchTextStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.SansSerif)
@@ -1946,7 +2011,10 @@ private fun GallerySearchField(
                         color = MaterialTheme.colorScheme.onSurface,
                     ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.weight(1f),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .onFocusChanged { focusState -> onFocusChange(focusState.isFocused) },
                 decorationBox = { innerTextField ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (query.isEmpty()) {
@@ -1977,10 +2045,7 @@ private fun GalleryGridTile(
 ) {
     val onClick = if (selectionMode) onToggleSelection else onOpen
     val previewSource = remember(post) { post.galleryPreviewSource() }
-    val previewKey = previewSource?.urls?.joinToString("|")
-    val bitmap by produceState<Bitmap?>(initialValue = null, previewKey) {
-        value = previewSource?.urls?.let { urls -> loadFirstRemoteBitmap(urls) }
-    }
+    val bitmap = rememberGalleryPreviewBitmap(previewSource)
     val shape = RoundedCornerShape(26.dp)
     val borderColor by animateColorAsState(
         targetValue =
@@ -2017,7 +2082,7 @@ private fun GalleryGridTile(
         Box(modifier = Modifier.fillMaxSize()) {
             if (bitmap != null) {
                 Image(
-                    bitmap = bitmap!!.asImageBitmap(),
+                    bitmap = bitmap.asImageBitmap(),
                     contentDescription = post.content,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -2242,10 +2307,7 @@ private fun GalleryPostThumbnail(
     selectionMode: Boolean,
 ) {
     val previewSource = remember(post) { post.galleryPreviewSource() }
-    val previewKey = previewSource?.urls?.joinToString("|")
-    val bitmap by produceState<Bitmap?>(initialValue = null, previewKey) {
-        value = previewSource?.urls?.let { urls -> loadFirstRemoteBitmap(urls) }
-    }
+    val bitmap = rememberGalleryPreviewBitmap(previewSource)
     val shape = RoundedCornerShape(22.dp)
     Surface(
         modifier = Modifier.size(72.dp),
@@ -2256,7 +2318,7 @@ private fun GalleryPostThumbnail(
         Box(contentAlignment = Alignment.Center) {
             if (bitmap != null) {
                 Image(
-                    bitmap = bitmap!!.asImageBitmap(),
+                    bitmap = bitmap.asImageBitmap(),
                     contentDescription = post.content,
                     modifier =
                         Modifier
@@ -2298,6 +2360,28 @@ private fun GalleryPostThumbnail(
             }
         }
     }
+}
+
+@Composable
+private fun rememberGalleryPreviewBitmap(previewSource: MediaPreviewSource?): Bitmap? {
+    val previewKey = previewSource?.galleryPreviewCacheKey()
+    val bitmap by produceState<Bitmap?>(
+        initialValue = previewKey?.let(GalleryPreviewBitmapCache::get),
+        previewKey,
+    ) {
+        if (previewSource == null || previewKey == null) {
+            value = null
+            return@produceState
+        }
+
+        value = GalleryPreviewBitmapCache.get(previewKey)
+            ?: loadGalleryPreviewBitmap(
+                cacheKey = previewKey,
+                imageUrls = previewSource.urls,
+            )
+    }
+
+    return bitmap
 }
 
 @Composable
@@ -3337,6 +3421,10 @@ private data class MediaPreviewSource(
     val playableVideoUrl: String? = null,
 )
 
+private fun MediaPreviewSource.galleryPreviewCacheKey(): String {
+    return urls.joinToString("|").ifBlank { sourceId }
+}
+
 private fun PostMedia.previewSource(): MediaPreviewSource? {
     return when (this) {
         is PostMedia.Image ->
@@ -3348,11 +3436,11 @@ private fun PostMedia.previewSource(): MediaPreviewSource? {
 
         is PostMedia.Video -> {
             val playableUrl = playableVideoUrl()
-            (posterUrl ?: playableUrl ?: url ?: variants.firstOrNull())
-                ?.let { previewUrl ->
+            (playableUrl ?: posterUrl ?: url ?: variants.firstOrNull())
+                ?.let { sourceId ->
                     MediaPreviewSource(
-                        sourceId = playableUrl ?: previewUrl,
-                        urls = listOf(previewUrl),
+                        sourceId = sourceId,
+                        urls = listOfNotNull(posterUrl),
                         isVideo = true,
                         playableVideoUrl = playableUrl,
                     )
@@ -4025,13 +4113,37 @@ private val QuotiExportType.failedSnackbarMessage: String
             QuotiExportType.Video -> "Unable to export video"
         }
 
-private suspend fun loadFirstRemoteBitmap(imageUrls: List<String>): Bitmap? {
-    return imageUrls
-        .distinct()
-        .firstNotNullOfOrNull { url -> loadRemoteBitmap(url) }
+private suspend fun loadGalleryPreviewBitmap(
+    cacheKey: String,
+    imageUrls: List<String>,
+): Bitmap? {
+    if (imageUrls.isEmpty()) {
+        return null
+    }
+
+    GalleryPreviewBitmapCache.get(cacheKey)?.let { bitmap -> return bitmap }
+
+    return loadFirstRemoteBitmap(
+        imageUrls = imageUrls,
+        maxDimension = GalleryPreviewBitmapMaxDimension,
+    )?.also { bitmap ->
+        GalleryPreviewBitmapCache.put(cacheKey, bitmap)
+    }
 }
 
-private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
+private suspend fun loadFirstRemoteBitmap(
+    imageUrls: List<String>,
+    maxDimension: Int? = null,
+): Bitmap? {
+    return imageUrls
+        .distinct()
+        .firstNotNullOfOrNull { url -> loadRemoteBitmap(url, maxDimension = maxDimension) }
+}
+
+private suspend fun loadRemoteBitmap(
+    imageUrl: String,
+    maxDimension: Int? = null,
+): Bitmap? =
     withContext(Dispatchers.IO) {
         runCatching {
             val connection = URL(imageUrl).openConnection() as HttpURLConnection
@@ -4047,12 +4159,60 @@ private suspend fun loadRemoteBitmap(imageUrl: String): Bitmap? =
                     return@runCatching null
                 }
 
-                connection.inputStream.use(BitmapFactory::decodeStream)
+                if (maxDimension == null) {
+                    connection.inputStream.use(BitmapFactory::decodeStream)
+                } else {
+                    val bytes = connection.inputStream.use { stream -> stream.readBytes() }
+                    decodeSampledBitmap(bytes, maxDimension)
+                }
             } finally {
                 connection.disconnect()
             }
         }.getOrNull()
     }
+
+private fun decodeSampledBitmap(
+    bytes: ByteArray,
+    maxDimension: Int,
+): Bitmap? {
+    val boundsOptions =
+        BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+
+    val width = boundsOptions.outWidth
+    val height = boundsOptions.outHeight
+    if (width <= 0 || height <= 0) {
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    val decodeOptions =
+        BitmapFactory.Options().apply {
+            inSampleSize = calculateBitmapSampleSize(
+                width = width,
+                height = height,
+                maxDimension = maxDimension,
+            )
+        }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+}
+
+private fun calculateBitmapSampleSize(
+    width: Int,
+    height: Int,
+    maxDimension: Int,
+): Int {
+    val targetMaxDimension = maxDimension.coerceAtLeast(1)
+    val longestEdge = if (width >= height) width else height
+    var sampleSize = 1
+
+    while (longestEdge / (sampleSize * 2) >= targetMaxDimension) {
+        sampleSize *= 2
+    }
+
+    return sampleSize
+}
 
 private suspend fun copyCardImage(
     context: Context,

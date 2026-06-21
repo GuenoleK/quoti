@@ -48,12 +48,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -132,14 +135,23 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -203,6 +215,34 @@ private const val TwoMediaGridAspectRatio = 2f
 private const val MultiMediaGridAspectRatio = 1.7777778f
 private const val GalleryPageSize = 20
 private val GallerySwipeCommitThreshold = 64.dp
+private val GalleryPinnedHeaderReservedHeight = 108.dp
+private val GalleryTopEdgeFadeHeight = 96.dp
+private val GalleryBottomEdgeFadeHeight = 132.dp
+private val GalleryBottomSearchReservedHeight = 124.dp
+private val GalleryFilterTabHeight = 44.dp
+private val GalleryTopGlassBleed = 32.dp
+
+private fun Modifier.galleryTopGlassMask(): Modifier =
+    graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+    }.drawWithContent {
+        drawContent()
+        drawRect(
+            brush =
+                Brush.verticalGradient(
+                    colorStops =
+                        arrayOf(
+                            0f to Color.Transparent,
+                            0.36f to Color.Transparent,
+                            0.54f to Color.Black.copy(alpha = 0.28f),
+                            0.68f to Color.Black.copy(alpha = 0.38f),
+                            0.88f to Color.Black.copy(alpha = 0.1f),
+                            1f to Color.Transparent,
+                        ),
+                ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
 
 private enum class GalleryLayoutMode {
     Grid,
@@ -217,6 +257,11 @@ private enum class GalleryContentFilter(
     Videos("Videos"),
     Text("Textes"),
 }
+
+private data class GalleryFilterTabBounds(
+    val x: Dp,
+    val width: Dp,
+)
 
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
@@ -1212,12 +1257,21 @@ private fun QuotiGalleryScreen(
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
     var visibleCount by rememberSaveable(query, selectedFilter, posts.size) { mutableStateOf(GalleryPageSize) }
     val listState = rememberLazyListState()
+    val topGlassListState = rememberLazyListState()
     val availableKeys = remember(posts) { posts.map { post -> post.galleryKey }.toSet() }
-    val filteredPosts =
-        remember(posts, query, selectedFilter) {
-            posts.filter { post ->
-                post.matchesGalleryQuery(query) && post.matchesGalleryFilter(selectedFilter)
+    val queryMatchedPosts =
+        remember(posts, query) {
+            posts.filter { post -> post.matchesGalleryQuery(query) }
+        }
+    val filterCounts =
+        remember(queryMatchedPosts) {
+            GalleryContentFilter.entries.associateWith { filter ->
+                queryMatchedPosts.count { post -> post.matchesGalleryFilter(filter) }
             }
+        }
+    val filteredPosts =
+        remember(queryMatchedPosts, selectedFilter) {
+            queryMatchedPosts.filter { post -> post.matchesGalleryFilter(selectedFilter) }
         }
     val visiblePosts =
         remember(filteredPosts, visibleCount) {
@@ -1234,6 +1288,28 @@ private fun QuotiGalleryScreen(
                 visibleCount < filteredPosts.size
         }
     }
+    val showTopEdgeFade by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 12
+        }
+    }
+    val statusBarPadding = contentPadding.calculateTopPadding()
+    val bottomContentPadding = contentPadding.calculateBottomPadding()
+    val galleryContentPadding =
+        PaddingValues(
+            start = 20.dp,
+            top = GalleryPinnedHeaderReservedHeight + statusBarPadding,
+            end = 20.dp,
+            bottom = GalleryBottomSearchReservedHeight,
+        )
+    val topGlassHeight = GalleryTopEdgeFadeHeight + statusBarPadding + GalleryTopGlassBleed
+    val galleryGlassContentPadding =
+        PaddingValues(
+            start = 20.dp,
+            top = GalleryPinnedHeaderReservedHeight + statusBarPadding + GalleryTopGlassBleed,
+            end = 20.dp,
+            bottom = GalleryBottomSearchReservedHeight,
+        )
 
     fun toggleSelection(post: QuotiPost) {
         val key = post.galleryKey
@@ -1256,7 +1332,137 @@ private fun QuotiGalleryScreen(
         onDeletePosts(keysToDelete)
     }
 
+    fun LazyListScope.galleryItems(interactive: Boolean) {
+        item {
+            GalleryFilterTabs(
+                selectedFilter = selectedFilter,
+                filterCounts = filterCounts,
+                onFilterChange = { filter ->
+                    if (interactive) {
+                        selectedFilter = filter
+                    }
+                },
+            )
+        }
+
+        if (posts.isEmpty()) {
+            item {
+                StateFrame {
+                    Icon(
+                        imageVector = Icons.Outlined.PhotoLibrary,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(34.dp),
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Aucune carte",
+                        style = MaterialTheme.typography.titleMediumEmphasized,
+                    )
+                    Text(
+                        text = "Les posts partages apparaitront ici.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else if (filteredPosts.isEmpty()) {
+            item {
+                StateFrame {
+                    Icon(
+                        imageVector = Icons.Outlined.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(34.dp),
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Aucun resultat",
+                        style = MaterialTheme.typography.titleMediumEmphasized,
+                    )
+                    Text(
+                        text = "Essaie une autre recherche.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else if (layoutMode == GalleryLayoutMode.Grid) {
+            items(
+                items = visibleGridRows,
+                key = { row -> row.joinToString("|") { post -> post.galleryKey } },
+            ) { rowPosts ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    rowPosts.forEach { post ->
+                        GalleryGridTile(
+                            post = post,
+                            selected = post.galleryKey in selectedKeys,
+                            selectionMode = selectionMode,
+                            onOpen = {
+                                if (interactive) {
+                                    onOpenPost(post)
+                                }
+                            },
+                            onToggleSelection = {
+                                if (interactive) {
+                                    toggleSelection(post)
+                                }
+                            },
+                            onStartSelection = {
+                                if (interactive) {
+                                    selectionMode = true
+                                    selectedKeys = selectedKeys + post.galleryKey
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (rowPosts.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        } else {
+            items(
+                items = visiblePosts,
+                key = { post -> post.galleryKey },
+            ) { post ->
+                GalleryPostRow(
+                    post = post,
+                    selected = post.galleryKey in selectedKeys,
+                    selectionMode = selectionMode,
+                    onOpen = {
+                        if (interactive) {
+                            onOpenPost(post)
+                        }
+                    },
+                    onToggleSelection = {
+                        if (interactive) {
+                            toggleSelection(post)
+                        }
+                    },
+                    onStartSelection = {
+                        if (interactive) {
+                            selectionMode = true
+                            selectedKeys = selectedKeys + post.galleryKey
+                        }
+                    },
+                )
+            }
+        }
+    }
+
     BackHandler(enabled = backHandlerEnabled, onBack = onBack)
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                topGlassListState.scrollToItem(index, offset)
+            }
+    }
 
     LaunchedEffect(posts) {
         val retainedKeys = selectedKeys.intersect(availableKeys)
@@ -1276,7 +1482,7 @@ private fun QuotiGalleryScreen(
         modifier =
             Modifier
                 .fillMaxSize()
-                .padding(contentPadding),
+                .padding(bottom = bottomContentPadding),
     ) {
         LazyColumn(
             state = listState,
@@ -1284,134 +1490,175 @@ private fun QuotiGalleryScreen(
                 Modifier
                     .widthIn(max = 440.dp)
                     .fillMaxWidth()
-                    .align(Alignment.TopCenter),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
+                    .align(Alignment.TopCenter)
+                    .navigationBarsPadding(),
+            contentPadding = galleryContentPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item {
-                GalleryHeader(
-                    selectionCount = selectedKeys.size,
-                    selectionMode = selectionMode,
-                    layoutMode = layoutMode,
-                    onBack = onBack,
-                    onLayoutModeChange = {
-                        onLayoutModeChange(
-                            if (layoutMode == GalleryLayoutMode.Grid) {
-                                GalleryLayoutMode.List
-                            } else {
-                                GalleryLayoutMode.Grid
-                            },
-                        )
-                    },
-                    onSelectionCancel = {
-                        selectionMode = false
-                        selectedKeys = emptySet()
-                    },
-                    onDelete = ::deleteSelectedPosts,
-                )
-            }
-            item {
-                GallerySearchField(
-                    query = query,
-                    onQueryChange = { value -> query = value },
-                )
-            }
-            item {
-                GalleryFilterTabs(
-                    selectedFilter = selectedFilter,
-                    resultCount = filteredPosts.size,
-                    onFilterChange = { filter -> selectedFilter = filter },
-                )
-            }
+            galleryItems(interactive = true)
+        }
 
-            if (posts.isEmpty()) {
-                item {
-                    StateFrame {
-                        Icon(
-                            imageVector = Icons.Outlined.PhotoLibrary,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(34.dp),
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Aucune carte",
-                            style = MaterialTheme.typography.titleMediumEmphasized,
-                        )
-                        Text(
-                            text = "Les posts partages apparaitront ici.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            } else if (filteredPosts.isEmpty()) {
-                item {
-                    StateFrame {
-                        Icon(
-                            imageVector = Icons.Outlined.Search,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(34.dp),
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Aucun resultat",
-                            style = MaterialTheme.typography.titleMediumEmphasized,
-                        )
-                        Text(
-                            text = "Essaie une autre recherche.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            } else if (layoutMode == GalleryLayoutMode.Grid) {
-                items(
-                    items = visibleGridRows,
-                    key = { row -> row.joinToString("|") { post -> post.galleryKey } },
-                ) { rowPosts ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        rowPosts.forEach { post ->
-                            GalleryGridTile(
-                                post = post,
-                                selected = post.galleryKey in selectedKeys,
-                                selectionMode = selectionMode,
-                                onOpen = { onOpenPost(post) },
-                                onToggleSelection = { toggleSelection(post) },
-                                onStartSelection = {
-                                    selectionMode = true
-                                    selectedKeys = selectedKeys + post.galleryKey
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                        if (rowPosts.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            } else {
-                items(
-                    items = visiblePosts,
-                    key = { post -> post.galleryKey },
-                ) { post ->
-                    GalleryPostRow(
-                        post = post,
-                        selected = post.galleryKey in selectedKeys,
-                        selectionMode = selectionMode,
-                        onOpen = { onOpenPost(post) },
-                        onToggleSelection = { toggleSelection(post) },
-                        onStartSelection = {
-                            selectionMode = true
-                            selectedKeys = selectedKeys + post.galleryKey
-                        },
-                    )
-                }
+        if (showTopEdgeFade) {
+            LazyColumn(
+                state = topGlassListState,
+                userScrollEnabled = false,
+                modifier =
+                    Modifier
+                        .widthIn(max = 440.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .offset(y = -GalleryTopGlassBleed)
+                        .height(topGlassHeight)
+                        .clipToBounds()
+                        .blur(4.dp)
+                        .galleryTopGlassMask()
+                        .zIndex(0.5f),
+                contentPadding = galleryGlassContentPadding,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                galleryItems(interactive = false)
             }
+        }
+
+        AnimatedVisibility(
+            visible = showTopEdgeFade,
+            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
+            exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+            modifier =
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .offset(y = -GalleryTopGlassBleed)
+                    .height(topGlassHeight)
+                    .zIndex(1f),
+        ) {
+            GalleryEdgeFade(
+                top = true,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        GalleryEdgeFade(
+            top = false,
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(GalleryBottomEdgeFadeHeight)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .zIndex(1f),
+        )
+
+        GalleryHeader(
+            selectionCount = selectedKeys.size,
+            selectionMode = selectionMode,
+            layoutMode = layoutMode,
+            onBack = onBack,
+            onLayoutModeChange = {
+                onLayoutModeChange(
+                    if (layoutMode == GalleryLayoutMode.Grid) {
+                        GalleryLayoutMode.List
+                    } else {
+                        GalleryLayoutMode.Grid
+                    },
+                )
+            },
+            onSelectionCancel = {
+                selectionMode = false
+                selectedKeys = emptySet()
+            },
+            onDelete = ::deleteSelectedPosts,
+            modifier =
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(top = statusBarPadding + 20.dp)
+                    .zIndex(2f),
+        )
+
+        GallerySearchField(
+            query = query,
+            onQueryChange = { value -> query = value },
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 18.dp)
+                    .zIndex(2f),
+        )
+    }
+}
+
+@Composable
+private fun GalleryEdgeFade(
+    top: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val background = MaterialTheme.colorScheme.background
+    val colorStops =
+        if (top) {
+            arrayOf(
+                0f to background.copy(alpha = 0.46f),
+                0.22f to background.copy(alpha = 0.48f),
+                0.5f to background.copy(alpha = 0.5f),
+                0.72f to background.copy(alpha = 0.3f),
+                0.9f to background.copy(alpha = 0.08f),
+                1f to background.copy(alpha = 0f),
+            )
+        } else {
+            arrayOf(
+                0f to background.copy(alpha = 0f),
+                0.48f to background.copy(alpha = 0f),
+                0.82f to background.copy(alpha = 0.86f),
+                1f to background,
+            )
+        }
+
+    Box(
+        modifier =
+            modifier.background(
+                Brush.verticalGradient(colorStops = colorStops),
+            ),
+    ) {
+        if (top) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops =
+                                    arrayOf(
+                                        0f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.026f),
+                                        0.3f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.018f),
+                                        0.56f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.006f),
+                                        1f to Color.Transparent,
+                                    ),
+                            ),
+                        ),
+            )
+            Box(
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops =
+                                    arrayOf(
+                                        0f to Color.Transparent,
+                                        1f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.014f),
+                                    ),
+                            ),
+                        ),
+            )
         }
     }
 }
@@ -1425,10 +1672,11 @@ private fun GalleryHeader(
     onLayoutModeChange: () -> Unit,
     onSelectionCancel: () -> Unit,
     onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Box(
         modifier =
-            Modifier
+            modifier
                 .fillMaxWidth()
                 .height(56.dp),
         contentAlignment = Alignment.Center,
@@ -1493,7 +1741,7 @@ private fun GalleryHeader(
                 if (selectionMode) {
                     "$selectionCount selectionnee${if (selectionCount > 1) "s" else ""}"
                 } else {
-                    "Bibliotheque"
+                    "Biblioth\u00e8que"
                 },
             modifier = Modifier.padding(horizontal = 82.dp),
             maxLines = 1,
@@ -1540,53 +1788,122 @@ private fun GalleryCircleIconButton(
 @Composable
 private fun GalleryFilterTabs(
     selectedFilter: GalleryContentFilter,
-    resultCount: Int,
+    filterCounts: Map<GalleryContentFilter, Int>,
     onFilterChange: (GalleryContentFilter) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    val density = LocalDensity.current
+    var tabBounds by remember { mutableStateOf(emptyMap<GalleryContentFilter, GalleryFilterTabBounds>()) }
+    val selectedBounds = tabBounds[selectedFilter]
+    val indicatorX by animateDpAsState(
+        targetValue = selectedBounds?.x ?: 0.dp,
+        animationSpec = tween(durationMillis = 240),
+        label = "Gallery filter indicator x",
+    )
+    val indicatorWidth by animateDpAsState(
+        targetValue = selectedBounds?.width ?: 0.dp,
+        animationSpec = tween(durationMillis = 240),
+        label = "Gallery filter indicator width",
+    )
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(GalleryFilterTabHeight),
     ) {
-        GalleryContentFilter.entries.forEach { filter ->
-            val selected = filter == selectedFilter
+        if (selectedBounds != null) {
             Surface(
                 modifier =
                     Modifier
-                        .clip(CircleShape)
-                        .clickable { onFilterChange(filter) },
+                        .offset(x = indicatorX)
+                        .width(indicatorWidth)
+                        .fillMaxHeight(),
                 shape = CircleShape,
-                color =
-                    if (selected) {
-                        MaterialTheme.colorScheme.surfaceContainerHighest
-                    } else {
-                        Color.Transparent
-                    },
-                contentColor =
-                    if (selected) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-            ) {
-                Text(
-                    text = filter.label,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
-                    maxLines = 1,
-                    style =
-                        MaterialTheme.typography.labelLargeEmphasized.copy(
-                            fontFamily = FontFamily.SansSerif,
-                        ),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                tonalElevation = 1.dp,
+            ) {}
+        }
+
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(GalleryFilterTabHeight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            GalleryContentFilter.entries.forEach { filter ->
+                val selected = filter == selectedFilter
+                val contentColor by animateColorAsState(
+                    targetValue =
+                        if (selected) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    animationSpec = tween(durationMillis = 180),
+                    label = "Gallery filter content",
                 )
+
+                Box(
+                    modifier =
+                        Modifier
+                            .height(GalleryFilterTabHeight)
+                            .clip(CircleShape)
+                            .onGloballyPositioned { coordinates ->
+                                val bounds =
+                                    with(density) {
+                                        GalleryFilterTabBounds(
+                                            x = coordinates.positionInParent().x.toDp(),
+                                            width = coordinates.size.width.toDp(),
+                                        )
+                                    }
+                                if (tabBounds[filter] != bounds) {
+                                    tabBounds = tabBounds + (filter to bounds)
+                                }
+                            }
+                            .clickable { onFilterChange(filter) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        modifier =
+                            Modifier.padding(
+                                horizontal = if (selected) 12.dp else 18.dp,
+                                vertical = 10.dp,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Text(
+                            text = filter.label,
+                            color = contentColor,
+                            maxLines = 1,
+                            style =
+                                MaterialTheme.typography.labelLargeEmphasized.copy(
+                                    fontFamily = FontFamily.SansSerif,
+                                ),
+                        )
+                        if (selected) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                contentColor = MaterialTheme.colorScheme.primary,
+                            ) {
+                                Text(
+                                    text = (filterCounts[filter] ?: 0).toString(),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    maxLines = 1,
+                                    style =
+                                        MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.SansSerif,
+                                        ),
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
-        Spacer(modifier = Modifier.weight(1f))
-        Text(
-            text = resultCount.toString(),
-            maxLines = 1,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -1594,14 +1911,17 @@ private fun GalleryFilterTabs(
 private fun GallerySearchField(
     query: String,
     onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val searchTextStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.SansSerif)
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
     ) {
         Row(
             modifier =

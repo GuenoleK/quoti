@@ -145,7 +145,8 @@ private fun QuotiSystemBars(
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         val background = colorScheme.background.toArgb()
 
-        window.statusBarColor = background
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.Transparent.toArgb()
         window.navigationBarColor = background
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isStatusBarContrastEnforced = false

@@ -77,9 +77,11 @@ class QuotiAppTest {
 
         composeRule.onAllNodesWithText("Quoti").onFirst().assertIsDisplayed()
         composeRule.onNodeWithText("Light").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Copy image").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("More actions").performClick()
+        composeRule.onNodeWithText("Copy image").assertIsDisplayed()
         composeRule.onAllNodesWithText("Share image").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Copy text").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Refresh preview").assertCountEquals(0)
     }
 
     @Test
@@ -116,10 +118,12 @@ class QuotiAppTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("Download video").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Copy image").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("More actions").performClick()
+        composeRule.onNodeWithText("Download video").assertIsDisplayed()
+        composeRule.onNodeWithText("Copy image").assertIsDisplayed()
         composeRule.onAllNodesWithText("Download PNG").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Copy text").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Refresh preview").assertCountEquals(0)
     }
 
     @Test

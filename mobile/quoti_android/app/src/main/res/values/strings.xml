@@ -1,0 +1,108 @@
+<resources>
+    <string name="app_name">Quoti</string>
+    <string name="app_tagline">Capture the post. Keep the context.</string>
+
+    <string name="nav_gallery">Gallery</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="capture_empty_title">No post captured</string>
+    <string name="capture_empty_supporting">Waiting for a shared post.</string>
+    <string name="capture_loading_title">Preparing post</string>
+    <string name="capture_loading_content_description">Preparing post</string>
+
+    <string name="segment_light">Light</string>
+    <string name="segment_dark">Dark</string>
+    <string name="segment_text_only">Text only</string>
+    <string name="segment_with_media">With media</string>
+
+    <string name="action_more_actions">More actions</string>
+    <string name="action_download_video">Download video</string>
+    <string name="action_copy_image">Copy image</string>
+    <string name="action_download_png">Download PNG</string>
+    <string name="action_share_image">Share image</string>
+    <string name="action_copy_source_link">Copy source link</string>
+    <string name="action_open_source">Open source</string>
+    <string name="action_clear_post">Clear post</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_open">Open</string>
+
+    <string name="snackbar_notifications_off">Notifications are off. Keep Quoti open to see the result here.</string>
+    <string name="snackbar_shared_post_captured">Shared post captured</string>
+    <string name="snackbar_no_exportable_video">No exportable video source found</string>
+    <string name="snackbar_video_processing_stopped">Video processing stopped</string>
+    <string name="snackbar_export_stopped">Export stopped</string>
+    <string name="snackbar_image_copied">Image copied</string>
+    <string name="snackbar_image_and_source_link_copied">Image and source link copied</string>
+    <string name="snackbar_copy_image_failed">Unable to copy image</string>
+    <string name="snackbar_share_sheet_ready">Share sheet ready</string>
+    <string name="snackbar_share_image_failed">Unable to share image</string>
+    <string name="snackbar_source_link_copied">Source link copied</string>
+    <string name="snackbar_post_cleared">Post cleared</string>
+    <plurals name="snackbar_cards_deleted">
+        <item quantity="one">Card deleted</item>
+        <item quantity="other">%1$d cards deleted</item>
+    </plurals>
+
+    <string name="clip_label_source_link">Quoti source link</string>
+    <string name="clip_label_card_image">Quoti card image</string>
+    <string name="share_card_chooser_title">Share Quoti card</string>
+
+    <string name="video_picker_title">Choose video</string>
+    <string name="video_picker_confirm">Use video</string>
+    <string name="video_choice_main_post">Main post</string>
+    <string name="video_choice_quoted_post">Quoted post</string>
+    <string name="video_choice_title">%1$s video %2$d</string>
+
+    <string name="media_open_externally">Open externally</string>
+    <string name="media_playback_error">Unable to play this video here</string>
+    <string name="media_close_content_description">Close media</string>
+    <string name="media_placeholder">Media</string>
+    <string name="play_video_content_description">Play video</string>
+    <string name="video_content_description">Video</string>
+    <string name="loading_media_content_description">Loading media</string>
+
+    <string name="gallery_empty_title">No cards</string>
+    <string name="gallery_empty_supporting">Shared posts will appear here.</string>
+    <string name="gallery_no_results_title">No results</string>
+    <string name="gallery_no_results_supporting">Try another search.</string>
+    <string name="gallery_back_content_description">Back</string>
+    <string name="gallery_clear_selection_content_description">Clear selection</string>
+    <string name="gallery_delete_selected_content_description">Delete selected cards</string>
+    <string name="gallery_show_list_content_description">Show as list</string>
+    <string name="gallery_show_grid_content_description">Show as grid</string>
+    <string name="gallery_title">Library</string>
+    <plurals name="gallery_selection_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <string name="gallery_filter_all">All</string>
+    <string name="gallery_filter_images">Images</string>
+    <string name="gallery_filter_videos">Videos</string>
+    <string name="gallery_filter_text">Text</string>
+    <string name="gallery_search_placeholder">Search text or URL</string>
+
+    <string name="export_processing_image">Saving image</string>
+    <string name="export_processing_video">Processing video</string>
+    <string name="export_notice_background">You can leave Quoti or lock your phone. We\'ll notify you when it\'s ready.</string>
+    <string name="export_stop_processing">Stop processing</string>
+    <string name="export_cancel_export">Cancel export</string>
+    <string name="export_image_started">Image export started</string>
+    <string name="export_video_started">Video export started</string>
+    <string name="export_image_ready">Image ready</string>
+    <string name="export_video_ready">Video ready</string>
+    <string name="export_image_saved">PNG saved to Pictures/Quoti</string>
+    <string name="export_video_saved">Video saved to Movies/Quoti</string>
+    <string name="export_image_open_failed">Unable to open image</string>
+    <string name="export_video_open_failed">Unable to open video</string>
+    <string name="export_image_failed">Unable to save PNG</string>
+    <string name="export_video_failed">Unable to export video</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_source_actions_title">Source actions</string>
+    <string name="settings_source_actions_supporting">Show copy source and open source controls.</string>
+    <string name="settings_reset">Reset</string>
+    <string name="settings_build">Build %1$s (%2$d)</string>
+
+    <string name="card_related_post_fallback">Original post</string>
+    <string name="card_reply_relationship">Replies to</string>
+</resources>

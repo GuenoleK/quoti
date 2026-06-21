@@ -14,6 +14,7 @@ import android.util.LruCache
 import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.annotation.StringRes
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -81,12 +82,10 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
@@ -97,20 +96,17 @@ import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DividerDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingToolbarDefaults
-import androidx.compose.material3.FloatingToolbarHorizontalFabPosition
+import androidx.compose.material3.FloatingActionButtonMenu
+import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
@@ -122,11 +118,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.rememberTooltipState
+import androidx.compose.material3.ToggleFloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -149,6 +142,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -160,6 +154,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -211,7 +206,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val TwoMediaGridAspectRatio = 2f
 private const val MultiMediaGridAspectRatio = 1.7777778f
 private const val GalleryPageSize = 20
@@ -259,12 +253,12 @@ private enum class GalleryLayoutMode {
 }
 
 private enum class GalleryContentFilter(
-    val label: String,
+    @param:StringRes val labelResId: Int,
 ) {
-    All("Tous"),
-    Images("Images"),
-    Videos("Videos"),
-    Text("Textes"),
+    All(R.string.gallery_filter_all),
+    Images(R.string.gallery_filter_images),
+    Videos(R.string.gallery_filter_videos),
+    Text(R.string.gallery_filter_text),
 }
 
 private data class GalleryFilterTabBounds(
@@ -348,7 +342,7 @@ fun QuotiApp(
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (!granted) {
                 scope.launch {
-                    snackbarHostState.showSnackbar("Notifications are off. Keep Quoti open to see the result here.")
+                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_notifications_off))
                 }
             }
         }
@@ -399,7 +393,7 @@ fun QuotiApp(
                 galleryRepository.savePost(capturedPost)
             }
         if (post == capturedPost) {
-            snackbarHostState.showSnackbar("Shared post captured")
+            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_shared_post_captured))
         }
     }
 
@@ -434,19 +428,19 @@ fun QuotiApp(
                 snackbarHostState.showSavedMediaSnackbar(
                     context = context,
                     message = outputData.getString(QuotiExportWork.OutputMessage)
-                        ?: finishedExportType.savedSnackbarMessage,
+                        ?: finishedExportType.savedSnackbarMessage(context),
                     uri = uri,
                     mimeType = mimeType,
                     failureMessage = outputData.getString(QuotiExportWork.OutputFailureMessage)
-                        ?: finishedExportType.openFailureSnackbarMessage,
+                        ?: finishedExportType.openFailureSnackbarMessage(context),
                 )
             } else {
-                snackbarHostState.showSnackbar(finishedExportType.readySnackbarMessage)
+                snackbarHostState.showSnackbar(finishedExportType.readySnackbarMessage(context))
             }
         } else {
             snackbarHostState.showSnackbar(
                 outputData.getString(QuotiExportWork.OutputFailureMessage)
-                    ?: finishedExportType.failedSnackbarMessage,
+                    ?: finishedExportType.failedSnackbarMessage(context),
             )
         }
 
@@ -493,10 +487,10 @@ fun QuotiApp(
                 onSuccess = { workId ->
                     activeExportId = workId.toString()
                     activeExportTypeName = exportType.name
-                    snackbarHostState.showSnackbar(exportType.startedSnackbarMessage)
+                    snackbarHostState.showSnackbar(exportType.startedSnackbarMessage(context))
                 },
                 onFailure = {
-                    snackbarHostState.showSnackbar(exportType.failedSnackbarMessage)
+                    snackbarHostState.showSnackbar(exportType.failedSnackbarMessage(context))
                 },
             )
         }
@@ -507,11 +501,11 @@ fun QuotiApp(
             return
         }
 
-        val choices = activePost.videoExportChoices()
+        val choices = activePost.videoExportChoices(context)
         when (choices.size) {
             0 -> {
                 scope.launch {
-                    snackbarHostState.showSnackbar("No exportable video source found")
+                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_no_exportable_video))
                 }
             }
             1 -> startExport(
@@ -542,9 +536,9 @@ fun QuotiApp(
         scope.launch {
             snackbarHostState.showSnackbar(
                 if (exportType == QuotiExportType.Video) {
-                    "Video processing stopped"
+                    context.getString(R.string.snackbar_video_processing_stopped)
                 } else {
-                    "Export stopped"
+                    context.getString(R.string.snackbar_export_stopped)
                 },
             )
         }
@@ -597,14 +591,14 @@ fun QuotiApp(
                                 onSuccess = {
                                     snackbarHostState.showSnackbar(
                                         if (activePost.sourceUrl == null) {
-                                            "Image copied"
+                                            context.getString(R.string.snackbar_image_copied)
                                         } else {
-                                            "Image and source link copied"
+                                            context.getString(R.string.snackbar_image_and_source_link_copied)
                                         },
                                     )
                                 },
                                 onFailure = {
-                                    snackbarHostState.showSnackbar("Unable to copy image")
+                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_copy_image_failed))
                                 },
                             )
                         }
@@ -628,31 +622,24 @@ fun QuotiApp(
                                 )
                             }.fold(
                                 onSuccess = {
-                                    snackbarHostState.showSnackbar("Share sheet ready")
+                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_share_sheet_ready))
                                 },
                                 onFailure = {
-                                    snackbarHostState.showSnackbar("Unable to share image")
+                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_share_image_failed))
                                 },
                             )
                         }
                     },
-                    onCopyText = {
-                        val activePost = post ?: return@QuotiCaptureScreen
+                    onCopySource = {
+                        val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                "Quoti post text",
-                                activePost.content,
+                                context.getString(R.string.clip_label_source_link),
+                                sourceUrl,
                             ),
                         )
                         scope.launch {
-                            snackbarHostState.showSnackbar("Text copied")
-                        }
-                    },
-                    onCopySource = {
-                        val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Quoti source link", sourceUrl))
-                        scope.launch {
-                            snackbarHostState.showSnackbar("Source link copied")
+                            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_source_link_copied))
                         }
                     },
                     onOpenSource = {
@@ -666,12 +653,7 @@ fun QuotiApp(
                             onClear()
                         }
                         scope.launch {
-                            snackbarHostState.showSnackbar("Post cleared")
-                        }
-                    },
-                    onRefresh = {
-                        scope.launch {
-                            snackbarHostState.showSnackbar("Refresh will reprocess the next shared post")
+                            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_post_cleared))
                         }
                     },
                     contentPadding = innerPadding,
@@ -702,11 +684,11 @@ fun QuotiApp(
                                 galleryDraft = null
                             }
                             snackbarHostState.showSnackbar(
-                                if (selectedKeys.size == 1) {
-                                    "Card deleted"
-                                } else {
-                                    "${selectedKeys.size} cards deleted"
-                                },
+                                context.resources.getQuantityString(
+                                    R.plurals.snackbar_cards_deleted,
+                                    selectedKeys.size,
+                                    selectedKeys.size,
+                                ),
                             )
                         }
                     },
@@ -724,7 +706,7 @@ fun QuotiApp(
     }
 
     pendingVideoExportPost?.let { videoExportPost ->
-        val choices = videoExportPost.videoExportChoices()
+        val choices = videoExportPost.videoExportChoices(context)
         if (choices.size > 1) {
             val selectedSourceId = selectedVideoExportSourceId ?: choices.first().sourceId
             VideoSourcePickerDialog(
@@ -895,7 +877,7 @@ private fun VideoSourcePickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "Choose video") },
+        title = { Text(text = stringResource(R.string.video_picker_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 choices.forEach { choice ->
@@ -934,12 +916,12 @@ private fun VideoSourcePickerDialog(
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text(text = "Use video")
+                Text(text = stringResource(R.string.video_picker_confirm))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(text = "Cancel")
+                Text(text = stringResource(R.string.action_cancel))
             }
         },
     )
@@ -951,16 +933,25 @@ private data class VideoExportChoice(
     val subtitle: String,
 )
 
-private fun QuotiPost.videoExportChoices(): List<VideoExportChoice> {
+private fun QuotiPost.videoExportChoices(context: Context): List<VideoExportChoice> {
     return buildList {
-        addVideoExportChoices(label = "Main post", media = media)
+        addVideoExportChoices(
+            context = context,
+            label = context.getString(R.string.video_choice_main_post),
+            media = media,
+        )
         relatedPost?.let { related ->
-            addVideoExportChoices(label = "Quoted post", media = related.media)
+            addVideoExportChoices(
+                context = context,
+                label = context.getString(R.string.video_choice_quoted_post),
+                media = related.media,
+            )
         }
     }.distinctBy { choice -> choice.sourceId }
 }
 
 private fun MutableList<VideoExportChoice>.addVideoExportChoices(
+    context: Context,
     label: String,
     media: List<PostMedia>,
 ) {
@@ -972,7 +963,7 @@ private fun MutableList<VideoExportChoice>.addVideoExportChoices(
         add(
             VideoExportChoice(
                 sourceId = sourceId,
-                title = "$label video $videoIndex",
+                title = context.getString(R.string.video_choice_title, label, videoIndex),
                 subtitle = sourceId,
             ),
         )
@@ -1091,12 +1082,12 @@ private fun MediaViewerOverlay(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = "Unable to play this video here",
+                            text = stringResource(R.string.media_playback_error),
                             style = MaterialTheme.typography.titleMedium,
                             color = Color.White,
                         )
                         TextButton(onClick = { request.videoUrl?.let(context::openVideoExternally) }) {
-                            Text(text = "Open externally")
+                            Text(text = stringResource(R.string.media_open_externally))
                         }
                     }
                 }
@@ -1110,7 +1101,7 @@ private fun MediaViewerOverlay(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Close,
-                        contentDescription = "Close media",
+                        contentDescription = stringResource(R.string.media_close_content_description),
                         tint = Color.White,
                     )
                 }
@@ -1153,11 +1144,9 @@ private fun QuotiCaptureScreen(
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
     onShareImage: () -> Unit,
-    onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onClear: () -> Unit,
-    onRefresh: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val readyPost = (shareState as? QuotiShareState.Ready)?.draft?.post
@@ -1176,16 +1165,12 @@ private fun QuotiCaptureScreen(
                 onDownloadVideo = onDownloadVideo,
                 onDownloadPng = onDownloadPng,
                 onShareImage = onShareImage,
-                onCopyText = onCopyText,
                 onCopySource = onCopySource,
                 onOpenSource = onOpenSource,
                 onClear = onClear,
-                onRefresh = onRefresh,
                 modifier =
                     Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(bottom = 18.dp)
+                        .fillMaxSize()
                         .zIndex(1f),
             )
         }
@@ -1219,8 +1204,8 @@ private fun QuotiCaptureScreen(
                         value = settings.cardTone,
                         options =
                             listOf(
-                                SegmentOption(CardTone.Light, "Light"),
-                                SegmentOption(CardTone.Dark, "Dark"),
+                                SegmentOption(CardTone.Light, stringResource(R.string.segment_light)),
+                                SegmentOption(CardTone.Dark, stringResource(R.string.segment_dark)),
                             ),
                         onValueChange = onCardToneChange,
                     )
@@ -1228,8 +1213,8 @@ private fun QuotiCaptureScreen(
                         value = settings.contentMode,
                         options =
                             listOf(
-                                SegmentOption(CardContentMode.TextOnly, "Text only"),
-                                SegmentOption(CardContentMode.WithMedia, "With media"),
+                                SegmentOption(CardContentMode.TextOnly, stringResource(R.string.segment_text_only)),
+                                SegmentOption(CardContentMode.WithMedia, stringResource(R.string.segment_with_media)),
                             ),
                         onValueChange = onContentModeChange,
                     )
@@ -1356,12 +1341,19 @@ private fun QuotiGalleryScreen(
 
     fun toggleSelection(post: QuotiPost) {
         val key = post.galleryKey
-        selectedKeys =
+        val updatedKeys =
             if (key in selectedKeys) {
                 selectedKeys - key
             } else {
                 selectedKeys + key
             }
+        selectedKeys = updatedKeys
+        selectionMode = updatedKeys.isNotEmpty()
+    }
+
+    fun clearSelection() {
+        selectedKeys = emptySet()
+        selectionMode = false
     }
 
     fun deleteSelectedPosts() {
@@ -1370,8 +1362,7 @@ private fun QuotiGalleryScreen(
             return
         }
 
-        selectedKeys = emptySet()
-        selectionMode = false
+        clearSelection()
         onDeletePosts(keysToDelete)
     }
 
@@ -1399,11 +1390,11 @@ private fun QuotiGalleryScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Aucune carte",
+                        text = stringResource(R.string.gallery_empty_title),
                         style = MaterialTheme.typography.titleMediumEmphasized,
                     )
                     Text(
-                        text = "Les posts partages apparaitront ici.",
+                        text = stringResource(R.string.gallery_empty_supporting),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1420,11 +1411,11 @@ private fun QuotiGalleryScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Aucun resultat",
+                        text = stringResource(R.string.gallery_no_results_title),
                         style = MaterialTheme.typography.titleMediumEmphasized,
                     )
                     Text(
-                        text = "Essaie une autre recherche.",
+                        text = stringResource(R.string.gallery_no_results_supporting),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1498,7 +1489,13 @@ private fun QuotiGalleryScreen(
         }
     }
 
-    BackHandler(enabled = backHandlerEnabled, onBack = onBack)
+    BackHandler(enabled = backHandlerEnabled) {
+        if (selectionMode) {
+            clearSelection()
+        } else {
+            onBack()
+        }
+    }
 
     LaunchedEffect(searchFocused, searchImeVisible) {
         if (searchImeVisible) {
@@ -1515,6 +1512,12 @@ private fun QuotiGalleryScreen(
         val retainedKeys = selectedKeys.intersect(availableKeys)
         selectedKeys = retainedKeys
         if (retainedKeys.isEmpty()) {
+            selectionMode = false
+        }
+    }
+
+    LaunchedEffect(selectedKeys) {
+        if (selectedKeys.isEmpty()) {
             selectionMode = false
         }
     }
@@ -1603,10 +1606,8 @@ private fun QuotiGalleryScreen(
                 )
             },
             onSelectionCancel = {
-                selectionMode = false
-                selectedKeys = emptySet()
+                clearSelection()
             },
-            onDelete = ::deleteSelectedPosts,
             modifier =
                 Modifier
                     .align(Alignment.TopCenter)
@@ -1735,7 +1736,6 @@ private fun GalleryHeader(
     onBack: () -> Unit,
     onLayoutModeChange: () -> Unit,
     onSelectionCancel: () -> Unit,
-    onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -1752,7 +1752,7 @@ private fun GalleryHeader(
         ) {
             GalleryCircleIconButton(
                 onClick = onBack,
-                contentDescription = "Retour",
+                contentDescription = stringResource(R.string.gallery_back_content_description),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
@@ -1760,32 +1760,18 @@ private fun GalleryHeader(
                 )
             }
             if (selectionMode) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    GalleryCircleIconButton(
-                        onClick = onDelete,
-                        enabled = selectionCount > 0,
-                        contentDescription = "Supprimer les cartes selectionnees",
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Delete,
-                            contentDescription = null,
-                        )
-                    }
-                    TextButton(onClick = onSelectionCancel) {
-                        Text("Annuler")
-                    }
-                }
+                GallerySelectionCancelPill(
+                    selectionCount = selectionCount,
+                    onClick = onSelectionCancel,
+                )
             } else {
                 GalleryCircleIconButton(
                     onClick = onLayoutModeChange,
                     contentDescription =
                         if (layoutMode == GalleryLayoutMode.Grid) {
-                            "Afficher en liste"
+                            stringResource(R.string.gallery_show_list_content_description)
                         } else {
-                            "Afficher en grille"
+                            stringResource(R.string.gallery_show_grid_content_description)
                         },
                 ) {
                     Icon(
@@ -1801,17 +1787,47 @@ private fun GalleryHeader(
             }
         }
         Text(
-            text =
-                if (selectionMode) {
-                    "$selectionCount selectionnee${if (selectionCount > 1) "s" else ""}"
-                } else {
-                    "Biblioth\u00e8que"
-                },
-            modifier = Modifier.padding(horizontal = 82.dp),
+            text = stringResource(R.string.gallery_title),
+            modifier = Modifier.padding(horizontal = if (selectionMode) 104.dp else 82.dp),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.titleLargeEmphasized,
         )
+    }
+}
+
+@Composable
+private fun GallerySelectionCancelPill(
+    selectionCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier =
+            modifier
+                .height(40.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 1.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = stringResource(R.string.gallery_clear_selection_content_description),
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = selectionCount.toString(),
+                style = MaterialTheme.typography.titleMediumEmphasized,
+            )
+        }
     }
 }
 
@@ -1939,7 +1955,7 @@ private fun GalleryFilterTabs(
                         horizontalArrangement = Arrangement.spacedBy(7.dp),
                     ) {
                         Text(
-                            text = filter.label,
+                            text = stringResource(filter.labelResId),
                             color = contentColor,
                             maxLines = 1,
                             style =
@@ -2019,7 +2035,7 @@ private fun GallerySearchField(
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (query.isEmpty()) {
                             Text(
-                                text = "Rechercher texte ou URL",
+                                text = stringResource(R.string.gallery_search_placeholder),
                                 style = searchTextStyle,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -2395,11 +2411,11 @@ private fun EmptyCaptureState() {
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "No post captured",
+            text = stringResource(R.string.capture_empty_title),
             style = MaterialTheme.typography.titleMediumEmphasized,
         )
         Text(
-            text = "Waiting for a shared post.",
+            text = stringResource(R.string.capture_empty_supporting),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2411,11 +2427,11 @@ private fun LoadingCaptureState() {
     StateFrame {
         MaterialLoadingIndicator(
             modifier = Modifier.size(48.dp),
-            contentDescription = "Preparing post",
+            contentDescription = stringResource(R.string.capture_loading_content_description),
         )
         Spacer(modifier = Modifier.height(14.dp))
         Text(
-            text = "Preparing post",
+            text = stringResource(R.string.capture_loading_title),
             style = MaterialTheme.typography.titleMediumEmphasized,
         )
     }
@@ -2428,15 +2444,22 @@ private fun ExportProcessingState(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val processingTitle =
+        stringResource(
+            when (exportType) {
+                QuotiExportType.Image -> R.string.export_processing_image
+                QuotiExportType.Video -> R.string.export_processing_video
+            },
+        )
     StateFrame(modifier = modifier) {
         MaterialLoadingIndicator(
             modifier = Modifier.size(48.dp),
-            contentDescription = exportType.processingTitle,
+            contentDescription = processingTitle,
             contained = true,
         )
         Spacer(modifier = Modifier.height(14.dp))
         Text(
-            text = exportType.processingTitle,
+            text = processingTitle,
             style = MaterialTheme.typography.titleMediumEmphasized,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -2455,13 +2478,20 @@ private fun ExportProcessingState(
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "You can leave Quoti or lock your phone. We'll notify you when it's ready.",
+            text = stringResource(R.string.export_notice_background),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = onCancel) {
-            Text(text = if (exportType == QuotiExportType.Video) "Stop processing" else "Cancel export")
+            Text(
+                text =
+                    if (exportType == QuotiExportType.Video) {
+                        stringResource(R.string.export_stop_processing)
+                    } else {
+                        stringResource(R.string.export_cancel_export)
+                    },
+            )
         }
     }
 }
@@ -2534,7 +2564,7 @@ private suspend fun SnackbarHostState.showSavedMediaSnackbar(
     val result =
         showSnackbar(
             message = message,
-            actionLabel = "Voir",
+            actionLabel = context.getString(R.string.action_open),
             withDismissAction = true,
             duration = SnackbarDuration.Long,
         )
@@ -2603,11 +2633,11 @@ private fun Header(
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Quoti",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleLargeEmphasized,
             )
             Text(
-                text = "Capture the post. Keep the context.",
+                text = stringResource(R.string.app_tagline),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2615,13 +2645,13 @@ private fun Header(
         IconButton(onClick = onGalleryClick) {
             Icon(
                 imageVector = Icons.Outlined.PhotoLibrary,
-                contentDescription = "Gallery",
+                contentDescription = stringResource(R.string.nav_gallery),
             )
         }
         IconButton(onClick = onSettingsClick) {
             Icon(
                 imageVector = Icons.Outlined.Settings,
-                contentDescription = "Settings",
+                contentDescription = stringResource(R.string.nav_settings),
             )
         }
     }
@@ -2753,7 +2783,7 @@ private fun QuotiCardPreview(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = "Quoti",
+                    text = stringResource(R.string.app_name),
                     style = MaterialTheme.typography.titleMediumEmphasized,
                     color = if (dark) Color(0xFFFFC7A8) else Color(0xFF7A442F),
                 )
@@ -2863,10 +2893,12 @@ private fun RelatedPostBlock(
                 .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        val fallbackAuthor = stringResource(R.string.card_related_post_fallback)
+        val relationshipLabel = stringResource(R.string.card_reply_relationship)
         val author =
             listOfNotNull(relatedPost.authorName.displayTextOrNull(), relatedPost.authorHandle.displayTextOrNull())
                 .joinToString("  ")
-                .ifBlank { "Original post" }
+                .ifBlank { fallbackAuthor }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -2881,7 +2913,7 @@ private fun RelatedPostBlock(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
-                text = "$ReplyRelationshipLabel $author",
+                text = "$relationshipLabel $author",
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -3343,7 +3375,7 @@ private fun VideoPlayButton(
         ) {
             Icon(
                 imageVector = Icons.Outlined.PlayArrow,
-                contentDescription = "Play video",
+                contentDescription = stringResource(R.string.play_video_content_description),
                 modifier = Modifier.size(iconSize),
             )
         }
@@ -3368,7 +3400,7 @@ private fun VideoBadge(
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = Icons.Outlined.Movie,
-                contentDescription = "Video",
+                contentDescription = stringResource(R.string.video_content_description),
                 modifier = Modifier.size(iconSize),
             )
         }
@@ -3505,7 +3537,7 @@ private fun MediaLoadingPlaceholder(
         }
         MaterialLoadingIndicator(
             modifier = Modifier.size(if (compact) 30.dp else 38.dp),
-            contentDescription = "Loading media",
+            contentDescription = stringResource(R.string.loading_media_content_description),
             contained = true,
         )
     }
@@ -3636,7 +3668,7 @@ private fun MediaPlaceholder(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Media",
+                text = stringResource(R.string.media_placeholder),
                 color = mutedColor,
                 style = MaterialTheme.typography.labelLarge,
             )
@@ -3653,212 +3685,156 @@ private fun QuotiActionToolbar(
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
     onShareImage: () -> Unit,
-    onCopyText: () -> Unit,
     onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onClear: () -> Unit,
-    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val hasVideo = post.containsVideo()
-    val primaryActionLabel = if (hasVideo) "Download video" else "Copy image"
-    val primaryAction = if (hasVideo) onDownloadVideo else onCopyImage
-    var overflowExpanded by remember { mutableStateOf(false) }
-
-    Box(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        HorizontalFloatingToolbar(
-            expanded = true,
-            floatingActionButton = {
-                FloatingToolbarDefaults.VibrantFloatingActionButton(
-                    onClick = primaryAction,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ) {
-                    PrimaryActionIcon(
-                        hasVideo = hasVideo,
-                        contentDescription = primaryActionLabel,
-                    )
-                }
-            },
-            colors =
-                FloatingToolbarDefaults.vibrantFloatingToolbarColors(
-                    toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    toolbarContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fabContainerColor = MaterialTheme.colorScheme.primary,
-                    fabContentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-            floatingActionButtonPosition = FloatingToolbarHorizontalFabPosition.End,
-        ) {
+    val hasSourceActions = sourceActionsEnabled && post.sourceUrl != null
+    var expanded by rememberSaveable(post.id, hasVideo, hasSourceActions) { mutableStateOf(false) }
+    val menuContainerColor = Color(0xFF744632)
+    val menuContentColor = Color(0xFFFFFAF2)
+    val menuScrimColor = Color(0xFF241F1A).copy(alpha = 0.44f)
+    val actions =
+        buildList {
             if (hasVideo) {
-                ToolbarActionButton(
-                    label = "Copy image",
-                    onClick = onCopyImage,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Image,
-                        contentDescription = "Copy image",
-                    )
-                }
-            } else {
-                ToolbarActionButton(
-                    label = "Download PNG",
-                    onClick = onDownloadPng,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Download,
-                        contentDescription = "Download PNG",
-                    )
-                }
-            }
-            ToolbarActionButton(
-                label = "Copy text",
-                onClick = onCopyText,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.Article,
-                    contentDescription = "Copy text",
+                add(
+                    QuotiFabMenuAction(
+                        labelResId = R.string.action_download_video,
+                        icon = Icons.Outlined.Download,
+                        onClick = onDownloadVideo,
+                    ),
                 )
             }
-            if (sourceActionsEnabled) {
-                ToolbarActionButton(
-                    label = "Copy source link",
-                    onClick = onCopySource,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Link,
-                        contentDescription = "Copy source link",
-                    )
-                }
+            add(
+                QuotiFabMenuAction(
+                    labelResId = R.string.action_copy_image,
+                    icon = Icons.Outlined.ContentCopy,
+                    onClick = onCopyImage,
+                ),
+            )
+            add(
+                QuotiFabMenuAction(
+                    labelResId = R.string.action_download_png,
+                    icon = Icons.Outlined.Download,
+                    onClick = onDownloadPng,
+                ),
+            )
+            add(
+                QuotiFabMenuAction(
+                    labelResId = R.string.action_share_image,
+                    icon = Icons.Outlined.Share,
+                    onClick = onShareImage,
+                ),
+            )
+            if (hasSourceActions) {
+                add(
+                    QuotiFabMenuAction(
+                        labelResId = R.string.action_copy_source_link,
+                        icon = Icons.Outlined.Link,
+                        onClick = onCopySource,
+                    ),
+                )
+                add(
+                    QuotiFabMenuAction(
+                        labelResId = R.string.action_open_source,
+                        icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                        onClick = onOpenSource,
+                    ),
+                )
             }
-            Box {
-                ToolbarActionButton(
-                    label = "More actions",
-                    onClick = { overflowExpanded = true },
+            add(
+                QuotiFabMenuAction(
+                    labelResId = R.string.action_clear_post,
+                    icon = Icons.Outlined.Delete,
+                    onClick = onClear,
+                ),
+            )
+        }
+
+    BackHandler(enabled = expanded) {
+        expanded = false
+    }
+
+    Box(modifier = modifier) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(120)),
+            exit = fadeOut(animationSpec = tween(120)),
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(menuScrimColor)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            expanded = false
+                        },
+            )
+        }
+
+        FloatingActionButtonMenu(
+            expanded = expanded,
+            button = {
+                ToggleFloatingActionButton(
+                    checked = expanded,
+                    onCheckedChange = { checked -> expanded = checked },
+                    containerColor = { menuContainerColor },
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = "More actions",
-                    )
-                }
-                DropdownMenu(
-                    expanded = overflowExpanded,
-                    onDismissRequest = { overflowExpanded = false },
-                ) {
-                    if (hasVideo) {
-                        DropdownMenuItem(
-                            text = { Text("Download PNG") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.Download,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                overflowExpanded = false
-                                onDownloadPng()
-                            },
+                    if (expanded) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = stringResource(R.string.action_more_actions),
+                            modifier = Modifier.size(28.dp),
+                            tint = menuContentColor,
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_edit_square_24),
+                            contentDescription = stringResource(R.string.action_more_actions),
+                            modifier = Modifier.size(28.dp),
+                            tint = menuContentColor,
                         )
                     }
-                    if (sourceActionsEnabled) {
-                        DropdownMenuItem(
-                            text = { Text("Open source") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                overflowExpanded = false
-                                onOpenSource()
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("Share image") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Share,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            overflowExpanded = false
-                            onShareImage()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Clear post") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Close,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            overflowExpanded = false
-                            onClear()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Refresh preview") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Refresh,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            overflowExpanded = false
-                            onRefresh()
-                        },
-                    )
                 }
+            },
+            modifier =
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(end = 20.dp, bottom = 18.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            actions.forEach { action ->
+                FloatingActionButtonMenuItem(
+                    onClick = {
+                        expanded = false
+                        action.onClick()
+                    },
+                    text = { Text(stringResource(action.labelResId)) },
+                    icon = {
+                        Icon(
+                            imageVector = action.icon,
+                            contentDescription = null,
+                        )
+                    },
+                    containerColor = menuContainerColor,
+                    contentColor = menuContentColor,
+                )
             }
         }
     }
 }
 
-@Composable
-private fun PrimaryActionIcon(
-    hasVideo: Boolean,
-    contentDescription: String,
-) {
-    Icon(
-        imageVector = if (hasVideo) Icons.Outlined.Download else Icons.Outlined.ContentCopy,
-        contentDescription = contentDescription,
-        modifier = Modifier.size(28.dp),
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ToolbarActionButton(
-    label: String,
-    onClick: () -> Unit,
-    icon: @Composable () -> Unit,
-) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = {
-            PlainTooltip {
-                Text(label)
-            }
-        },
-        state = rememberTooltipState(),
-    ) {
-        IconButton(onClick = onClick) {
-            icon()
-        }
-    }
-}
+private data class QuotiFabMenuAction(
+    @param:StringRes val labelResId: Int,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+)
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -3952,13 +3928,13 @@ private fun SettingsSheet(
                     .padding(horizontal = 22.dp, vertical = 8.dp),
         ) {
             Text(
-                text = "Settings",
+                text = stringResource(R.string.settings_title),
                 style = MaterialTheme.typography.titleLargeEmphasized,
             )
             Spacer(modifier = Modifier.height(8.dp))
             ListItem(
-                headlineContent = { Text("Source actions") },
-                supportingContent = { Text("Show copy source, open source and refresh controls.") },
+                headlineContent = { Text(stringResource(R.string.settings_source_actions_title)) },
+                supportingContent = { Text(stringResource(R.string.settings_source_actions_supporting)) },
                 trailingContent = {
                     Switch(
                         checked = settings.sourceActionsEnabled,
@@ -3973,10 +3949,10 @@ private fun SettingsSheet(
                 modifier = Modifier.align(Alignment.End),
                 onClick = onReset,
             ) {
-                Text("Reset")
+                Text(stringResource(R.string.settings_reset))
             }
             Text(
-                text = "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                text = stringResource(R.string.settings_build, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 modifier = Modifier.align(Alignment.End),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4071,47 +4047,45 @@ private fun QuotiPost.containsImage(): Boolean {
         relatedPost?.media?.any { it is PostMedia.Image } == true
 }
 
-private val QuotiExportType.processingTitle: String
-    get() =
+private fun QuotiExportType.startedSnackbarMessage(context: Context): String =
+    context.getString(
         when (this) {
-            QuotiExportType.Image -> "Saving image"
-            QuotiExportType.Video -> "Processing video"
-        }
+            QuotiExportType.Image -> R.string.export_image_started
+            QuotiExportType.Video -> R.string.export_video_started
+        },
+    )
 
-private val QuotiExportType.startedSnackbarMessage: String
-    get() =
+private fun QuotiExportType.readySnackbarMessage(context: Context): String =
+    context.getString(
         when (this) {
-            QuotiExportType.Image -> "Image export started"
-            QuotiExportType.Video -> "Video export started"
-        }
+            QuotiExportType.Image -> R.string.export_image_ready
+            QuotiExportType.Video -> R.string.export_video_ready
+        },
+    )
 
-private val QuotiExportType.readySnackbarMessage: String
-    get() =
+private fun QuotiExportType.savedSnackbarMessage(context: Context): String =
+    context.getString(
         when (this) {
-            QuotiExportType.Image -> "Image ready"
-            QuotiExportType.Video -> "Video ready"
-        }
+            QuotiExportType.Image -> R.string.export_image_saved
+            QuotiExportType.Video -> R.string.export_video_saved
+        },
+    )
 
-private val QuotiExportType.savedSnackbarMessage: String
-    get() =
+private fun QuotiExportType.openFailureSnackbarMessage(context: Context): String =
+    context.getString(
         when (this) {
-            QuotiExportType.Image -> "PNG saved to Pictures/Quoti"
-            QuotiExportType.Video -> "Video saved to Movies/Quoti"
-        }
+            QuotiExportType.Image -> R.string.export_image_open_failed
+            QuotiExportType.Video -> R.string.export_video_open_failed
+        },
+    )
 
-private val QuotiExportType.openFailureSnackbarMessage: String
-    get() =
+private fun QuotiExportType.failedSnackbarMessage(context: Context): String =
+    context.getString(
         when (this) {
-            QuotiExportType.Image -> "Unable to open image"
-            QuotiExportType.Video -> "Unable to open video"
-        }
-
-private val QuotiExportType.failedSnackbarMessage: String
-    get() =
-        when (this) {
-            QuotiExportType.Image -> "Unable to save PNG"
-            QuotiExportType.Video -> "Unable to export video"
-        }
+            QuotiExportType.Image -> R.string.export_image_failed
+            QuotiExportType.Video -> R.string.export_video_failed
+        },
+    )
 
 private suspend fun loadGalleryPreviewBitmap(
     cacheKey: String,
@@ -4227,7 +4201,7 @@ private suspend fun copyCardImage(
             cardTone = settings.cardTone,
             contentMode = settings.contentMode,
         )
-    val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
+    val clipData = ClipData.newUri(context.contentResolver, context.getString(R.string.clip_label_card_image), uri)
     post.sourceUrl?.let { sourceUrl ->
         clipData.addItem(ClipData.Item(sourceUrl))
     }
@@ -4246,7 +4220,7 @@ private suspend fun shareCardImage(
             cardTone = settings.cardTone,
             contentMode = settings.contentMode,
         )
-    val clipData = ClipData.newUri(context.contentResolver, "Quoti card image", uri)
+    val clipData = ClipData.newUri(context.contentResolver, context.getString(R.string.clip_label_card_image), uri)
     val shareIntent =
         Intent(Intent.ACTION_SEND).apply {
             type = "image/png"
@@ -4259,7 +4233,7 @@ private suspend fun shareCardImage(
         }
 
     context.startActivity(
-        Intent.createChooser(shareIntent, "Share Quoti card"),
+        Intent.createChooser(shareIntent, context.getString(R.string.share_card_chooser_title)),
     )
 }
 

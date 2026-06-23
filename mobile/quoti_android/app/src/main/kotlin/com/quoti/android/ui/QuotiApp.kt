@@ -22,6 +22,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -36,7 +37,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -146,12 +149,15 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.colorResource
@@ -212,11 +218,16 @@ private const val TwoMediaGridAspectRatio = 2f
 private const val MultiMediaGridAspectRatio = 1.7777778f
 private const val GalleryPageSize = 20
 private val GallerySwipeCommitThreshold = 64.dp
+private val GalleryContentHorizontalPadding = 20.dp
 private val GalleryPinnedHeaderReservedHeight = 108.dp
 private val GalleryTopEdgeFadeHeight = 96.dp
 private val GalleryBottomEdgeFadeHeight = 132.dp
 private val GalleryBottomSearchReservedHeight = 124.dp
 private val GallerySelectionSheetReservedHeight = 116.dp
+private val GalleryGridColumnGap = 14.dp
+private val GalleryDragAutoScrollEdgeHeight = 112.dp
+private val GalleryDragAutoScrollMinStep = 2.dp
+private val GalleryDragAutoScrollMaxStep = 18.dp
 private val GallerySearchKeyboardGap = 8.dp
 private val GallerySearchRestingBottomPadding = 18.dp
 private val GallerySearchFocusScrimHeight = 196.dp
@@ -267,6 +278,13 @@ private enum class GalleryContentFilter(
 private data class GalleryFilterTabBounds(
     val x: Dp,
     val width: Dp,
+)
+
+private data class GalleryDragSelectionState(
+    val anchorIndex: Int,
+    val baseKeys: Set<String>,
+    val pointerOffset: Offset,
+    val lastTargetIndex: Int,
 )
 
 data class QuotiUiSettings(
@@ -342,13 +360,7 @@ fun QuotiApp(
             ?.coerceIn(0, 100)
             ?: 0
     val notificationPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (!granted) {
-                scope.launch {
-                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_notifications_off))
-                }
-            }
-        }
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     val settings =
         QuotiUiSettings(
             cardTone = cardTone,
@@ -395,9 +407,6 @@ fun QuotiApp(
             withContext(Dispatchers.IO) {
                 galleryRepository.savePost(capturedPost)
             }
-        if (post == capturedPost) {
-            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_shared_post_captured))
-        }
     }
 
     DisposableEffect(workManager, activeExportId) {
@@ -434,17 +443,8 @@ fun QuotiApp(
                         ?: finishedExportType.savedSnackbarMessage(context),
                     uri = uri,
                     mimeType = mimeType,
-                    failureMessage = outputData.getString(QuotiExportWork.OutputFailureMessage)
-                        ?: finishedExportType.openFailureSnackbarMessage(context),
                 )
-            } else {
-                snackbarHostState.showSnackbar(finishedExportType.readySnackbarMessage(context))
             }
-        } else {
-            snackbarHostState.showSnackbar(
-                outputData.getString(QuotiExportWork.OutputFailureMessage)
-                    ?: finishedExportType.failedSnackbarMessage(context),
-            )
         }
 
         activeExportId = null
@@ -490,11 +490,8 @@ fun QuotiApp(
                 onSuccess = { workId ->
                     activeExportId = workId.toString()
                     activeExportTypeName = exportType.name
-                    snackbarHostState.showSnackbar(exportType.startedSnackbarMessage(context))
                 },
-                onFailure = {
-                    snackbarHostState.showSnackbar(exportType.failedSnackbarMessage(context))
-                },
+                onFailure = {},
             )
         }
     }
@@ -506,11 +503,7 @@ fun QuotiApp(
 
         val choices = activePost.videoExportChoices(context)
         when (choices.size) {
-            0 -> {
-                scope.launch {
-                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_no_exportable_video))
-                }
-            }
+            0 -> Unit
             1 -> startExport(
                 activePost = activePost,
                 exportType = QuotiExportType.Video,
@@ -536,15 +529,6 @@ fun QuotiApp(
         activeExportId = null
         activeExportTypeName = null
         activeExportInfo = null
-        scope.launch {
-            snackbarHostState.showSnackbar(
-                if (exportType == QuotiExportType.Video) {
-                    context.getString(R.string.snackbar_video_processing_stopped)
-                } else {
-                    context.getString(R.string.snackbar_export_stopped)
-                },
-            )
-        }
     }
 
     fun setGalleryVisible(visible: Boolean) {
@@ -600,9 +584,7 @@ fun QuotiApp(
                                         },
                                     )
                                 },
-                                onFailure = {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_copy_image_failed))
-                                },
+                                onFailure = {},
                             )
                         }
                     },
@@ -624,12 +606,8 @@ fun QuotiApp(
                                     settings = settings,
                                 )
                             }.fold(
-                                onSuccess = {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_share_sheet_ready))
-                                },
-                                onFailure = {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.snackbar_share_image_failed))
-                                },
+                                onSuccess = {},
+                                onFailure = {},
                             )
                         }
                     },
@@ -654,9 +632,6 @@ fun QuotiApp(
                             galleryDraft = null
                         } else {
                             onClear()
-                        }
-                        scope.launch {
-                            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_post_cleared))
                         }
                     },
                     contentPadding = innerPadding,
@@ -686,13 +661,10 @@ fun QuotiApp(
                             if (displayedPostKey != null && displayedPostKey in selectedKeys) {
                                 galleryDraft = null
                             }
-                            snackbarHostState.showSnackbar(
-                                context.resources.getQuantityString(
-                                    R.plurals.snackbar_cards_deleted,
-                                    selectedKeys.size,
-                                    selectedKeys.size,
-                                ),
-                            )
+                            val incomingPostKey = incomingPost?.galleryKey
+                            if (incomingPostKey != null && incomingPostKey in selectedKeys) {
+                                onClear()
+                            }
                         }
                     },
                     contentPadding = innerPadding,
@@ -1268,11 +1240,19 @@ private fun QuotiGalleryScreen(
     var selectedFilter by rememberSaveable { mutableStateOf(GalleryContentFilter.All) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
+    var dragSelectionState by remember { mutableStateOf<GalleryDragSelectionState?>(null) }
     var visibleCount by rememberSaveable(query, selectedFilter, posts.size) { mutableStateOf(GalleryPageSize) }
     var searchFocused by remember { mutableStateOf(false) }
     var searchImeWasVisible by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val galleryFocusManager = LocalFocusManager.current
+    val hapticFeedback = LocalHapticFeedback.current
+    val currentSelectedKeys by rememberUpdatedState(selectedKeys)
+    val galleryContentHorizontalPaddingPx = with(density) { GalleryContentHorizontalPadding.toPx() }
+    val gridColumnGapPx = with(density) { GalleryGridColumnGap.toPx() }
+    val dragAutoScrollEdgePx = with(density) { GalleryDragAutoScrollEdgeHeight.toPx() }
+    val dragAutoScrollMinStepPx = with(density) { GalleryDragAutoScrollMinStep.toPx() }
+    val dragAutoScrollMaxStepPx = with(density) { GalleryDragAutoScrollMaxStep.toPx() }
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val navigationBottomPx = WindowInsets.navigationBars.getBottom(density)
     val searchImeVisible = imeBottomPx > navigationBottomPx
@@ -1323,9 +1303,9 @@ private fun QuotiGalleryScreen(
         }
     val galleryContentPadding =
         PaddingValues(
-            start = 20.dp,
+            start = GalleryContentHorizontalPadding,
             top = GalleryPinnedHeaderReservedHeight + statusBarPadding,
-            end = 20.dp,
+            end = GalleryContentHorizontalPadding,
             bottom = galleryBottomReservedHeight,
         )
     val topGlassHeight = GalleryTopEdgeFadeHeight + statusBarPadding + GalleryTopGlassBleed
@@ -1349,6 +1329,7 @@ private fun QuotiGalleryScreen(
         }
 
     fun toggleSelection(post: QuotiPost) {
+        val previousKeys = selectedKeys
         val key = post.galleryKey
         val updatedKeys =
             if (key in selectedKeys) {
@@ -1356,11 +1337,15 @@ private fun QuotiGalleryScreen(
             } else {
                 selectedKeys + key
             }
+        if (previousKeys.isEmpty() && updatedKeys.isNotEmpty()) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
         selectedKeys = updatedKeys
         selectionMode = updatedKeys.isNotEmpty()
     }
 
     fun clearSelection() {
+        dragSelectionState = null
         selectedKeys = emptySet()
         selectionMode = false
     }
@@ -1373,6 +1358,156 @@ private fun QuotiGalleryScreen(
 
         clearSelection()
         onDeletePosts(keysToDelete)
+    }
+
+    fun galleryPostIndexAtPointer(
+        pointerOffset: Offset,
+        allowNearest: Boolean,
+    ): Int? {
+        val postItems =
+            listState
+                .layoutInfo
+                .visibleItemsInfo
+                .filter { item -> item.index > 0 }
+        if (postItems.isEmpty()) {
+            return null
+        }
+
+        val pointerY = pointerOffset.y + listState.layoutInfo.viewportStartOffset
+        val directItem =
+            postItems.firstOrNull { item ->
+                pointerY >= item.offset && pointerY <= item.offset + item.size
+            }
+        val selectedItem =
+            directItem ?: if (allowNearest) {
+                postItems.minByOrNull { item ->
+                    when {
+                        pointerY < item.offset -> item.offset - pointerY
+                        pointerY > item.offset + item.size -> pointerY - (item.offset + item.size)
+                        else -> 0f
+                    }
+                }
+            } else {
+                null
+            } ?: return null
+
+        return if (layoutMode == GalleryLayoutMode.Grid) {
+            val rowIndex = selectedItem.index - 1
+            val rowPosts = visibleGridRows.getOrNull(rowIndex).orEmpty()
+            if (rowPosts.isEmpty()) {
+                null
+            } else {
+                val column =
+                    if (rowPosts.size == 1) {
+                        0
+                    } else {
+                        val rowWidth =
+                            (
+                                listState.layoutInfo.viewportSize.width -
+                                    (galleryContentHorizontalPaddingPx * 2f)
+                            ).coerceAtLeast(1f)
+                        val pointerX = (pointerOffset.x - galleryContentHorizontalPaddingPx).coerceIn(0f, rowWidth)
+                        val tileWidth = ((rowWidth - gridColumnGapPx).coerceAtLeast(1f)) / 2f
+                        val firstColumnLimit = tileWidth + (gridColumnGapPx / 2f)
+
+                        if (pointerX <= firstColumnLimit) 0 else 1
+                    }
+                val post = rowPosts.getOrNull(column) ?: rowPosts.last()
+
+                visiblePosts.indexOfFirst { candidate -> candidate.galleryKey == post.galleryKey }
+                    .takeIf { index -> index >= 0 }
+            }
+        } else {
+            (selectedItem.index - 1).takeIf { index -> index in visiblePosts.indices }
+        }
+    }
+
+    fun dragSelectionKeys(
+        anchorIndex: Int,
+        targetIndex: Int,
+    ): Set<String> {
+        val startIndex = minOf(anchorIndex, targetIndex).coerceIn(visiblePosts.indices)
+        val endIndex = maxOf(anchorIndex, targetIndex).coerceIn(visiblePosts.indices)
+
+        return visiblePosts
+            .subList(startIndex, endIndex + 1)
+            .map { post -> post.galleryKey }
+            .toSet()
+    }
+
+    fun updateDragSelection(pointerOffset: Offset) {
+        val activeSelection = dragSelectionState ?: return
+        val targetIndex =
+            galleryPostIndexAtPointer(
+                pointerOffset = pointerOffset,
+                allowNearest = true,
+            ) ?: activeSelection.lastTargetIndex
+        val rangeKeys =
+            dragSelectionKeys(
+                anchorIndex = activeSelection.anchorIndex,
+                targetIndex = targetIndex,
+            )
+
+        selectedKeys = activeSelection.baseKeys + rangeKeys
+        selectionMode = selectedKeys.isNotEmpty()
+        dragSelectionState =
+            activeSelection.copy(
+                pointerOffset = pointerOffset,
+                lastTargetIndex = targetIndex,
+            )
+    }
+
+    fun startDragSelection(pointerOffset: Offset) {
+        val anchorIndex =
+            galleryPostIndexAtPointer(
+                pointerOffset = pointerOffset,
+                allowNearest = false,
+            ) ?: return
+        val anchorKey = visiblePosts.getOrNull(anchorIndex)?.galleryKey ?: return
+
+        if (currentSelectedKeys.isEmpty()) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        selectionMode = true
+        selectedKeys = currentSelectedKeys + anchorKey
+        dragSelectionState =
+            GalleryDragSelectionState(
+                anchorIndex = anchorIndex,
+                baseKeys = currentSelectedKeys,
+                pointerOffset = pointerOffset,
+                lastTargetIndex = anchorIndex,
+            )
+    }
+
+    fun dragAutoScrollStep(pointerOffset: Offset): Float {
+        val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
+        if (viewportHeight <= dragAutoScrollEdgePx || dragSelectionState == null) {
+            return 0f
+        }
+
+        val topDistance = dragAutoScrollEdgePx - pointerOffset.y
+        if (topDistance > 0f) {
+            val strength = (topDistance / dragAutoScrollEdgePx).coerceIn(0f, 1f)
+            return -(dragAutoScrollMinStepPx + ((dragAutoScrollMaxStepPx - dragAutoScrollMinStepPx) * strength))
+        }
+
+        val bottomDistance = pointerOffset.y - (viewportHeight - dragAutoScrollEdgePx)
+        if (bottomDistance > 0f) {
+            val strength = (bottomDistance / dragAutoScrollEdgePx).coerceIn(0f, 1f)
+            return dragAutoScrollMinStepPx + ((dragAutoScrollMaxStepPx - dragAutoScrollMinStepPx) * strength)
+        }
+
+        return 0f
+    }
+
+    val startDragSelectionHandler by rememberUpdatedState<(Offset) -> Unit> { offset ->
+        startDragSelection(offset)
+    }
+    val updateDragSelectionHandler by rememberUpdatedState<(Offset) -> Unit> { offset ->
+        updateDragSelection(offset)
+    }
+    val endDragSelectionHandler by rememberUpdatedState<() -> Unit> {
+        dragSelectionState = null
     }
 
     fun LazyListScope.galleryItems(interactive: Boolean) {
@@ -1437,7 +1572,7 @@ private fun QuotiGalleryScreen(
             ) { rowPosts ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(GalleryGridColumnGap),
                 ) {
                     rowPosts.forEach { post ->
                         GalleryGridTile(
@@ -1452,12 +1587,6 @@ private fun QuotiGalleryScreen(
                             onToggleSelection = {
                                 if (interactive) {
                                     toggleSelection(post)
-                                }
-                            },
-                            onStartSelection = {
-                                if (interactive) {
-                                    selectionMode = true
-                                    selectedKeys = selectedKeys + post.galleryKey
                                 }
                             },
                             modifier = Modifier.weight(1f),
@@ -1487,12 +1616,6 @@ private fun QuotiGalleryScreen(
                             toggleSelection(post)
                         }
                     },
-                    onStartSelection = {
-                        if (interactive) {
-                            selectionMode = true
-                            selectedKeys = selectedKeys + post.galleryKey
-                        }
-                    },
                 )
             }
         }
@@ -1503,6 +1626,20 @@ private fun QuotiGalleryScreen(
             clearSelection()
         } else {
             onBack()
+        }
+    }
+
+    LaunchedEffect(dragSelectionState != null) {
+        while (dragSelectionState != null) {
+            val activeSelection = dragSelectionState ?: break
+            val scrollStep = dragAutoScrollStep(activeSelection.pointerOffset)
+
+            if (scrollStep != 0f) {
+                listState.scrollBy(scrollStep)
+                updateDragSelection(activeSelection.pointerOffset)
+            }
+
+            delay(16)
         }
     }
 
@@ -1527,12 +1664,14 @@ private fun QuotiGalleryScreen(
         val retainedKeys = selectedKeys.intersect(availableKeys)
         selectedKeys = retainedKeys
         if (retainedKeys.isEmpty()) {
+            dragSelectionState = null
             selectionMode = false
         }
     }
 
     LaunchedEffect(selectedKeys) {
         if (selectedKeys.isEmpty()) {
+            dragSelectionState = null
             selectionMode = false
         }
     }
@@ -1556,7 +1695,18 @@ private fun QuotiGalleryScreen(
                     .widthIn(max = 440.dp)
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
-                    .navigationBarsPadding(),
+                    .navigationBarsPadding()
+                    .pointerInput(layoutMode) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { offset -> startDragSelectionHandler(offset) },
+                            onDragEnd = { endDragSelectionHandler() },
+                            onDragCancel = { endDragSelectionHandler() },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                updateDragSelectionHandler(change.position)
+                            },
+                        )
+                    },
             contentPadding = galleryContentPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -2104,6 +2254,7 @@ private fun GallerySelectionActionSheet(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
     val selectionLabel =
         context.resources.getQuantityString(
             R.plurals.gallery_selection_count,
@@ -2134,7 +2285,10 @@ private fun GallerySelectionActionSheet(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Button(
-                onClick = onDelete,
+                onClick = {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDelete()
+                },
                 enabled = selectionCount > 0,
                 colors =
                     ButtonDefaults.buttonColors(
@@ -2162,13 +2316,27 @@ private fun GalleryGridTile(
     selectionMode: Boolean,
     onOpen: () -> Unit,
     onToggleSelection: () -> Unit,
-    onStartSelection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val onClick = if (selectionMode) onToggleSelection else onOpen
     val previewSource = remember(post) { post.galleryPreviewSource() }
     val bitmap = rememberGalleryPreviewBitmap(previewSource)
     val shape = RoundedCornerShape(26.dp)
+    val selectedScale by animateFloatAsState(
+        targetValue = if (selected) 1.018f else 1f,
+        animationSpec = tween(durationMillis = 160),
+        label = "Gallery grid selected scale",
+    )
+    val tonalElevation by animateDpAsState(
+        targetValue = if (selected) 4.dp else 0.dp,
+        animationSpec = tween(durationMillis = 160),
+        label = "Gallery grid selected tonal elevation",
+    )
+    val shadowElevation by animateDpAsState(
+        targetValue = if (selected) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = 160),
+        label = "Gallery grid selected shadow elevation",
+    )
     val borderColor by animateColorAsState(
         targetValue =
             if (selected) {
@@ -2179,26 +2347,24 @@ private fun GalleryGridTile(
         label = "Gallery grid border",
     )
     val clickModifier =
-        if (selected) {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onToggleSelection,
-            )
-        } else {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onStartSelection,
-            )
-        }
+        Modifier.combinedClickable(
+            onClick = onClick,
+        )
 
     Surface(
         modifier =
             modifier
                 .aspectRatio(0.92f)
+                .graphicsLayer {
+                    scaleX = selectedScale
+                    scaleY = selectedScale
+                }
                 .clip(shape)
                 .then(clickModifier),
         shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = tonalElevation,
+        shadowElevation = shadowElevation,
         border = BorderStroke(1.dp, borderColor),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -2333,7 +2499,6 @@ private fun GalleryPostRow(
     selectionMode: Boolean,
     onOpen: () -> Unit,
     onToggleSelection: () -> Unit,
-    onStartSelection: () -> Unit,
 ) {
     val onClick = if (selectionMode) onToggleSelection else onOpen
     val containerColor by animateColorAsState(
@@ -2351,36 +2516,43 @@ private fun GalleryPostRow(
                 MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
             } else {
                 MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
-            },
+        },
         label = "Gallery card border",
     )
+    val selectedScale by animateFloatAsState(
+        targetValue = if (selected) 1.01f else 1f,
+        animationSpec = tween(durationMillis = 160),
+        label = "Gallery card selected scale",
+    )
     val tonalElevation by animateDpAsState(
-        targetValue = if (selected) 3.dp else 0.dp,
+        targetValue = if (selected) 4.dp else 0.dp,
         label = "Gallery card elevation",
+    )
+    val shadowElevation by animateDpAsState(
+        targetValue = if (selected) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = 160),
+        label = "Gallery card shadow elevation",
     )
     val shape = RoundedCornerShape(24.dp)
     val clickModifier =
-        if (selected) {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onToggleSelection,
-            )
-        } else {
-            Modifier.combinedClickable(
-                onClick = onClick,
-                onLongClick = onStartSelection,
-            )
-        }
+        Modifier.combinedClickable(
+            onClick = onClick,
+        )
 
     Surface(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .graphicsLayer {
+                    scaleX = selectedScale
+                    scaleY = selectedScale
+                }
                 .clip(shape)
                 .then(clickModifier),
         shape = shape,
         color = containerColor,
         tonalElevation = tonalElevation,
+        shadowElevation = shadowElevation,
         border = BorderStroke(1.dp, borderColor),
     ) {
         Row(
@@ -2665,7 +2837,6 @@ private suspend fun SnackbarHostState.showSavedMediaSnackbar(
     message: String,
     uri: Uri,
     mimeType: String,
-    failureMessage: String,
 ) {
     val result =
         showSnackbar(
@@ -2682,8 +2853,6 @@ private suspend fun SnackbarHostState.showSavedMediaSnackbar(
                     .setDataAndType(uri, mimeType)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             )
-        }.onFailure {
-            showSnackbar(failureMessage)
         }
     }
 }
@@ -3799,6 +3968,7 @@ private fun QuotiActionToolbar(
     val hasVideo = post.containsVideo()
     val hasSourceActions = sourceActionsEnabled && post.sourceUrl != null
     var expanded by rememberSaveable(post.id, hasVideo, hasSourceActions) { mutableStateOf(false) }
+    val hapticFeedback = LocalHapticFeedback.current
     val menuContainerColor = Color(0xFF744632)
     val menuContentColor = Color(0xFFFFFAF2)
     val menuScrimColor = Color(0xFF241F1A).copy(alpha = 0.44f)
@@ -3859,8 +4029,15 @@ private fun QuotiActionToolbar(
             )
         }
 
+    fun setExpandedWithHaptic(value: Boolean) {
+        if (expanded != value) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        expanded = value
+    }
+
     BackHandler(enabled = expanded) {
-        expanded = false
+        setExpandedWithHaptic(false)
     }
 
     Box(modifier = modifier) {
@@ -3878,7 +4055,7 @@ private fun QuotiActionToolbar(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                         ) {
-                            expanded = false
+                            setExpandedWithHaptic(false)
                         },
             )
         }
@@ -3888,7 +4065,7 @@ private fun QuotiActionToolbar(
             button = {
                 ToggleFloatingActionButton(
                     checked = expanded,
-                    onCheckedChange = { checked -> expanded = checked },
+                    onCheckedChange = { checked -> setExpandedWithHaptic(checked) },
                     containerColor = { menuContainerColor },
                 ) {
                     if (expanded) {
@@ -3918,7 +4095,7 @@ private fun QuotiActionToolbar(
             actions.forEach { action ->
                 FloatingActionButtonMenuItem(
                     onClick = {
-                        expanded = false
+                        setExpandedWithHaptic(false)
                         action.onClick()
                     },
                     text = { Text(stringResource(action.labelResId)) },
@@ -3950,6 +4127,14 @@ private fun <T> ExpressiveChoiceGroup(
     onValueChange: (T) -> Unit,
 ) {
     val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
+    val hapticFeedback = LocalHapticFeedback.current
+
+    fun updateValue(nextValue: T) {
+        if (nextValue != value) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+            onValueChange(nextValue)
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -3971,7 +4156,7 @@ private fun <T> ExpressiveChoiceGroup(
                     buttonGroupContent = {
                         ToggleButton(
                             checked = selected,
-                            onCheckedChange = { onValueChange(option.value) },
+                            onCheckedChange = { updateValue(option.value) },
                             shapes =
                                 when (index) {
                                     0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
@@ -4003,7 +4188,7 @@ private fun <T> ExpressiveChoiceGroup(
                     menuContent = {
                         DropdownMenuItem(
                             text = { Text(option.label) },
-                            onClick = { onValueChange(option.value) },
+                            onClick = { updateValue(option.value) },
                         )
                     },
                 )
@@ -4025,6 +4210,8 @@ private fun SettingsSheet(
     onReset: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier =
@@ -4044,7 +4231,12 @@ private fun SettingsSheet(
                 trailingContent = {
                     Switch(
                         checked = settings.sourceActionsEnabled,
-                        onCheckedChange = onSourceActionsChange,
+                        onCheckedChange = { checked ->
+                            if (checked != settings.sourceActionsEnabled) {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            }
+                            onSourceActionsChange(checked)
+                        },
                     )
                 },
             )
@@ -4153,43 +4345,11 @@ private fun QuotiPost.containsImage(): Boolean {
         relatedPost?.media?.any { it is PostMedia.Image } == true
 }
 
-private fun QuotiExportType.startedSnackbarMessage(context: Context): String =
-    context.getString(
-        when (this) {
-            QuotiExportType.Image -> R.string.export_image_started
-            QuotiExportType.Video -> R.string.export_video_started
-        },
-    )
-
-private fun QuotiExportType.readySnackbarMessage(context: Context): String =
-    context.getString(
-        when (this) {
-            QuotiExportType.Image -> R.string.export_image_ready
-            QuotiExportType.Video -> R.string.export_video_ready
-        },
-    )
-
 private fun QuotiExportType.savedSnackbarMessage(context: Context): String =
     context.getString(
         when (this) {
             QuotiExportType.Image -> R.string.export_image_saved
             QuotiExportType.Video -> R.string.export_video_saved
-        },
-    )
-
-private fun QuotiExportType.openFailureSnackbarMessage(context: Context): String =
-    context.getString(
-        when (this) {
-            QuotiExportType.Image -> R.string.export_image_open_failed
-            QuotiExportType.Video -> R.string.export_video_open_failed
-        },
-    )
-
-private fun QuotiExportType.failedSnackbarMessage(context: Context): String =
-    context.getString(
-        when (this) {
-            QuotiExportType.Image -> R.string.export_image_failed
-            QuotiExportType.Video -> R.string.export_video_failed
         },
     )
 

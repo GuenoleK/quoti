@@ -55,7 +55,7 @@ class QuotiGalleryRepository(
             .edit()
             .putString(KeyPosts, payload.toString())
             .remove(LegacyKeyFixturesSeeded)
-            .apply()
+            .commit()
 
         return distinctPosts
     }

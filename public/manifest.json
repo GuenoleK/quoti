@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Quoti",
   "description": "Transform social posts into elegant, shareable context cards.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "icons": {
     "16": "icons/quoti-icon-16.png",
     "32": "icons/quoti-icon-32.png",
@@ -47,8 +47,12 @@
         "https://m.facebook.com/*",
         "https://fb.watch/*"
       ],
-      "js": ["content-script.js"],
-      "css": ["assets/content-script.css"],
+      "js": [
+        "content-script.js"
+      ],
+      "css": [
+        "assets/content-script.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -75,5 +79,14 @@
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
-  "permissions": ["activeTab", "clipboardWrite", "contextMenus", "nativeMessaging", "scripting", "storage", "tabs", "webRequest"]
+  "permissions": [
+    "activeTab",
+    "clipboardWrite",
+    "contextMenus",
+    "nativeMessaging",
+    "scripting",
+    "storage",
+    "tabs",
+    "webRequest"
+  ]
 }

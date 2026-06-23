@@ -203,9 +203,17 @@ function formatNoteBody(markdown) {
     .trim();
 }
 
+function formatLocalDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 function writeAggregateNotes({ androidNotes, commonNotes, extensionNotes, outputDir, version }) {
   const commit = runCapture("git rev-parse --short HEAD", rootDir);
-  const releaseDate = new Date().toISOString().slice(0, 10);
+  const releaseDate = formatLocalDate(new Date());
   const sections = [`# Quoti ${version}`, "", `Release date: ${releaseDate}`, `Git commit: \`${commit}\``];
 
   if (commonNotes) {

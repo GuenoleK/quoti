@@ -1035,11 +1035,34 @@ private data class XStatusAnchor(
     val range: IntRange,
 )
 
-private fun selectTweetText(
+internal fun selectTweetText(
     oEmbedContent: String?,
     pageContent: String?,
 ): String? {
-    return oEmbedContent ?: pageContent
+    val oEmbedText = oEmbedContent?.takeIf { it.isNotBlank() }
+    val pageText = pageContent?.takeIf { it.isNotBlank() }
+
+    if (oEmbedText == null) {
+        return pageText
+    }
+    if (pageText == null) {
+        return oEmbedText
+    }
+
+    val oEmbedComparison = oEmbedText.toTweetTextSelectionComparison()
+    val pageComparison = pageText.toTweetTextSelectionComparison()
+    val pageCompletesOEmbed =
+        oEmbedComparison.isNotBlank() &&
+            pageComparison.length > oEmbedComparison.length &&
+            pageComparison.isCompatibleWithFallback(oEmbedComparison)
+
+    return if (pageCompletesOEmbed && oEmbedText.hasBracketedTruncationMarker()) {
+        pageText
+    } else if (pageCompletesOEmbed && pageText.length > oEmbedText.length) {
+        pageText
+    } else {
+        oEmbedText
+    }
 }
 
 private fun String.toAuthorHandle(): String? {
@@ -1503,6 +1526,17 @@ private fun String.toTweetComparisonPrefix(): String {
         ?.replace(Regex("""\s*(?:…|\.\.\.)\s*$"""), "")
         ?.compactForTweetComparison()
         .orEmpty()
+}
+
+private fun String.toTweetTextSelectionComparison(): String {
+    return replace(Regex("""\s*\[\.\.\.\]\s*$"""), "")
+        .replace(Regex("""(?i)\s*(?:…|\.\.\.)?\s*(?:show more|voir plus|afficher plus)\s*$"""), "")
+        .replace(Regex("""\s*(?:…|\.\.\.)\s*$"""), "")
+        .compactForTweetComparison()
+}
+
+private fun String.hasBracketedTruncationMarker(): Boolean {
+    return Regex("""\s*\[\.\.\.\]\s*$""").containsMatchIn(this)
 }
 
 private fun String.compactForTweetComparison(): String {

@@ -1,5 +1,8 @@
 package com.quoti.android.ui
 
+import android.content.Context
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -10,14 +13,17 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.quoti.android.core.model.PostMedia
 import com.quoti.android.core.model.QuotiPost
 import com.quoti.android.core.model.RelatedPost
 import com.quoti.android.core.model.SocialPlatform
+import com.quoti.android.data.QuotiGalleryRepository
 import com.quoti.android.share.IncomingShareDraft
 import com.quoti.android.ui.theme.QuotiTheme
 import org.junit.Rule
@@ -167,6 +173,47 @@ class QuotiAppTest {
         composeRule.onAllNodesWithContentDescription("Copy image").assertCountEquals(0)
     }
 
+    @Test
+    fun gallerySelectionShowsDeleteSheetAndHidesSearch() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context
+            .getSharedPreferences("quoti_gallery", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        QuotiGalleryRepository(context).savePost(
+            capturedPost(
+                id = "saved-first",
+                content = "First saved text",
+                sourceUrl = "https://x.com/maya_laurent/status/111",
+            ),
+        )
+        QuotiGalleryRepository(context).savePost(
+            capturedPost(
+                id = "saved-second",
+                content = "Second saved text",
+                sourceUrl = "https://x.com/maya_laurent/status/222",
+            ),
+        )
+
+        composeRule.setContent {
+            QuotiTheme {
+                QuotiApp(incomingDraft = null)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Gallery").performClick()
+        composeRule.onNodeWithText("Second saved text").performTouchInput { longClick() }
+
+        composeRule.onNodeWithText("1 selected").assertIsDisplayed()
+        composeRule.onNodeWithText("Delete").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Search text or URL").assertCountEquals(0)
+
+        composeRule.onNodeWithText("First saved text").performTouchInput { click() }
+
+        composeRule.onNodeWithText("2 selected").assertIsDisplayed()
+    }
+
     private fun capturedDraft(
         content: String = "Captured text",
         post: QuotiPost = capturedPost(content = content),
@@ -178,17 +225,19 @@ class QuotiAppTest {
     }
 
     private fun capturedPost(
+        id: String = "incoming-test",
         content: String = "Captured text",
         relatedPost: RelatedPost? = null,
+        sourceUrl: String = "https://x.com/maya_laurent/status/123",
     ): QuotiPost {
         return QuotiPost(
-            id = "incoming-test",
+            id = id,
             platform = SocialPlatform.X,
             authorName = "maya_laurent",
             authorHandle = "@maya_laurent",
             content = content,
             relatedPost = relatedPost,
-            sourceUrl = "https://x.com/maya_laurent/status/123",
+            sourceUrl = sourceUrl,
             capturedAt = "2026-06-15T10:00:00Z",
         )
     }

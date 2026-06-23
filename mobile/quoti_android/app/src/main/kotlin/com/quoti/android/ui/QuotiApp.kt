@@ -27,6 +27,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
@@ -214,6 +216,7 @@ private val GalleryPinnedHeaderReservedHeight = 108.dp
 private val GalleryTopEdgeFadeHeight = 96.dp
 private val GalleryBottomEdgeFadeHeight = 132.dp
 private val GalleryBottomSearchReservedHeight = 124.dp
+private val GallerySelectionSheetReservedHeight = 116.dp
 private val GallerySearchKeyboardGap = 8.dp
 private val GallerySearchRestingBottomPadding = 18.dp
 private val GallerySearchFocusScrimHeight = 196.dp
@@ -1312,12 +1315,18 @@ private fun QuotiGalleryScreen(
     }
     val statusBarPadding = contentPadding.calculateTopPadding()
     val bottomContentPadding = contentPadding.calculateBottomPadding()
+    val galleryBottomReservedHeight =
+        if (selectionMode) {
+            GallerySelectionSheetReservedHeight
+        } else {
+            GalleryBottomSearchReservedHeight
+        }
     val galleryContentPadding =
         PaddingValues(
             start = 20.dp,
             top = GalleryPinnedHeaderReservedHeight + statusBarPadding,
             end = 20.dp,
-            bottom = GalleryBottomSearchReservedHeight,
+            bottom = galleryBottomReservedHeight,
         )
     val topGlassHeight = GalleryTopEdgeFadeHeight + statusBarPadding + GalleryTopGlassBleed
     val searchBottomPadding =
@@ -1508,6 +1517,12 @@ private fun QuotiGalleryScreen(
         }
     }
 
+    LaunchedEffect(selectionMode) {
+        if (selectionMode) {
+            galleryFocusManager.clearFocus(force = true)
+        }
+    }
+
     LaunchedEffect(posts) {
         val retainedKeys = selectedKeys.intersect(availableKeys)
         selectedKeys = retainedKeys
@@ -1577,7 +1592,7 @@ private fun QuotiGalleryScreen(
                     .zIndex(1f),
         )
 
-        if (searchActive) {
+        if (searchActive && !selectionMode) {
             GallerySearchFocusScrim(
                 modifier =
                     Modifier
@@ -1618,10 +1633,10 @@ private fun QuotiGalleryScreen(
                     .zIndex(2f),
         )
 
-        GallerySearchField(
-            query = query,
-            onQueryChange = { value -> query = value },
-            onFocusChange = { focused -> searchFocused = focused },
+        AnimatedVisibility(
+            visible = !selectionMode,
+            enter = fadeIn(animationSpec = tween(durationMillis = 150)),
+            exit = fadeOut(animationSpec = tween(durationMillis = 110)),
             modifier =
                 Modifier
                     .align(Alignment.BottomCenter)
@@ -1632,7 +1647,41 @@ private fun QuotiGalleryScreen(
                     .padding(bottom = searchBottomPadding)
                     .offset(y = searchKeyboardOffset)
                     .zIndex(2f),
-        )
+        ) {
+            GallerySearchField(
+                query = query,
+                onQueryChange = { value -> query = value },
+                onFocusChange = { focused -> searchFocused = focused },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = selectionMode,
+            enter =
+                slideInVertically(
+                    animationSpec = tween(durationMillis = 180),
+                    initialOffsetY = { height -> height },
+                ) + fadeIn(animationSpec = tween(durationMillis = 120)),
+            exit =
+                slideOutVertically(
+                    animationSpec = tween(durationMillis = 140),
+                    targetOffsetY = { height -> height },
+                ) + fadeOut(animationSpec = tween(durationMillis = 100)),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 18.dp)
+                    .zIndex(2.5f),
+        ) {
+            GallerySelectionActionSheet(
+                selectionCount = selectedKeys.size,
+                onDelete = ::deleteSelectedPosts,
+            )
+        }
     }
 }
 
@@ -2044,6 +2093,63 @@ private fun GallerySearchField(
                     }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun GallerySelectionActionSheet(
+    selectionCount: Int,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val selectionLabel =
+        context.resources.getQuantityString(
+            R.plurals.gallery_selection_count,
+            selectionCount,
+            selectionCount,
+        )
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 4.dp,
+        shadowElevation = 8.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.10f)),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = selectionLabel,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMediumEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Button(
+                onClick = onDelete,
+                enabled = selectionCount > 0,
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.gallery_delete_action))
+            }
         }
     }
 }

@@ -75,6 +75,7 @@
         <item quantity="one">%1$d selected</item>
         <item quantity="other">%1$d selected</item>
     </plurals>
+    <string name="gallery_delete_action">Delete</string>
     <string name="gallery_filter_all">All</string>
     <string name="gallery_filter_images">Images</string>
     <string name="gallery_filter_videos">Videos</string>

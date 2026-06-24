@@ -647,7 +647,7 @@ internal object XPostOEmbedParser {
 
 internal object XPostPageParser {
     private val imageUrlPattern =
-        Regex("""https://pbs\.twimg\.com/media/[^"'<\s]+""")
+        Regex("""https://pbs\.twimg\.com/(?:media|card_img)/[^"'<\s]+""")
     private val profileImageUrlPattern =
         Regex("""https://pbs\.twimg\.com/profile_images/[^"'<\s]+""")
     private val videoPosterPattern =

@@ -30,6 +30,11 @@ type PlatformConfig = {
   platform: SocialPlatform;
 };
 
+type ImagePostMediaCandidate = {
+  alt?: string;
+  url: string;
+};
+
 const inlineButtonClassName = "quoti-inline-button";
 const inlineButtonInsertedClassName = "quoti-inline-button-inserted";
 const settingsStorageKey = "quoti-settings";
@@ -290,7 +295,9 @@ function shouldInjectInlineButton(article: HTMLElement): boolean {
   const platform = getCurrentPlatform();
 
   if (platform.isX) {
-    return Boolean(article.querySelector('[data-testid="tweetText"], time, img[src*="/media/"], video'));
+    return Boolean(
+      article.querySelector('[data-testid="tweetText"], time, img[src*="/media/"], img[src*="/card_img/"], img[srcset*="/media/"], img[srcset*="/card_img/"], video')
+    );
   }
 
   return Boolean(readGenericPostContent(article, platform.platform) || readGenericPostMedia(article).length > 0);
@@ -1682,24 +1689,142 @@ function readPostVideos(root: HTMLElement, observedVideoUrls: string[], excluded
 function readPostImages(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMedia[] {
   const imageUrls = new Set<string>();
 
-  return Array.from(root.querySelectorAll<HTMLImageElement>("img"))
-    .filter((image) => !isInsideExcludedContainer(image, excludedContainer))
-    .map((image): ImagePostMedia | null => {
-      const normalizedUrl = normalizePostImageUrl(readImageSourceUrl(image));
-
-      if (!normalizedUrl || imageUrls.has(normalizedUrl) || !isLikelyPostImage(image)) {
+  return readPostImageCandidates(root, excludedContainer)
+    .map((candidate): ImagePostMedia | null => {
+      if (imageUrls.has(candidate.url)) {
         return null;
       }
 
-      imageUrls.add(normalizedUrl);
+      imageUrls.add(candidate.url);
 
       return {
         type: "image" as const,
+        url: candidate.url,
+        alt: candidate.alt
+      };
+    })
+    .filter((media): media is ImagePostMedia => media !== null);
+}
+
+function readPostImageCandidates(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMediaCandidate[] {
+  return [
+    ...readPostDomImageCandidates(root, excludedContainer),
+    ...readPostBackgroundImageCandidates(root, excludedContainer),
+    ...readPostReactImageCandidates(root, excludedContainer)
+  ];
+}
+
+function readPostDomImageCandidates(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMediaCandidate[] {
+  return Array.from(root.querySelectorAll<HTMLImageElement>("img"))
+    .filter((image) => !isInsideExcludedContainer(image, excludedContainer))
+    .map((image): ImagePostMediaCandidate | null => {
+      const normalizedUrl = normalizePostImageUrl(readImageSourceUrl(image));
+
+      if (!normalizedUrl || !isLikelyPostImage(image)) {
+        return null;
+      }
+
+      return {
         url: normalizedUrl,
         alt: normalizeText(image.alt)
       };
     })
-    .filter((media): media is ImagePostMedia => media !== null);
+    .filter((candidate): candidate is ImagePostMediaCandidate => candidate !== null);
+}
+
+function readPostBackgroundImageCandidates(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMediaCandidate[] {
+  return getScopedElementCandidates(root, excludedContainer)
+    .filter(isLikelyPostImageElement)
+    .flatMap((element) => extractTwitterPostImageUrls(readElementBackgroundImageValue(element)))
+    .map((url) => normalizePostImageUrl(url))
+    .filter((url): url is string => Boolean(url))
+    .map((url) => ({ url }));
+}
+
+function readPostReactImageCandidates(root: HTMLElement, excludedContainer?: HTMLElement | null): ImagePostMediaCandidate[] {
+  const urls = new Set<string>();
+  const seen = new WeakSet<object>();
+  const nodes = getScopedElementCandidates(root, excludedContainer).filter((element) => !excludedContainer || !element.contains(excludedContainer));
+
+  nodes.forEach((node) => {
+    Object.keys(node)
+      .filter((key) => key.startsWith("__reactProps$") || key.startsWith("__reactFiber$"))
+      .forEach((key) => collectTwitterPostImageUrls((node as unknown as Record<string, unknown>)[key], urls, seen, 0));
+  });
+
+  return [...urls].map((url) => ({ url }));
+}
+
+function getScopedElementCandidates(root: HTMLElement, excludedContainer?: HTMLElement | null): HTMLElement[] {
+  return [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))]
+    .filter((element) => !isInsideExcludedContainer(element, excludedContainer))
+    .slice(0, 260);
+}
+
+function isLikelyPostImageElement(element: HTMLElement): boolean {
+  if (element.closest(avatarContainerSelector)) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+
+  if (rect.width > 0 && rect.height > 0 && Math.max(rect.width, rect.height) < 96) {
+    return false;
+  }
+
+  return true;
+}
+
+function readElementBackgroundImageValue(element: HTMLElement): string {
+  const values = [element.style.backgroundImage, element.getAttribute("style") ?? ""];
+
+  try {
+    values.push(window.getComputedStyle(element).backgroundImage);
+  } catch {
+    // Inline style values still cover the common card image case.
+  }
+
+  return values.join(" ");
+}
+
+function collectTwitterPostImageUrls(value: unknown, urls: Set<string>, seen: WeakSet<object>, depth: number): void {
+  if (depth > 10 || urls.size > 80 || value === null || value === undefined) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    extractTwitterPostImageUrls(value)
+      .map((url) => normalizePostImageUrl(url))
+      .filter((url): url is string => Boolean(url))
+      .forEach((url) => urls.add(url));
+    return;
+  }
+
+  if (typeof value !== "object" || seen.has(value)) {
+    return;
+  }
+
+  seen.add(value);
+
+  if (value instanceof Node || value instanceof Window) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.slice(0, 80).forEach((item) => collectTwitterPostImageUrls(item, urls, seen, depth + 1));
+    return;
+  }
+
+  Object.entries(value as Record<string, unknown>)
+    .slice(0, 160)
+    .forEach(([, item]) => collectTwitterPostImageUrls(item, urls, seen, depth + 1));
+}
+
+function extractTwitterPostImageUrls(value: string): string[] {
+  const normalizedValue = value.replace(/\\\//g, "/").replace(/\\u002f/gi, "/").replace(/\\u0026/g, "&").replace(/&amp;/g, "&");
+  const matches = normalizedValue.match(/https?:\/\/pbs\.twimg\.com\/(?:media|card_img)\/[^"'\s\\<>),\]}]+/g) ?? [];
+
+  return matches.map((url) => url.replace(/&amp;/g, "&"));
 }
 
 function isLikelyPostImage(image: HTMLImageElement): boolean {

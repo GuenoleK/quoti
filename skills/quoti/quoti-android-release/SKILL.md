@@ -9,7 +9,7 @@ description: Build, test, version, package, and publish installable Quoti Androi
 
 Use this skill for the Quoti Android app in `C:\dev\open-source\quoti\mobile\quoti_android`.
 
-The expected outcome is an installable debug APK uploaded to Google Drive, with a versioned APK file plus the stable latest APK replaced in place.
+The expected outcome is an installable debug APK uploaded to Google Drive, with a versioned APK file plus the stable latest APK replaced in place. Keep only one versioned Android APK in the Drive release folder: after the new versioned APK is uploaded and verified, delete the previous versioned Android APK to avoid accumulating Drive storage.
 
 For GitHub releases, Android plus extension packages, or community release notes, use `skills/quoti/quoti-release-package/` instead.
 
@@ -20,19 +20,21 @@ For GitHub releases, Android plus extension packages, or community release notes
 3. Synchronize the Android release version in `mobile/quoti_android/app/build.gradle.kts`.
 4. Run the final build and tests.
 5. Upload the APK to Drive as both a versioned artifact and the latest artifact.
-6. Clean Codex temporary artifacts from the project workspace.
-7. Report links, SHA256, version, and verification.
+6. Delete the previous versioned Android APK from the Drive release folder after the new upload is verified.
+7. Clean Codex temporary artifacts from the project workspace.
+8. Report links, SHA256, version, verification, and any deleted previous Drive artifact.
 
 ## Versioning
 
 Use the current release strategy in `docs/release/release-strategy.md`.
 
-- Keep `versionName` aligned with the public release version, currently `0.1.0` unless the user asks for a visible version bump.
+- Keep `versionName` aligned with the current public release version already used by the repo unless the user asks for a visible version bump.
 - Increment `versionCode` by 1 for each installable Android package.
 - Prefer the release sync script:
 
 ```powershell
-npm run release:sync-version -- -- --release-version=0.1.0 --increment-android-code
+$releaseVersion = (Get-Content package.json | ConvertFrom-Json).version
+npm run release:sync-version -- -- --release-version=$releaseVersion --increment-android-code
 ```
 
 - Use this Drive filename for the versioned APK:
@@ -91,6 +93,7 @@ Latest APK file:
 
 - File name: `quoti-android-debug.apk`
 - Resolve the file at runtime inside the target folder. Prefer private environment/config values when they are available, or search Drive by file name and verify that the result is unique.
+- If the target folder is verified and no latest APK exists there, treat this as a first Drive publication and create `quoti-android-debug.apk` with a new upload.
 
 Private configuration names, if the environment provides them:
 
@@ -101,10 +104,13 @@ Never commit concrete Drive IDs, account identifiers, credentials, links, or loc
 
 Publishing steps:
 
-1. Resolve the target folder and latest APK file from private configuration or Drive search, then read metadata to verify both resources.
-2. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>+<versionCode>.apk` into the resolved folder.
-3. Replace the bytes of the resolved latest APK file with the same APK, keeping the name `quoti-android-debug.apk`.
-4. Read metadata for both Drive files after upload and use only returned Drive URLs in the final answer.
+1. Resolve the target folder from private configuration or Drive search, then read metadata to verify it. Resolve the latest APK file if it exists.
+2. List the target folder before upload and identify existing versioned Android APKs matching `quoti-android-debug-v*.apk`.
+3. Upload the local APK as a new versioned file named `quoti-android-debug-v<versionName>+<versionCode>.apk` into the resolved folder.
+4. Replace the bytes of the resolved latest APK file with the same APK, keeping the name `quoti-android-debug.apk`; if no latest APK exists, upload a new latest file with that exact name.
+5. Read metadata for both Drive files after upload and use only returned Drive URLs in the final answer.
+6. Delete previous versioned Android APKs in the target folder after the new versioned file is verified. Do not delete the newly uploaded versioned APK, the stable latest APK, non-Android files, release notes, or files outside the resolved target folder.
+7. List or read metadata after deletion to verify the target folder retains only the new versioned APK and `quoti-android-debug.apk` for Android debug distribution.
 
 Use MIME type:
 

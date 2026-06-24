@@ -63,6 +63,30 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun extractsLinkCardPreviewImageFromXPageHtml() {
+        val html =
+            """
+            {
+              "rest_id":"2069663474871853282",
+              "card_image":"https:\/\/pbs.twimg.com\/card_img\/2069662000000000000\/rmc-sport-preview.jpg?format=jpg&amp;name=small"
+            }
+            """.trimIndent()
+
+        val media =
+            XPostPageParser.extractMedia(
+                html = html,
+                canonicalUrl = "https://x.com/RMCsport/status/2069663474871853282",
+            )
+
+        assertEquals(1, media.size)
+        assertTrue(media[0] is PostMedia.Image)
+        assertEquals(
+            "https://pbs.twimg.com/card_img/2069662000000000000/rmc-sport-preview.jpg?format=jpg&name=large",
+            (media[0] as PostMedia.Image).url,
+        )
+    }
+
+    @Test
     fun treatsGenericMediaThumbnailAsVideoPosterWhenVideoInfoOwnsVariant() {
         val html =
             """

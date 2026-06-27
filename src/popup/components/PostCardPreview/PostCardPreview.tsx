@@ -676,7 +676,7 @@ function getVideoMediaMaxHeight(media: PostMedia, mediaRatio: number, related: b
   }
 
   if (mediaRatio >= 1.18) {
-    return 520;
+    return 560;
   }
 
   return undefined;

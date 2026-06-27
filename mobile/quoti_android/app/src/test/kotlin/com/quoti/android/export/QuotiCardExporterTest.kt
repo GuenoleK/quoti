@@ -186,6 +186,21 @@ class QuotiCardExporterTest {
     }
 
     @Test
+    fun `main single medium portrait video can use full card width`() {
+        val frameSize =
+            mainMediaFrameSizeFor(
+                contentWidth = 936f,
+                mediaCount = 1,
+                firstMediaWidth = 810,
+                firstMediaHeight = 1000,
+                isFirstMediaVideo = true,
+            )
+
+        assertEquals(936f, frameSize.width, 0.001f)
+        assertEquals(1155.5555f, frameSize.height, 0.001f)
+    }
+
+    @Test
     fun `main single landscape media keeps full card width`() {
         assertEquals(
             ExportMediaFrameSize(width = 936f, height = 526.5f),

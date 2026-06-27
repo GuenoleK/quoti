@@ -235,6 +235,11 @@ private val GalleryFilterTabHeight = 44.dp
 private val GalleryTopGlassBleed = 32.dp
 private const val GalleryPreviewBitmapMaxDimension = 512
 private const val GalleryPreviewBitmapCacheMaxBytes = 12 * 1024 * 1024
+private const val TargetPreviewTallVideoMaxHeightRatio = 1_160f / 936f
+private const val TargetPreviewMediumTallVideoMaxHeightRatio = 1_160f / 936f
+private const val TargetPreviewTallVideoMinAspectRatio = 0.62f
+private const val TargetPreviewTallVideoRatioThreshold = 1.45f
+private const val TargetPreviewMediumTallVideoRatioThreshold = 1.18f
 
 private object GalleryPreviewBitmapCache {
     private val cache =
@@ -3362,18 +3367,49 @@ private fun SingleRemoteMedia(
     onOpenMedia: (MediaViewerRequest) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val aspectRatio = media.aspectRatio.coerceIn(0.62f, 2.35f)
-    val mediaModifier =
-        if (presentation == MediaPresentation.Related) {
-            modifier
-        } else {
-            modifier
-                .fillMaxWidth()
-                .aspectRatio(aspectRatio)
-        }
+    if (presentation == MediaPresentation.Related) {
+        SingleRemoteMediaSurface(
+            media = media,
+            contentColor = contentColor,
+            compact = true,
+            contentScale = ContentScale.Crop,
+            onOpenMedia = onOpenMedia,
+            modifier = modifier,
+        )
+        return
+    }
+
+    BoxWithConstraints(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        val frameSize = media.targetPreviewFrameSize(maxWidth)
+        SingleRemoteMediaSurface(
+            media = media,
+            contentColor = contentColor,
+            compact = false,
+            contentScale = if (media.isVideo) ContentScale.Crop else ContentScale.Fit,
+            onOpenMedia = onOpenMedia,
+            modifier =
+                Modifier
+                    .width(frameSize.width)
+                    .height(frameSize.height),
+        )
+    }
+}
+
+@Composable
+private fun SingleRemoteMediaSurface(
+    media: LoadedRemoteMedia,
+    contentColor: Color,
+    compact: Boolean,
+    contentScale: ContentScale,
+    onOpenMedia: (MediaViewerRequest) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(
         modifier =
-            mediaModifier
+            modifier
                 .clip(RoundedCornerShape(18.dp))
                 .background(contentColor.copy(alpha = 0.08f))
                 .then(
@@ -3389,23 +3425,18 @@ private fun SingleRemoteMedia(
             Image(
                 bitmap = media.bitmap.asImageBitmap(),
                 contentDescription = null,
-                contentScale =
-                    if (presentation == MediaPresentation.Related) {
-                        ContentScale.Crop
-                    } else {
-                        ContentScale.Fit
-                    },
+                contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
             )
         }
 
         if (media.isVideo && media.playableVideoUrl != null) {
             VideoPlayButton(
-                compact = presentation == MediaPresentation.Related,
+                compact = compact,
                 onClick = { onOpenMedia(media.toMediaViewerRequest()) },
             )
         } else if (media.isVideo) {
-            VideoBadge(compact = presentation == MediaPresentation.Related)
+            VideoBadge(compact = compact)
         }
     }
 }
@@ -3712,6 +3743,44 @@ private data class LoadedRemoteMedia(
 
     val canOpenInViewer: Boolean
         get() = bitmap != null || playableVideoUrl != null
+}
+
+private data class PreviewMediaFrameSize(
+    val width: Dp,
+    val height: Dp,
+)
+
+private fun LoadedRemoteMedia.targetPreviewFrameSize(contentWidth: Dp): PreviewMediaFrameSize {
+    val sourceRatio = aspectRatio
+
+    if (isVideo) {
+        val mediaRatio = 1f / sourceRatio.coerceAtLeast(0.001f)
+        val maxHeight =
+            when {
+                mediaRatio >= TargetPreviewTallVideoRatioThreshold ->
+                    contentWidth * TargetPreviewTallVideoMaxHeightRatio
+                mediaRatio >= TargetPreviewMediumTallVideoRatioThreshold ->
+                    contentWidth * TargetPreviewMediumTallVideoMaxHeightRatio
+                else -> null
+            }
+
+        if (maxHeight != null) {
+            val targetRatio = sourceRatio.coerceIn(TargetPreviewTallVideoMinAspectRatio, 2.35f)
+            val naturalHeight = contentWidth / targetRatio
+            val frameHeight = if (naturalHeight < maxHeight) naturalHeight else maxHeight
+            val frameWidth = frameHeight * targetRatio
+            return PreviewMediaFrameSize(
+                width = if (frameWidth < contentWidth) frameWidth else contentWidth,
+                height = frameHeight,
+            )
+        }
+    }
+
+    val targetRatio = sourceRatio.coerceIn(TargetPreviewTallVideoMinAspectRatio, 2.35f)
+    return PreviewMediaFrameSize(
+        width = contentWidth,
+        height = contentWidth / targetRatio,
+    )
 }
 
 private fun LoadedRemoteMedia.toMediaViewerRequest(): MediaViewerRequest =

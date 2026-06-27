@@ -787,7 +787,7 @@ function readGenericAuthorName(
     .find((name): name is string => Boolean(name));
 
   const linkName = cleanGenericAuthorName(authorLink?.textContent);
-  const handleName = authorHandle.startsWith("@") ? authorHandle.slice(1) : "";
+  const handleName = authorHandle.startsWith("@") ? authorHandle.slice(1) : authorHandle.split("/").pop() ?? "";
 
   return selectorName ?? linkName ?? (handleName || `Shared ${platform.label} post`);
 }
@@ -1127,7 +1127,13 @@ function resolveGenericHandleFromUrl(value: string | null | undefined, platform:
       const slug = segments[1];
 
       if (slug && ["in", "company", "school"].includes(scope)) {
-        return `@${slug}`;
+        return `${scope}/${slug}`;
+      }
+
+      if (scope === "posts" && slug) {
+        const handle = slug.split("_")[0];
+
+        return handle ? `in/${handle}` : undefined;
       }
     }
 

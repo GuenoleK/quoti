@@ -81,8 +81,9 @@ private const val AuthorAvatarSize = 64f
 private const val RelatedAvatarSize = 48f
 private const val AvatarGap = 20f
 private const val MinMediaHeight = 260f
-private const val TallVideoMediaMaxHeight = 560f
-private const val MediumTallVideoMediaMaxHeight = 520f
+private const val TallVideoMediaMaxHeight = 1_160f
+private const val MediumTallVideoMediaMaxHeight = 920f
+private const val TallVideoMediaMinAspectRatio = 0.62f
 private const val RelatedVideoMediaMaxHeight = 420f
 private const val RelatedMediaMinHeight = 150f
 private const val RelatedMediaThumbnailSize = 300f
@@ -930,6 +931,47 @@ private data class VideoTextureFrame(
     val sourceHeight: Int,
 )
 
+internal data class GpuVideoTextureCrop(
+    val left: Float,
+    val bottom: Float,
+    val right: Float,
+    val top: Float,
+)
+
+internal fun gpuVideoTextureCoverCrop(
+    containerWidth: Float,
+    containerHeight: Float,
+    sourceWidth: Int,
+    sourceHeight: Int,
+): GpuVideoTextureCrop {
+    if (containerWidth <= 0f || containerHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) {
+        return GpuVideoTextureCrop(left = 0f, bottom = 0f, right = 1f, top = 1f)
+    }
+
+    val containerAspect = containerWidth / containerHeight
+    val sourceAspect = sourceWidth.toFloat() / sourceHeight.toFloat()
+
+    return if (sourceAspect > containerAspect) {
+        val visibleWidth = (containerAspect / sourceAspect).coerceIn(0f, 1f)
+        val horizontalInset = (1f - visibleWidth) / 2f
+        GpuVideoTextureCrop(
+            left = horizontalInset,
+            bottom = 0f,
+            right = 1f - horizontalInset,
+            top = 1f,
+        )
+    } else {
+        val visibleHeight = (sourceAspect / containerAspect).coerceIn(0f, 1f)
+        val verticalInset = (1f - visibleHeight) / 2f
+        GpuVideoTextureCrop(
+            left = 0f,
+            bottom = verticalInset,
+            right = 1f,
+            top = 1f - verticalInset,
+        )
+    }
+}
+
 internal fun populateGpuVideoFrameVertices(
     vertices: FloatArray,
     rectLeft: Float,
@@ -938,6 +980,10 @@ internal fun populateGpuVideoFrameVertices(
     rectBottom: Float,
     surfaceWidth: Int,
     surfaceHeight: Int,
+    textureLeft: Float = 0f,
+    textureBottom: Float = 0f,
+    textureRight: Float = 1f,
+    textureTop: Float = 1f,
 ) {
     require(vertices.size >= GpuVideoFrameVertexFloatCount) {
         "GPU video frame vertices must contain at least $GpuVideoFrameVertexFloatCount floats."
@@ -952,26 +998,26 @@ internal fun populateGpuVideoFrameVertices(
 
     vertices[0] = left
     vertices[1] = bottom
-    vertices[2] = 0f
-    vertices[3] = 0f
+    vertices[2] = textureLeft
+    vertices[3] = textureBottom
     vertices[4] = 0f
     vertices[5] = 1f
     vertices[6] = right
     vertices[7] = bottom
-    vertices[8] = 1f
-    vertices[9] = 0f
+    vertices[8] = textureRight
+    vertices[9] = textureBottom
     vertices[10] = 1f
     vertices[11] = 1f
     vertices[12] = left
     vertices[13] = top
-    vertices[14] = 0f
-    vertices[15] = 1f
+    vertices[14] = textureLeft
+    vertices[15] = textureTop
     vertices[16] = 0f
     vertices[17] = 0f
     vertices[18] = right
     vertices[19] = top
-    vertices[20] = 1f
-    vertices[21] = 1f
+    vertices[20] = textureRight
+    vertices[21] = textureTop
     vertices[22] = 1f
     vertices[23] = 0f
 }
@@ -1862,23 +1908,21 @@ private class EncoderInputSurface(
         template: QuotiCardBitmapRenderer.GpuVideoFrameTemplate,
         frame: VideoTextureFrame,
     ) {
-        val destination = videoFitRect(
-            container = template.videoRect,
+        val textureCrop = gpuVideoTextureCoverCrop(
+            containerWidth = template.videoRect.width(),
+            containerHeight = template.videoRect.height(),
             sourceWidth = frame.sourceWidth,
             sourceHeight = frame.sourceHeight,
         )
-        putVideoVertices(destination)
+        putVideoVertices(template.videoRect, textureCrop)
 
         GLES20.glUseProgram(externalProgram)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, frame.textureId)
         GLES20.glUniform1i(externalTextureUniformHandle, 0)
         GLES20.glUniformMatrix4fv(externalTextureMatrixHandle, 1, false, frame.textureMatrix, 0)
-        GLES20.glUniform2f(externalRectSizeHandle, destination.width(), destination.height())
-        GLES20.glUniform1f(
-            externalCornerRadiusHandle,
-            if (destination.nearlyEquals(template.videoRect)) template.videoCornerRadius else 0f,
-        )
+        GLES20.glUniform2f(externalRectSizeHandle, template.videoRect.width(), template.videoRect.height())
+        GLES20.glUniform1f(externalCornerRadiusHandle, template.videoCornerRadius)
 
         videoVertexBuffer.position(0)
         GLES20.glEnableVertexAttribArray(externalPositionHandle)
@@ -1919,7 +1963,10 @@ private class EncoderInputSurface(
         GLES20.glDisableVertexAttribArray(externalQuadCoordinateHandle)
     }
 
-    private fun putVideoVertices(rect: RectF) {
+    private fun putVideoVertices(
+        rect: RectF,
+        textureCrop: GpuVideoTextureCrop,
+    ) {
         populateGpuVideoFrameVertices(
             vertices = videoFrameVertices,
             rectLeft = rect.left,
@@ -1928,33 +1975,14 @@ private class EncoderInputSurface(
             rectBottom = rect.bottom,
             surfaceWidth = width,
             surfaceHeight = height,
+            textureLeft = textureCrop.left,
+            textureBottom = textureCrop.bottom,
+            textureRight = textureCrop.right,
+            textureTop = textureCrop.top,
         )
         videoVertexBuffer.clear()
         videoVertexBuffer.put(videoFrameVertices)
         videoVertexBuffer.position(0)
-    }
-
-    private fun videoFitRect(
-        container: RectF,
-        sourceWidth: Int,
-        sourceHeight: Int,
-    ): RectF {
-        val scale = min(
-            container.width() / sourceWidth.toFloat().coerceAtLeast(1f),
-            container.height() / sourceHeight.toFloat().coerceAtLeast(1f),
-        )
-        val fittedWidth = sourceWidth * scale
-        val fittedHeight = sourceHeight * scale
-        val left = container.left + ((container.width() - fittedWidth) / 2f)
-        val top = container.top + ((container.height() - fittedHeight) / 2f)
-        return RectF(left, top, left + fittedWidth, top + fittedHeight)
-    }
-
-    private fun RectF.nearlyEquals(other: RectF): Boolean {
-        return kotlin.math.abs(left - other.left) < 0.5f &&
-            kotlin.math.abs(top - other.top) < 0.5f &&
-            kotlin.math.abs(right - other.right) < 0.5f &&
-            kotlin.math.abs(bottom - other.bottom) < 0.5f
     }
 
     fun release() {
@@ -2305,7 +2333,13 @@ private object QuotiCardBitmapRenderer {
             outputScale = outputScale,
             drawDynamicMedia = { canvas, dynamicMediaBitmaps ->
                 mediaRects.main?.let { rect ->
-                    drawMedia(canvas, dynamicMediaBitmaps.main, rect, palette)
+                    drawMedia(
+                        canvas = canvas,
+                        mediaBitmaps = dynamicMediaBitmaps.main,
+                        rect = rect,
+                        palette = palette,
+                        cropSingle = dynamicMediaBitmaps.main.shouldCoverSingleVideo(),
+                    )
                 }
                 mediaRects.related?.let { rect ->
                     drawMedia(canvas, dynamicMediaBitmaps.related, rect, palette, cropSingle = true)
@@ -2454,11 +2488,11 @@ private object QuotiCardBitmapRenderer {
                 mediaHeight = relatedMediaHeight,
             )
         }
-        val mediaHeight =
+        val mediaFrame =
             if (contentMode == CardContentMode.WithMedia && post.media.isNotEmpty()) {
-                measureMediaHeight(contentWidth.toFloat(), mediaBitmaps.main)
+                measureMediaFrame(contentWidth.toFloat(), mediaBitmaps.main)
             } else {
-                0f
+                ExportMediaFrameSize(width = 0f, height = 0f)
             }
         val authorNameLayout =
             textLayout(
@@ -2486,9 +2520,9 @@ private object QuotiCardBitmapRenderer {
 
         var height = CardPadding + HeaderHeight + SectionGap
         height += textLayout(post.content, contentPaint, contentWidth).height
-        if (mediaHeight > 0f) {
+        if (mediaFrame.height > 0f) {
             height += SectionGap
-            height += mediaHeight
+            height += mediaFrame.height
         }
         related?.let {
             height += SectionGap
@@ -2508,10 +2542,11 @@ private object QuotiCardBitmapRenderer {
                     width = 320,
                     alignment = Layout.Alignment.ALIGN_OPPOSITE,
                     maxLines = 1,
-                ),
+            ),
             contentLayout = textLayout(post.content, contentPaint, contentWidth),
             relatedPost = related,
-            mediaHeight = mediaHeight,
+            mediaWidth = mediaFrame.width,
+            mediaHeight = mediaFrame.height,
             authorAvatar = avatarBitmaps.author,
             authorNameLayout = authorNameLayout,
             authorNameVisible = authorNameText.isNotEmpty(),
@@ -2609,9 +2644,20 @@ private object QuotiCardBitmapRenderer {
 
         if (contentMode == CardContentMode.WithMedia && measure.mediaHeight > 0f) {
             y += SectionGap
-            val mediaRect = RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+            val mediaRect = mainMediaRect(
+                contentWidth = contentWidth,
+                mediaWidth = measure.mediaWidth,
+                mediaHeight = measure.mediaHeight,
+                top = y,
+            )
             if (drawMediaContent) {
-                drawMedia(canvas, mediaBitmaps.main, mediaRect, palette)
+                drawMedia(
+                    canvas = canvas,
+                    mediaBitmaps = mediaBitmaps.main,
+                    rect = mediaRect,
+                    palette = palette,
+                    cropSingle = mediaBitmaps.main.shouldCoverSingleVideo(),
+                )
             }
             y += measure.mediaHeight
         }
@@ -2701,7 +2747,12 @@ private object QuotiCardBitmapRenderer {
         val mainRect =
             if (measure.mediaHeight > 0f) {
                 y += SectionGap
-                RectF(CardPadding, y, CardPadding + contentWidth, y + measure.mediaHeight)
+                mainMediaRect(
+                    contentWidth = contentWidth,
+                    mediaWidth = measure.mediaWidth,
+                    mediaHeight = measure.mediaHeight,
+                    top = y,
+                )
                     .also { y += measure.mediaHeight }
             } else {
                 null
@@ -2732,6 +2783,17 @@ private object QuotiCardBitmapRenderer {
             main = mainRect,
             related = relatedRect,
         )
+    }
+
+    private fun mainMediaRect(
+        contentWidth: Float,
+        mediaWidth: Float,
+        mediaHeight: Float,
+        top: Float,
+    ): RectF {
+        val resolvedMediaWidth = mediaWidth.takeIf { width -> width > 0f } ?: contentWidth
+        val left = CardPadding + ((contentWidth - resolvedMediaWidth) / 2f)
+        return RectF(left, top, left + resolvedMediaWidth, top + mediaHeight)
     }
 
     private fun videoExportSizeFor(
@@ -2803,34 +2865,17 @@ private object QuotiCardBitmapRenderer {
         canvas.drawRoundRect(rect, 42f, 42f, strokePaint)
     }
 
-    private fun measureMediaHeight(
+    private fun measureMediaFrame(
         contentWidth: Float,
         mediaBitmaps: List<ExportMediaBitmap>,
-    ): Float {
-        if (mediaBitmaps.isEmpty()) {
-            return max(MinMediaHeight, contentWidth / PlaceholderMediaAspectRatio)
-        }
-
-        if (mediaBitmaps.size == 1) {
-            val media = mediaBitmaps.first()
-            val bitmap = media.bitmap
-            val ratio = bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
-            val mediaHeight = max(MinMediaHeight, contentWidth / ratio.coerceIn(0.62f, 2.35f))
-            val maxHeight =
-                if (media.isVideo) {
-                    mainVideoMediaMaxHeight((bitmap.height.toFloat() / bitmap.width.toFloat().coerceAtLeast(1f)))
-                } else {
-                    null
-                }
-
-            return maxHeight?.let { height -> min(mediaHeight, height) } ?: mediaHeight
-        }
-
-        return if (mediaBitmaps.size == 2) {
-            max(MinMediaHeight, contentWidth / TwoMediaGridAspectRatio)
-        } else {
-            max(MinMediaHeight, contentWidth / MultiMediaGridAspectRatio)
-        }
+    ): ExportMediaFrameSize {
+        return mainMediaFrameSizeFor(
+            contentWidth = contentWidth,
+            mediaCount = mediaBitmaps.size,
+            firstMediaWidth = mediaBitmaps.firstOrNull()?.bitmap?.width,
+            firstMediaHeight = mediaBitmaps.firstOrNull()?.bitmap?.height,
+            isFirstMediaVideo = mediaBitmaps.firstOrNull()?.isVideo == true,
+        )
     }
 
     private fun measureRelatedMediaHeight(
@@ -2844,18 +2889,6 @@ private object QuotiCardBitmapRenderer {
             firstMediaHeight = mediaBitmaps.firstOrNull()?.bitmap?.height,
             isFirstMediaVideo = mediaBitmaps.firstOrNull()?.isVideo == true,
         )
-    }
-
-    private fun mainVideoMediaMaxHeight(mediaRatio: Float): Float? {
-        if (mediaRatio >= 1.45f) {
-            return TallVideoMediaMaxHeight
-        }
-
-        if (mediaRatio >= 1.18f) {
-            return MediumTallVideoMediaMaxHeight
-        }
-
-        return null
     }
 
     private fun drawPlatformMark(
@@ -2960,6 +2993,9 @@ private object QuotiCardBitmapRenderer {
         canvas.restore()
         canvas.drawRoundRect(rect, 42f, 42f, strokePaint)
     }
+
+    private fun List<ExportMediaBitmap>.shouldCoverSingleVideo(): Boolean =
+        size == 1 && first().isVideo
 
     private fun drawCircularImage(
         canvas: Canvas,
@@ -3120,6 +3156,7 @@ private data class MeasuredCard(
     val dateLayout: StaticLayout,
     val contentLayout: StaticLayout,
     val relatedPost: MeasuredRelatedPost?,
+    val mediaWidth: Float,
     val mediaHeight: Float,
     val authorAvatar: Bitmap?,
     val authorNameLayout: StaticLayout,
@@ -3211,6 +3248,11 @@ private data class ExportAvatarBitmaps(
 private data class VideoExportSize(
     val width: Int,
     val height: Int,
+)
+
+internal data class ExportMediaFrameSize(
+    val width: Float,
+    val height: Float,
 )
 
 internal data class VideoExportProfile(
@@ -3625,6 +3667,81 @@ internal fun relatedMediaHeightFor(
     } else {
         max(RelatedMediaMinHeight, contentWidth / MultiMediaGridAspectRatio)
     }
+}
+
+internal fun mainMediaFrameSizeFor(
+    contentWidth: Float,
+    mediaCount: Int,
+    firstMediaWidth: Int?,
+    firstMediaHeight: Int?,
+    isFirstMediaVideo: Boolean = false,
+): ExportMediaFrameSize {
+    if (mediaCount <= 0) {
+        return ExportMediaFrameSize(
+            width = contentWidth,
+            height = max(MinMediaHeight, contentWidth / PlaceholderMediaAspectRatio),
+        )
+    }
+
+    if (mediaCount == 1) {
+        val sourceRatio =
+            firstMediaWidth
+                ?.takeIf { width -> width > 0 }
+                ?.let { width ->
+                    val height = firstMediaHeight?.takeIf { value -> value > 0 } ?: return@let null
+                    width.toFloat() / height.toFloat()
+                }
+                ?: PlaceholderMediaAspectRatio
+
+        val maxVideoHeight =
+            if (isFirstMediaVideo) {
+                mainVideoMediaMaxHeight(
+                    mediaRatio = (firstMediaHeight?.toFloat() ?: 0f) /
+                        (firstMediaWidth?.toFloat()?.coerceAtLeast(1f) ?: 1f),
+                )
+            } else {
+                null
+            }
+
+        if (maxVideoHeight != null) {
+            val targetRatio = sourceRatio.coerceIn(TallVideoMediaMinAspectRatio, 2.35f)
+            val naturalHeight = max(MinMediaHeight, contentWidth / targetRatio)
+            val frameHeight = min(naturalHeight, maxVideoHeight)
+            val frameWidth = min(contentWidth, frameHeight * targetRatio)
+            return ExportMediaFrameSize(
+                width = frameWidth,
+                height = frameHeight,
+            )
+        }
+
+        val mediaHeight = max(MinMediaHeight, contentWidth / sourceRatio.coerceIn(0.62f, 2.35f))
+        return ExportMediaFrameSize(
+            width = contentWidth,
+            height = mediaHeight,
+        )
+    }
+
+    return ExportMediaFrameSize(
+        width = contentWidth,
+        height =
+            if (mediaCount == 2) {
+                max(MinMediaHeight, contentWidth / TwoMediaGridAspectRatio)
+            } else {
+                max(MinMediaHeight, contentWidth / MultiMediaGridAspectRatio)
+            },
+    )
+}
+
+private fun mainVideoMediaMaxHeight(mediaRatio: Float): Float? {
+    if (mediaRatio >= 1.45f) {
+        return TallVideoMediaMaxHeight
+    }
+
+    if (mediaRatio >= 1.18f) {
+        return MediumTallVideoMediaMaxHeight
+    }
+
+    return null
 }
 
 private fun findAudioTrackFormat(sourcePath: String): MediaFormat? {

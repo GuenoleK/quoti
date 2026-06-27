@@ -158,6 +158,47 @@ class QuotiCardExporterTest {
     }
 
     @Test
+    fun `main single tall video keeps portrait frame with max height`() {
+        assertEquals(
+            ExportMediaFrameSize(width = 719.2f, height = 1160f),
+            mainMediaFrameSizeFor(
+                contentWidth = 936f,
+                mediaCount = 1,
+                firstMediaWidth = 720,
+                firstMediaHeight = 1280,
+                isFirstMediaVideo = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `main single ultra tall video bounds portrait ratio before cropping`() {
+        assertEquals(
+            ExportMediaFrameSize(width = 719.2f, height = 1160f),
+            mainMediaFrameSizeFor(
+                contentWidth = 936f,
+                mediaCount = 1,
+                firstMediaWidth = 450,
+                firstMediaHeight = 1000,
+                isFirstMediaVideo = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `main single landscape media keeps full card width`() {
+        assertEquals(
+            ExportMediaFrameSize(width = 936f, height = 526.5f),
+            mainMediaFrameSizeFor(
+                contentWidth = 936f,
+                mediaCount = 1,
+                firstMediaWidth = 1280,
+                firstMediaHeight = 720,
+            ),
+        )
+    }
+
+    @Test
     fun `gpu video frame texture coordinates leave vertical transform to SurfaceTexture`() {
         val vertices = FloatArray(GpuVideoFrameVertexFloatCount)
 
@@ -179,6 +220,66 @@ class QuotiCardExporterTest {
         assertEquals(1f, vertices[15], 0.001f)
         assertEquals(1f, vertices[20], 0.001f)
         assertEquals(1f, vertices[21], 0.001f)
+    }
+
+    @Test
+    fun `gpu video frame vertices can crop texture coordinates`() {
+        val vertices = FloatArray(GpuVideoFrameVertexFloatCount)
+
+        populateGpuVideoFrameVertices(
+            vertices = vertices,
+            rectLeft = 10f,
+            rectTop = 20f,
+            rectRight = 110f,
+            rectBottom = 220f,
+            surfaceWidth = 200,
+            surfaceHeight = 400,
+            textureLeft = 0.1f,
+            textureBottom = 0.2f,
+            textureRight = 0.9f,
+            textureTop = 0.8f,
+        )
+
+        assertEquals(0.1f, vertices[2], 0.001f)
+        assertEquals(0.2f, vertices[3], 0.001f)
+        assertEquals(0.9f, vertices[8], 0.001f)
+        assertEquals(0.2f, vertices[9], 0.001f)
+        assertEquals(0.1f, vertices[14], 0.001f)
+        assertEquals(0.8f, vertices[15], 0.001f)
+        assertEquals(0.9f, vertices[20], 0.001f)
+        assertEquals(0.8f, vertices[21], 0.001f)
+    }
+
+    @Test
+    fun `gpu cover crop trims vertical video height for wider card slot`() {
+        val crop =
+            gpuVideoTextureCoverCrop(
+                containerWidth = 936f,
+                containerHeight = 780f,
+                sourceWidth = 720,
+                sourceHeight = 1280,
+            )
+
+        assertEquals(0f, crop.left, 0.001f)
+        assertEquals(0.265625f, crop.bottom, 0.001f)
+        assertEquals(1f, crop.right, 0.001f)
+        assertEquals(0.734375f, crop.top, 0.001f)
+    }
+
+    @Test
+    fun `gpu cover crop trims landscape video width for taller card slot`() {
+        val crop =
+            gpuVideoTextureCoverCrop(
+                containerWidth = 780f,
+                containerHeight = 936f,
+                sourceWidth = 1280,
+                sourceHeight = 720,
+            )
+
+        assertEquals(0.265625f, crop.left, 0.001f)
+        assertEquals(0f, crop.bottom, 0.001f)
+        assertEquals(0.734375f, crop.right, 0.001f)
+        assertEquals(1f, crop.top, 0.001f)
     }
 
     @Test

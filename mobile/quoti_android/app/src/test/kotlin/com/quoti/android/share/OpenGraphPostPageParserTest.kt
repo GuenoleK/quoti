@@ -285,6 +285,112 @@ class OpenGraphPostPageParserTest {
     }
 
     @Test
+    fun extractsLinkedInCreatorFromJsonLdPostPage() {
+        val avatarUrl = "https://media.licdn.com/dms/image/v2/D4E03AQFotXGdRV7GHA/profile-displayphoto-scale_200_200/profile"
+        val postImageUrl = "https://dms.licdn.com/playlist/vid/v2/D4E05AQGe2EMWDUGXBg/thumbnail"
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="J-10 avant de retourner a la Google I/O Connect de Berlin | Guenole Kikabou" />
+                    <meta property="og:url" content="https://fr.linkedin.com/posts/guenole_j-10-activity-7472316938749214720-ZDa6" />
+                    <meta property="og:image" content="$postImageUrl" />
+                    <script type="application/ld+json">
+                        {
+                            "@context": "http://schema.org",
+                            "@type": "VideoObject",
+                            "headline": "J-10 avant de retourner a la Google I/O Connect de Berlin",
+                            "creator": {
+                                "@type": "Person",
+                                "name": "Guenole Kikabou",
+                                "description": "INFJ - Ingenieur logiciel Full-Stack chez Klee Group",
+                                "url": "https://fr.linkedin.com/in/guenole/en",
+                                "image": {
+                                    "@type": "ImageObject",
+                                    "url": "$avatarUrl"
+                                }
+                            }
+                        }
+                    </script>
+                </head>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.linkedin.com/posts/guenole_j-10-activity-7472316938749214720-ZDa6",
+                platform = SocialPlatform.LinkedIn,
+            )
+
+        assertNotNull(enrichment)
+        assertEquals("Guenole Kikabou", enrichment!!.authorName)
+        assertEquals("in/guenole", enrichment.authorHandle)
+        assertEquals(avatarUrl, enrichment.authorAvatarUrl)
+        assertEquals("J-10 avant de retourner a la Google I/O Connect de Berlin", enrichment.content)
+    }
+
+    @Test
+    fun usesLinkedInProfilePathWhenCreatorHasNoDescription() {
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="Shipping context beats screenshots. | Ada Lovelace" />
+                    <script type="application/ld+json">
+                        {
+                            "@context": "http://schema.org",
+                            "@type": "SocialMediaPosting",
+                            "creator": {
+                                "@type": "Person",
+                                "name": "Ada Lovelace",
+                                "url": "https://www.linkedin.com/in/ada-lovelace/en"
+                            }
+                        }
+                    </script>
+                </head>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.linkedin.com/posts/ada-lovelace_activity-123",
+                platform = SocialPlatform.LinkedIn,
+            )
+
+        assertNotNull(enrichment)
+        assertEquals("Ada Lovelace", enrichment!!.authorName)
+        assertEquals("in/ada-lovelace", enrichment.authorHandle)
+        assertEquals("Shipping context beats screenshots.", enrichment.content)
+    }
+
+    @Test
+    fun usesLinkedInPostsPathWhenNoCreatorProfileExists() {
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="Google I/O Connect - had a blast | Danitsa Kostova" />
+                    <meta property="og:url" content="https://www.linkedin.com/posts/danitsa_google-io-connect-activity-123" />
+                </head>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.linkedin.com/posts/danitsa_google-io-connect-activity-123",
+                platform = SocialPlatform.LinkedIn,
+            )
+
+        assertNotNull(enrichment)
+        assertEquals("Danitsa Kostova", enrichment!!.authorName)
+        assertEquals("in/danitsa", enrichment.authorHandle)
+        assertEquals("Google I/O Connect - had a blast", enrichment.content)
+    }
+
+    @Test
     fun extractsFacebookAvatarAndPostImagesSeparately() {
         val avatarUrl = "https://scontent.xx.fbcdn.net/v/t39.30808-1/profile_pic.jpg?x=1&amp;y=2"
         val firstImageUrl = "https://scontent.xx.fbcdn.net/v/t39.30808-6/post-one.jpg?x=3&amp;y=4"

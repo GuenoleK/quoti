@@ -128,6 +128,11 @@ internal object OpenGraphPostPageParser {
             pattern = """<script\b(?=[^>]*\btype\s*=\s*(["'])application/json\1)[^>]*>(.*?)</script>""",
             options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
         )
+    private val jsonLdScriptPattern =
+        Regex(
+            pattern = """<script\b(?=[^>]*\btype\s*=\s*(["'])application/ld\+json\1)[^>]*>(.*?)</script>""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
 
     fun extract(
         html: String,
@@ -163,11 +168,27 @@ internal object OpenGraphPostPageParser {
             )
                 .distinctBy { url -> url.normalizedRemoteAssetUrl().remoteAssetIdentity() }
         val titleMetadata = parseTitleMetadata(title, platform)
+        val linkedInCreatorMetadata =
+            if (platform == SocialPlatform.LinkedIn) {
+                extractLinkedInCreatorMetadata(html)
+            } else {
+                null
+            }
         val content = description.displayTextOrNull() ?: titleMetadata.content
-        val authorHandle = titleMetadata.authorHandle ?: canonicalUrl.toPlatformAuthorHandle(platform)
-        val authorName = titleMetadata.authorName ?: authorHandle?.removePrefix("@")
+        val linkedInFallbackHandle = linkedInCreatorMetadata?.profileUrl.toPlatformAuthorHandle(platform)
+        val authorHandle =
+            titleMetadata.authorHandle
+                ?: linkedInFallbackHandle
+                ?: canonicalUrl.toPlatformAuthorHandle(platform)
+        val authorName =
+            linkedInCreatorMetadata?.authorName
+                ?: titleMetadata.authorName
+                ?: linkedInFallbackHandle?.substringAfter("/")
+                ?: authorHandle?.removePrefix("@")
         val allRemoteUrls = extractRemoteUrls(html)
-        val authorAvatarUrl = findAuthorAvatarUrl(platform, imageUrls, allRemoteUrls)
+        val authorAvatarUrl =
+            linkedInCreatorMetadata?.authorAvatarUrl
+                ?: findAuthorAvatarUrl(platform, imageUrls, allRemoteUrls)
         val media =
             extractStructuredMedia(
                 platform = platform,
@@ -253,6 +274,17 @@ internal object OpenGraphPostPageParser {
                 }
         }
 
+        if (platform == SocialPlatform.LinkedIn) {
+            Regex("""^(.+?)\s+\|\s+(.+?)$""", RegexOption.IGNORE_CASE)
+                .find(cleanedTitle)
+                ?.let { match ->
+                    return OpenGraphTitleMetadata(
+                        authorName = match.groupValues[2].displayTextOrNull(),
+                        content = match.groupValues[1].displayTextOrNull(),
+                    )
+                }
+        }
+
         Regex("""^(.+?)\s+on\s+$platformName:\s*"?(.*?)"?$""", RegexOption.IGNORE_CASE)
             .find(cleanedTitle)
             ?.let { match ->
@@ -293,6 +325,32 @@ internal object OpenGraphPostPageParser {
             .filter { url -> url.isNotBlank() }
             .distinct()
             .toList()
+    }
+
+    private fun extractLinkedInCreatorMetadata(html: String): LinkedInCreatorMetadata? {
+        return html
+            .extractJsonLdScripts()
+            .flatMap { root -> root.findObjects { value -> value.optionalObject("creator") != null } }
+            .mapNotNull { value -> value.optionalObject("creator")?.toLinkedInCreatorMetadata() }
+            .firstOrNull { metadata ->
+                metadata.authorName != null ||
+                    metadata.profileUrl != null ||
+                    metadata.authorAvatarUrl != null
+            }
+    }
+
+    private fun JSONObject.toLinkedInCreatorMetadata(): LinkedInCreatorMetadata {
+        val imageUrl =
+            optionalObject("image")
+                ?.optionalString("url")
+                ?: optionalString("image")
+                    ?.takeIf { value -> value.startsWith("http://") || value.startsWith("https://") }
+
+        return LinkedInCreatorMetadata(
+            authorName = optionalString("name")?.displayTextOrNull(),
+            profileUrl = optionalString("url")?.displayTextOrNull(),
+            authorAvatarUrl = imageUrl?.normalizedRemoteAssetUrl(),
+        )
     }
 
     private fun findAuthorAvatarUrl(
@@ -396,6 +454,14 @@ internal object OpenGraphPostPageParser {
             .findAll(this)
             .mapNotNull { match ->
                 runCatching { JSONObject(match.groupValues[2]) }.getOrNull()
+            }
+            .toList()
+
+    private fun String.extractJsonLdScripts(): List<JSONObject> =
+        jsonLdScriptPattern
+            .findAll(this)
+            .mapNotNull { match ->
+                runCatching { JSONObject(match.groupValues[2].decodeHtmlEntities()) }.getOrNull()
             }
             .toList()
 
@@ -510,6 +576,12 @@ internal object OpenGraphPostPageParser {
         val authorName: String? = null,
         val authorHandle: String? = null,
         val content: String? = null,
+    )
+
+    private data class LinkedInCreatorMetadata(
+        val authorName: String?,
+        val profileUrl: String?,
+        val authorAvatarUrl: String?,
     )
 }
 
@@ -1088,6 +1160,14 @@ private fun String?.toPlatformAuthorHandle(platform: SocialPlatform): String? {
                 ?.let { handle -> "@$handle" }
 
         SocialPlatform.LinkedIn -> {
+            if (segments.firstOrNull()?.equals("posts", ignoreCase = true) == true) {
+                return segments
+                    .getOrNull(1)
+                    ?.displayTextOrNull()
+                    ?.substringBefore("_")
+                    ?.let { handle -> "in/$handle" }
+            }
+
             val handleRootIndex =
                 segments.indexOfFirst { segment ->
                     segment.equals("in", ignoreCase = true) ||
@@ -1101,7 +1181,7 @@ private fun String?.toPlatformAuthorHandle(platform: SocialPlatform): String? {
             segments
                 .getOrNull(handleRootIndex + 1)
                 ?.displayTextOrNull()
-                ?.let { handle -> "@$handle" }
+                ?.let { handle -> "${segments[handleRootIndex].lowercase()}/$handle" }
         }
 
         SocialPlatform.Facebook ->

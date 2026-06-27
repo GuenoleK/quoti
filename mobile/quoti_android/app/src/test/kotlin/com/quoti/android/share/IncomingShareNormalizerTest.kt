@@ -177,6 +177,27 @@ class IncomingShareNormalizerTest {
     }
 
     @Test
+    fun normalizesLinkedInPostsUrlHandleFromSlug() {
+        val normalizer =
+            IncomingShareNormalizer(
+                clock = { Instant.parse("2026-06-15T10:00:00.000Z") },
+            )
+
+        val draft =
+            normalizer.normalize(
+                IncomingSharePayload(
+                    text = "https://www.linkedin.com/posts/danitsa_kostova_google-io-connect-activity-123",
+                    mimeType = "text/plain",
+                ),
+            )
+
+        assertNotNull(draft)
+        assertEquals(SocialPlatform.LinkedIn, draft!!.post.platform)
+        assertEquals("danitsa", draft.post.authorName)
+        assertEquals("in/danitsa", draft.post.authorHandle)
+    }
+
+    @Test
     fun normalizesFacebookPostShareMetadata() {
         val normalizer =
             IncomingShareNormalizer(

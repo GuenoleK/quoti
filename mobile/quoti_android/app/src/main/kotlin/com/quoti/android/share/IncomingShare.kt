@@ -176,7 +176,11 @@ private fun resolveAuthorHandle(sourceUrl: String?): String? {
         val slug = segments[1]
 
         if (scope in setOf("in", "company", "school") && slug.isNotBlank()) {
-            return "@$slug"
+            return "$scope/$slug"
+        }
+
+        if (scope == "posts" && slug.isNotBlank()) {
+            return "in/${slug.substringBefore("_")}"
         }
     }
 
@@ -195,7 +199,11 @@ private fun resolveAuthorName(
     authorHandle: String?,
     platform: SocialPlatform,
 ): String {
-    return authorHandle?.removePrefix("@")?.trim()?.takeIf { it.isNotEmpty() }
+    return authorHandle
+        ?.removePrefix("@")
+        ?.substringAfter("/")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
         ?: "Shared ${platform.label} post"
 }
 

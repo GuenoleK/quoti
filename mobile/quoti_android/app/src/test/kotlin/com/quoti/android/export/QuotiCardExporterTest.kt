@@ -1,9 +1,21 @@
 package com.quoti.android.export
 
+import com.quoti.android.core.model.SocialPlatform
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class QuotiCardExporterTest {
+    @Test
+    fun `exporter has logo paths for preview-backed platforms`() {
+        assertNotNull(platformLogoPathData(SocialPlatform.X))
+        assertNotNull(platformLogoPathData(SocialPlatform.Threads))
+        assertNotNull(platformLogoPathData(SocialPlatform.LinkedIn))
+        assertNotNull(platformLogoPathData(SocialPlatform.Facebook))
+        assertNull(platformLogoPathData(SocialPlatform.Bluesky))
+    }
+
     @Test
     fun `video export keeps enough duration and cadence for X clips`() {
         assertEquals(180_000L, VideoExportMaxDurationMs)

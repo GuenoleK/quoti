@@ -108,7 +108,22 @@ private const val DefaultIoBufferSize = 8 * 1024
 private const val ReplyRelationshipLabel = "R\u00e9pond \u00e0"
 private const val XLogoPathData =
     "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932L18.901 1.153zM17.61 20.644h2.039L6.486 3.24H4.298L17.61 20.644z"
+private const val ThreadsLogoPathData =
+    "M12.186,24h-0.007c-3.581,-0.024 -6.334,-1.205 -8.184,-3.509C2.35,18.44 1.5,15.586 1.472,12.01v-0.017c0.03,-3.579 0.879,-6.43 2.525,-8.482C5.845,1.205 8.6,0.024 12.18,0h0.014c2.746,0.02 5.043,0.725 6.826,2.098c1.677,1.29 2.858,3.13 3.509,5.467l-2.04,0.569c-1.104,-3.96 -3.898,-5.984 -8.304,-6.015c-2.91,0.022 -5.11,0.936 -6.54,2.717C4.307,6.504 3.616,8.914 3.589,12c0.027,3.086 0.718,5.496 2.057,7.164c1.43,1.783 3.631,2.698 6.54,2.717c2.623,-0.02 4.358,-0.631 5.8,-2.045c1.647,-1.613 1.618,-3.593 1.09,-4.798c-0.31,-0.71 -0.873,-1.3 -1.634,-1.75c-0.192,1.352 -0.622,2.446 -1.284,3.272c-0.886,1.102 -2.14,1.704 -3.73,1.79c-1.202,0.065 -2.361,-0.218 -3.259,-0.801c-1.063,-0.689 -1.685,-1.74 -1.752,-2.964c-0.065,-1.19 0.408,-2.285 1.33,-3.082c0.88,-0.76 2.119,-1.207 3.583,-1.291a13.853,13.853 0,0 1,3.02 0.142c-0.126,-0.742 -0.375,-1.332 -0.75,-1.757c-0.513,-0.586 -1.308,-0.883 -2.359,-0.89h-0.029c-0.844,0 -1.992,0.232 -2.721,1.32L7.734,7.847c0.98,-1.454 2.568,-2.256 4.478,-2.256h0.044c3.194,0.02 5.097,1.975 5.287,5.388c0.108,0.046 0.216,0.094 0.321,0.142c1.49,0.7 2.58,1.761 3.154,3.07c0.797,1.82 0.871,4.79 -1.548,7.158c-1.85,1.81 -4.094,2.628 -7.277,2.65ZM13.189,12.31c-0.242,0 -0.487,0.007 -0.739,0.021c-1.836,0.103 -2.98,0.946 -2.916,2.143c0.067,1.256 1.452,1.839 2.784,1.767c1.224,-0.065 2.818,-0.543 3.086,-3.71a10.5,10.5 0,0 0,-2.215,-0.221z"
+private const val LinkedInLogoPathData =
+    "M20.447,20.452h-3.554v-5.569c0,-1.328 -0.027,-3.037 -1.852,-3.037c-1.853,0 -2.136,1.445 -2.136,2.939v5.667H9.351V9h3.414v1.561h0.046c0.477,-0.9 1.637,-1.85 3.37,-1.85c3.601,0 4.267,2.37 4.267,5.455v6.286zM5.337,7.433c-1.144,0 -2.063,-0.926 -2.063,-2.065c0,-1.138 0.92,-2.063 2.063,-2.063c1.14,0 2.064,0.925 2.064,2.063c0,1.139 -0.925,2.065 -2.064,2.065zM7.119,20.452H3.555V9h3.564v11.452zM22.225,0H1.771C0.792,0 0,0.774 0,1.729v20.542C0,23.227 0.792,24 1.771,24h20.451C23.2,24 24,23.227 24,22.271V1.729C24,0.774 23.2,0 22.222,0h0.003z"
+private const val FacebookLogoPathData =
+    "M9.101,23.691v-7.98H6.627v-3.667h2.474v-1.58c0,-4.085 1.848,-5.978 5.858,-5.978c0.401,0 0.955,0.042 1.468,0.103a8.68,8.68 0,0 1,1.141,0.195v3.325a8.623,8.623 0,0 0,-0.653,-0.036a26.805,26.805 0,0 0,-0.733,-0.009c-0.707,0 -1.259,0.096 -1.675,0.309a1.686,1.686 0,0 0,-0.679,0.622c-0.258,0.42 -0.374,0.995 -0.374,1.752v1.297h3.919l-0.386,2.103l-0.287,1.564h-3.246v8.245C19.396,23.238 24,18.179 24,12.044c0,-6.627 -5.373,-12 -12,-12s-12,5.373 -12,12c0,5.628 3.874,10.35 9.101,11.647z"
 private val VideoRequestHeaders = mapOf("User-Agent" to "Quoti Android")
+
+internal fun platformLogoPathData(platform: SocialPlatform): String? =
+    when (platform) {
+        SocialPlatform.X -> XLogoPathData
+        SocialPlatform.Threads -> ThreadsLogoPathData
+        SocialPlatform.LinkedIn -> LinkedInLogoPathData
+        SocialPlatform.Facebook -> FacebookLogoPathData
+        SocialPlatform.Bluesky -> null
+    }
 
 object QuotiCardExporter {
     suspend fun writeCachePng(
@@ -2849,8 +2864,9 @@ private object QuotiCardBitmapRenderer {
         rect: RectF,
         color: Int,
     ) {
-        if (platform == SocialPlatform.X) {
-            drawXLogo(canvas, rect, color)
+        val logoPathData = platformLogoPathData(platform)
+        if (logoPathData != null) {
+            drawPlatformLogoPath(canvas, rect, color, logoPathData)
             return
         }
 
@@ -2863,12 +2879,13 @@ private object QuotiCardBitmapRenderer {
         )
     }
 
-    private fun drawXLogo(
+    private fun drawPlatformLogoPath(
         canvas: Canvas,
         rect: RectF,
         color: Int,
+        pathData: String,
     ) {
-        val path = PathParser.createPathFromPathData(XLogoPathData)
+        val path = PathParser.createPathFromPathData(pathData)
         val scale = min(rect.width(), rect.height()) / 24f
         val width = 24f * scale
         val height = 24f * scale

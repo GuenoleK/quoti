@@ -86,6 +86,8 @@ class QuotiAppTest {
         composeRule.onNodeWithContentDescription("More actions").performClick()
         composeRule.onNodeWithText("Copy image").assertIsDisplayed()
         composeRule.onAllNodesWithText("Share image").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Open source").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Copy source link").assertCountEquals(0)
         composeRule.onAllNodesWithText("Copy text").assertCountEquals(0)
         composeRule.onAllNodesWithText("Refresh preview").assertCountEquals(0)
     }
@@ -128,6 +130,8 @@ class QuotiAppTest {
         composeRule.onNodeWithText("Download video").assertIsDisplayed()
         composeRule.onNodeWithText("Copy image").assertIsDisplayed()
         composeRule.onAllNodesWithText("Download PNG").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Open source").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Copy source link").assertCountEquals(0)
         composeRule.onAllNodesWithText("Copy text").assertCountEquals(0)
         composeRule.onAllNodesWithText("Refresh preview").assertCountEquals(0)
     }
@@ -150,6 +154,37 @@ class QuotiAppTest {
         composeRule.onAllNodesWithText("Captured text").onFirst().assertIsDisplayed()
         composeRule.onAllNodesWithText("Edit card").assertCountEquals(0)
         composeRule.onAllNodesWithText("Post text").assertCountEquals(0)
+    }
+
+    @Test
+    fun quotedPostCanBeHiddenFromPreview() {
+        composeRule.setContent {
+            QuotiTheme {
+                QuotiApp(
+                    shareState =
+                        QuotiShareState.Ready(
+                            capturedDraft(
+                                post =
+                                    capturedPost(
+                                        content = "Main captured text",
+                                        relatedPost =
+                                            RelatedPost(
+                                                authorName = "Source author",
+                                                authorHandle = "@source",
+                                                content = "Quoted source text",
+                                            ),
+                                    ),
+                            ),
+                        ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Quoted source text").assertIsDisplayed()
+        composeRule.onNodeWithText("Main only").performScrollTo().performClick()
+
+        composeRule.onAllNodesWithText("Quoted source text").assertCountEquals(0)
+        composeRule.onNodeWithText("Main captured text").assertIsDisplayed()
     }
 
     @Test

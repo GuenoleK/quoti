@@ -14,13 +14,14 @@
     <string name="segment_dark">Dark</string>
     <string name="segment_text_only">Text only</string>
     <string name="segment_with_media">With media</string>
+    <string name="segment_main_only">Main only</string>
+    <string name="segment_with_quote">With quote</string>
 
     <string name="action_more_actions">More actions</string>
     <string name="action_download_video">Download video</string>
     <string name="action_copy_image">Copy image</string>
     <string name="action_download_png">Download PNG</string>
     <string name="action_share_image">Share image</string>
-    <string name="action_copy_source_link">Copy source link</string>
     <string name="action_open_source">Open source</string>
     <string name="action_clear_post">Clear post</string>
     <string name="action_cancel">Cancel</string>
@@ -36,14 +37,12 @@
     <string name="snackbar_copy_image_failed">Unable to copy image</string>
     <string name="snackbar_share_sheet_ready">Share sheet ready</string>
     <string name="snackbar_share_image_failed">Unable to share image</string>
-    <string name="snackbar_source_link_copied">Source link copied</string>
     <string name="snackbar_post_cleared">Post cleared</string>
     <plurals name="snackbar_cards_deleted">
         <item quantity="one">Card deleted</item>
         <item quantity="other">%1$d cards deleted</item>
     </plurals>
 
-    <string name="clip_label_source_link">Quoti source link</string>
     <string name="clip_label_card_image">Quoti card image</string>
     <string name="share_card_chooser_title">Share Quoti card</string>
 

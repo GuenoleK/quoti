@@ -85,7 +85,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -295,6 +294,7 @@ private data class GalleryDragSelectionState(
 data class QuotiUiSettings(
     val cardTone: CardTone = CardTone.Light,
     val contentMode: CardContentMode = CardContentMode.WithMedia,
+    val quotedPostVisible: Boolean = true,
     val sourceActionsEnabled: Boolean = true,
 )
 
@@ -346,6 +346,7 @@ fun QuotiApp(
     }
     var cardTone by rememberSaveable { mutableStateOf(CardTone.Light) }
     var contentMode by rememberSaveable { mutableStateOf(CardContentMode.WithMedia) }
+    var quotedPostVisible by rememberSaveable { mutableStateOf(true) }
     var sourceActionsEnabled by rememberSaveable { mutableStateOf(true) }
     var activeExportId by rememberSaveable { mutableStateOf<String?>(null) }
     var activeExportTypeName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -370,6 +371,7 @@ fun QuotiApp(
         QuotiUiSettings(
             cardTone = cardTone,
             contentMode = contentMode,
+            quotedPostVisible = quotedPostVisible,
             sourceActionsEnabled = sourceActionsEnabled,
         )
     val incomingShareKey =
@@ -393,6 +395,7 @@ fun QuotiApp(
     }
 
     LaunchedEffect(post?.id) {
+        quotedPostVisible = true
         pendingVideoExportPost = null
         selectedVideoExportSourceId = null
         activeMediaViewer = null
@@ -485,7 +488,7 @@ fun QuotiApp(
             runCatching {
                 QuotiExportWork.enqueue(
                     context = context,
-                    post = activePost,
+                    post = activePost.withQuotedPostVisibility(settings.quotedPostVisible),
                     exportType = exportType,
                     cardTone = settings.cardTone,
                     contentMode = exportContentMode,
@@ -506,18 +509,19 @@ fun QuotiApp(
             return
         }
 
-        val choices = activePost.videoExportChoices(context)
+        val exportPost = activePost.withQuotedPostVisibility(settings.quotedPostVisible)
+        val choices = exportPost.videoExportChoices(context)
         when (choices.size) {
             0 -> Unit
             1 -> startExport(
-                activePost = activePost,
+                activePost = exportPost,
                 exportType = QuotiExportType.Video,
                 exportContentMode = CardContentMode.WithMedia,
                 selectedVideoSourceId = choices.first().sourceId,
             )
 
             else -> {
-                pendingVideoExportPost = activePost
+                pendingVideoExportPost = exportPost
                 selectedVideoExportSourceId = choices.first().sourceId
             }
         }
@@ -567,6 +571,7 @@ fun QuotiApp(
                     onOpenMedia = { request -> activeMediaViewer = request },
                     onCardToneChange = { cardTone = it },
                     onContentModeChange = { contentMode = it },
+                    onQuotedPostVisibleChange = { quotedPostVisible = it },
                     onGalleryClick = { setGalleryVisible(true) },
                     onSettingsClick = { showSettings = true },
                     onCopyImage = {
@@ -576,7 +581,7 @@ fun QuotiApp(
                                 copyCardImage(
                                     context = context,
                                     clipboard = clipboard,
-                                    post = activePost,
+                                    post = activePost.withQuotedPostVisibility(settings.quotedPostVisible),
                                     settings = settings,
                                 )
                             }.fold(
@@ -607,25 +612,13 @@ fun QuotiApp(
                             runCatching {
                                 shareCardImage(
                                     context = context,
-                                    post = activePost,
+                                    post = activePost.withQuotedPostVisibility(settings.quotedPostVisible),
                                     settings = settings,
                                 )
                             }.fold(
                                 onSuccess = {},
                                 onFailure = {},
                             )
-                        }
-                    },
-                    onCopySource = {
-                        val sourceUrl = post?.sourceUrl ?: return@QuotiCaptureScreen
-                        clipboard.setPrimaryClip(
-                            ClipData.newPlainText(
-                                context.getString(R.string.clip_label_source_link),
-                                sourceUrl,
-                            ),
-                        )
-                        scope.launch {
-                            snackbarHostState.showSnackbar(context.getString(R.string.snackbar_source_link_copied))
                         }
                     },
                     onOpenSource = {
@@ -718,6 +711,7 @@ fun QuotiApp(
             onReset = {
                 cardTone = CardTone.Light
                 contentMode = CardContentMode.WithMedia
+                quotedPostVisible = true
                 sourceActionsEnabled = true
                 showSettings = false
             },
@@ -1118,13 +1112,13 @@ private fun QuotiCaptureScreen(
     onOpenMedia: (MediaViewerRequest) -> Unit,
     onCardToneChange: (CardTone) -> Unit,
     onContentModeChange: (CardContentMode) -> Unit,
+    onQuotedPostVisibleChange: (Boolean) -> Unit,
     onGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onCopyImage: () -> Unit,
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
     onShareImage: () -> Unit,
-    onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onClear: () -> Unit,
     contentPadding: PaddingValues,
@@ -1139,13 +1133,12 @@ private fun QuotiCaptureScreen(
     ) {
         readyPost?.let { post ->
             QuotiActionToolbar(
-                post = post,
+                post = post.withQuotedPostVisibility(settings.quotedPostVisible),
                 sourceActionsEnabled = settings.sourceActionsEnabled,
                 onCopyImage = onCopyImage,
                 onDownloadVideo = onDownloadVideo,
                 onDownloadPng = onDownloadPng,
                 onShareImage = onShareImage,
-                onCopySource = onCopySource,
                 onOpenSource = onOpenSource,
                 onClear = onClear,
                 modifier =
@@ -1175,7 +1168,7 @@ private fun QuotiCaptureScreen(
                 is QuotiShareState.Loading -> LoadingCaptureState()
                 is QuotiShareState.Ready -> {
                     PreviewFrame(
-                        post = shareState.draft.post,
+                        post = shareState.draft.post.withQuotedPostVisibility(settings.quotedPostVisible),
                         cardTone = settings.cardTone,
                         contentMode = settings.contentMode,
                         onOpenMedia = onOpenMedia,
@@ -1195,9 +1188,20 @@ private fun QuotiCaptureScreen(
                             listOf(
                                 SegmentOption(CardContentMode.TextOnly, stringResource(R.string.segment_text_only)),
                                 SegmentOption(CardContentMode.WithMedia, stringResource(R.string.segment_with_media)),
-                            ),
+                        ),
                         onValueChange = onContentModeChange,
                     )
+                    if (shareState.draft.post.relatedPost != null) {
+                        ExpressiveChoiceGroup(
+                            value = settings.quotedPostVisible,
+                            options =
+                                listOf(
+                                    SegmentOption(false, stringResource(R.string.segment_main_only)),
+                                    SegmentOption(true, stringResource(R.string.segment_with_quote)),
+                                ),
+                            onValueChange = onQuotedPostVisibleChange,
+                        )
+                    }
                 }
             }
         }
@@ -4029,7 +4033,6 @@ private fun QuotiActionToolbar(
     onDownloadVideo: () -> Unit,
     onDownloadPng: () -> Unit,
     onShareImage: () -> Unit,
-    onCopySource: () -> Unit,
     onOpenSource: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
@@ -4074,13 +4077,6 @@ private fun QuotiActionToolbar(
                 ),
             )
             if (hasSourceActions) {
-                add(
-                    QuotiFabMenuAction(
-                        labelResId = R.string.action_copy_source_link,
-                        icon = Icons.Outlined.Link,
-                        onClick = onCopySource,
-                    ),
-                )
                 add(
                     QuotiFabMenuAction(
                         labelResId = R.string.action_open_source,
@@ -4342,6 +4338,9 @@ private fun QuotiPost.toGalleryDraft(): IncomingShareDraft {
         rawText = sourceUrl ?: content,
     )
 }
+
+private fun QuotiPost.withQuotedPostVisibility(visible: Boolean): QuotiPost =
+    if (visible) this else copy(relatedPost = null)
 
 private fun String?.toGalleryLayoutMode(): GalleryLayoutMode {
     return GalleryLayoutMode.entries.firstOrNull { mode -> mode.name == this }

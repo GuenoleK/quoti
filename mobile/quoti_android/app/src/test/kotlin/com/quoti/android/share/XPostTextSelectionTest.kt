@@ -34,4 +34,27 @@ class XPostTextSelectionTest {
             ),
         )
     }
+
+    @Test
+    fun keepsOEmbedWhenPageOnlyRemovesTrailingEllipsis() {
+        assertEquals(
+            "A club is sinking in\u2026",
+            selectTweetText(
+                oEmbedContent = "A club is sinking in\u2026",
+                pageContent = "A club is sinking in",
+            ),
+        )
+    }
+
+    @Test
+    fun prefersVisibleShareTextWhenItCompletesPublicMetadata() {
+        assertEquals(
+            "A club is sinking in l'oubli...",
+            selectTweetText(
+                oEmbedContent = "A club is sinking in\u2026",
+                pageContent = "A club is sinking in",
+                visibleText = "A club is sinking in l'oubli...",
+            ),
+        )
+    }
 }

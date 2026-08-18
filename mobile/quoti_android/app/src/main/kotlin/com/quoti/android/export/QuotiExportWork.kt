@@ -9,6 +9,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.getSystemService
 import androidx.work.CoroutineWorker
@@ -29,6 +30,8 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+private const val ExportLogTag = "QuotiExport"
 
 enum class QuotiExportType {
     Image,
@@ -153,6 +156,7 @@ class QuotiExportWorker(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (throwable: Throwable) {
+            Log.e(ExportLogTag, "${exportType.name} export failed for work $id", throwable)
             notifications.showFailed(exportType, notificationId + 2)
             Result.failure(
                 workDataOf(

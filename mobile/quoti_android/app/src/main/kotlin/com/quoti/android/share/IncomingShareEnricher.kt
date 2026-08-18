@@ -189,6 +189,12 @@ internal object OpenGraphPostPageParser {
         val authorAvatarUrl =
             linkedInCreatorMetadata?.authorAvatarUrl
                 ?: findAuthorAvatarUrl(platform, imageUrls, allRemoteUrls)
+        val trustedFallbackImageUrls =
+            if (platform == SocialPlatform.Threads) {
+                extractThreadsFallbackImageUrls(html)
+            } else {
+                emptyList()
+            }
         val media =
             extractStructuredMedia(
                 platform = platform,
@@ -197,7 +203,13 @@ internal object OpenGraphPostPageParser {
                 canonicalUrl = canonicalUrl,
                 authorAvatarUrl = authorAvatarUrl,
             ).ifEmpty {
-                buildMedia(platform, imageUrls, videoUrls + allRemoteUrls, allRemoteUrls, authorAvatarUrl)
+                buildMedia(
+                    platform,
+                    imageUrls + trustedFallbackImageUrls,
+                    videoUrls + allRemoteUrls,
+                    allRemoteUrls,
+                    authorAvatarUrl,
+                )
             }
 
         if (content.isNullOrBlank() && authorName.isNullOrBlank() && authorHandle.isNullOrBlank()) {
@@ -319,6 +331,7 @@ internal object OpenGraphPostPageParser {
             .replace("\\u002F", "/")
             .replace("\\u0026", "&")
             .replace("\\u003D", "=")
+            .replace("\\u0025", "%")
             .decodeHtmlEntities()
             .let { normalizedHtml -> remoteUrlPattern.findAll(normalizedHtml) }
             .map { match -> match.value.normalizedRemoteAssetUrl() }
@@ -370,8 +383,18 @@ internal object OpenGraphPostPageParser {
         remoteUrls: List<String>,
         authorAvatarUrl: String?,
     ): List<PostMedia> {
+        // Threads pages contain many CDN URLs belonging to the surrounding app shell,
+        // recommendations, or quoted content. Without structured post data, those URLs
+        // cannot be safely attributed to the current post, so only trust image metadata
+        // for Threads. Structured carousel media is handled before this fallback.
+        val imageCandidates =
+            if (platform == SocialPlatform.Threads) {
+                imageUrls
+            } else {
+                imageUrls + remoteUrls
+            }
         val postImageVariants =
-            (imageUrls + remoteUrls)
+            imageCandidates
                 .map { url -> url.normalizedRemoteAssetUrl() }
                 .filter { url -> url.isPlatformImageAssetUrl(platform) }
                 .filterNot { url -> url.sameRemoteAssetAs(authorAvatarUrl) }
@@ -456,6 +479,58 @@ internal object OpenGraphPostPageParser {
                 runCatching { JSONObject(match.groupValues[2]) }.getOrNull()
             }
             .toList()
+
+    private fun extractThreadsFallbackImageUrls(html: String): List<String> {
+        val mediaKeys =
+            setOf(
+                "carousel",
+                "carousel_media",
+                "display_url",
+                "image",
+                "image_versions2",
+                "images",
+                "media",
+                "thumbnail",
+                "thumbnail_url",
+            )
+
+        return html
+            .extractJsonScripts()
+            .flatMap { root -> root.remoteUrlsForKeys(mediaKeys) }
+            .map { url -> url.normalizedRemoteAssetUrl() }
+            .filter { url -> url.isPlatformImageAssetUrl(SocialPlatform.Threads) }
+            .distinct()
+    }
+
+    private fun JSONObject.remoteUrlsForKeys(keys: Set<String>): List<String> {
+        val urls = mutableListOf<String>()
+        val iterator = keys()
+        while (iterator.hasNext()) {
+            val key = iterator.next()
+            if (key.lowercase() !in keys) {
+                continue
+            }
+            collectRemoteUrlStrings(get(key), urls)
+        }
+        return urls
+    }
+
+    private fun collectRemoteUrlStrings(value: Any?, output: MutableList<String>) {
+        when (value) {
+            is String -> output += value
+            is JSONObject -> {
+                val iterator = value.keys()
+                while (iterator.hasNext()) {
+                    collectRemoteUrlStrings(value.get(iterator.next()), output)
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until value.length()) {
+                    collectRemoteUrlStrings(value.get(index), output)
+                }
+            }
+        }
+    }
 
     private fun String.extractJsonLdScripts(): List<JSONObject> =
         jsonLdScriptPattern
@@ -617,9 +692,14 @@ class XPostEnrichmentAdapter {
                     html = pageHtml,
                     canonicalUrl = canonicalUrl,
                     fallbackText = oEmbedContent ?: visibleText?.takeUnless { it.isLikelySourceOnlyText() },
-                )
+                ) ?: XPostPageParser.extractMetaTweetText(pageHtml)
             }
-        val content = selectTweetText(oEmbedContent = oEmbedContent, pageContent = pageContent)
+        val content =
+            selectTweetText(
+                oEmbedContent = oEmbedContent,
+                pageContent = pageContent,
+                visibleText = visibleText,
+            )
         val authorAvatarUrl = html?.let { pageHtml ->
             XPostPageParser.extractAuthorAvatarUrl(pageHtml, authorHandle = authorHandle)
         }
@@ -713,11 +793,21 @@ internal object XPostOEmbedParser {
                 ?.get(1)
                 ?: return null
 
-        return paragraph.cleanTweetText(markCollapsedText = paragraph.hasCollapsedTweetMarker())
+        return paragraph.cleanTweetText(markCollapsedText = paragraph.hasExplicitCollapsedTweetMarker())
     }
 }
 
 internal object XPostPageParser {
+    private val metaTagPattern =
+        Regex(
+            pattern = """<meta\b[^>]*>""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+    private val htmlAttributePattern =
+        Regex(
+            pattern = """([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(["'])(.*?)\2""",
+            options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
     private val imageUrlPattern =
         Regex("""https://pbs\.twimg\.com/(?:media|card_img)/[^"'<\s]+""")
     private val profileImageUrlPattern =
@@ -757,11 +847,23 @@ internal object XPostPageParser {
             ?.content
     }
 
+    fun extractMetaTweetText(html: String): String? {
+        return (
+            OpenGraphPostPageParser.readMetaContent(html, "og:description")
+                ?: OpenGraphPostPageParser.readMetaContent(html, "description")
+                ?: OpenGraphPostPageParser.readMetaContent(html, "twitter:description")
+        )?.cleanTweetText()
+    }
+
     fun extractMedia(
         html: String,
         canonicalUrl: String? = null,
     ): List<PostMedia> {
         val normalized = html.normalizedHtml()
+        extractSchemaMedia(normalized, canonicalUrl)
+            .takeIf { media -> media.isNotEmpty() }
+            ?.let { media -> return media }
+
         val targetStatusId = canonicalUrl?.statusId()
         val belongsToTargetStatus: (IntRange) -> Boolean =
             if (targetStatusId == null) {
@@ -789,6 +891,105 @@ internal object XPostPageParser {
                 .toList()
 
         return (videos + images).take(4)
+    }
+
+    private fun extractSchemaMedia(
+        normalizedHtml: String,
+        canonicalUrl: String?,
+    ): List<PostMedia> {
+        val targetStatusId = canonicalUrl?.statusId() ?: return emptyList()
+        if (
+            readItemPropContents(normalizedHtml, "url")
+                .none { url -> url.statusId() == targetStatusId }
+        ) {
+            return emptyList()
+        }
+
+        val targetVideoUrl =
+            readItemPropContents(normalizedHtml, "contentUrl")
+                .firstOrNull { url -> url.isXVideoAssetUrl() }
+        if (targetVideoUrl != null) {
+            val targetVideoIdentity = targetVideoUrl.videoAssetIdentity()
+            val variants =
+                (listOf(targetVideoUrl) +
+                        videoVariantPattern
+                            .findAll(normalizedHtml)
+                            .map { match -> match.value.normalizedMediaUrl() }
+                            .filter { url -> url.videoAssetIdentity() == targetVideoIdentity }
+                            .toList())
+                    .distinct()
+                    .sortedWith(compareByDescending<String> { url -> url.videoVariantScore() })
+                    .take(6)
+
+            if (variants.isNotEmpty()) {
+                val posterUrl =
+                    readItemPropContents(normalizedHtml, "thumbnailUrl")
+                        .firstOrNull { url -> url.isXImageAssetUrl() }
+
+                return listOf(
+                    PostMedia.Video(
+                        variants = variants,
+                        url = variants.firstOrNull { url -> ".mp4" in url.lowercase() } ?: variants.firstOrNull(),
+                        posterUrl = posterUrl,
+                    ),
+                )
+            }
+        }
+
+        val imageUrls =
+            (readItemPropContents(normalizedHtml, "image") +
+                    readItemPropContents(normalizedHtml, "thumbnailUrl"))
+                .filter { url -> url.isXImageAssetUrl() }
+                .distinctBy { url -> url.mediaIdentity() }
+                .take(4)
+
+        return imageUrls.map { url -> PostMedia.Image(url = url) }
+    }
+
+    private fun readItemPropContents(
+        html: String,
+        itemProp: String,
+    ): List<String> {
+        return metaTagPattern
+            .findAll(html)
+            .map { match ->
+                htmlAttributePattern
+                    .findAll(match.value)
+                    .associate { attribute ->
+                        attribute.groupValues[1].lowercase() to attribute.groupValues[3]
+                    }
+            }
+            .filter { attributes -> attributes["itemprop"]?.equals(itemProp, ignoreCase = true) == true }
+            .mapNotNull { attributes ->
+                attributes["content"]
+                    ?.decodeHtmlEntities()
+                    ?.normalizedMediaUrl()
+                    ?.takeIf { url -> url.isNotBlank() }
+            }
+            .distinct()
+            .toList()
+    }
+
+    private fun String.isXImageAssetUrl(): Boolean {
+        val value = lowercase()
+        return value.startsWith("https://pbs.twimg.com/") &&
+            ("/media/" in value || "/card_img/" in value) &&
+            !value.contains("/profile_images/")
+    }
+
+    private fun String.isXVideoAssetUrl(): Boolean {
+        val value = lowercase()
+        return value.startsWith("https://video.twimg.com/") &&
+            (".mp4" in value || ".m3u8" in value)
+    }
+
+    private fun String.videoAssetIdentity(): String {
+        val path = runCatching { URI(this).path }.getOrNull().orEmpty()
+        return Regex("""/(?:amplify_video|ext_tw_video|tweet_video)/([^/]+)(?:/|$)""")
+            .find(path)
+            ?.groupValues
+            ?.get(1)
+            ?: path
     }
 
     fun extractAuthorAvatarUrl(
@@ -888,7 +1089,6 @@ internal object XPostPageParser {
                 .filter { anchor -> anchor.statusId == statusId }
                 .map { anchor -> anchor.range }
                 .sortedBy { range -> range.first }
-                .take(12)
 
         return anchorRanges
             .map { range ->
@@ -1110,19 +1310,42 @@ private data class XStatusAnchor(
 internal fun selectTweetText(
     oEmbedContent: String?,
     pageContent: String?,
+    visibleText: String? = null,
 ): String? {
     val oEmbedText = oEmbedContent?.takeIf { it.isNotBlank() }
     val pageText = pageContent?.takeIf { it.isNotBlank() }
+    val visibleShareText =
+        visibleText
+            ?.takeUnless { it.isLikelySourceOnlyText() }
+            ?.cleanTweetText()
+            ?.takeIf { it.isLikelyTweetText() }
 
     if (oEmbedText == null) {
-        return pageText
-    }
-    if (pageText == null) {
-        return oEmbedText
+        return selectTweetTextFromPageAndVisible(pageText, visibleShareText)
     }
 
     val oEmbedComparison = oEmbedText.toTweetTextSelectionComparison()
-    val pageComparison = pageText.toTweetTextSelectionComparison()
+    val pageComparison = pageText?.toTweetTextSelectionComparison()
+    val visibleComparison = visibleShareText?.toTweetTextSelectionComparison()
+    val visibleCompletesOEmbed =
+        !visibleComparison.isNullOrBlank() &&
+            oEmbedComparison.isNotBlank() &&
+            visibleComparison.length > oEmbedComparison.length &&
+            visibleComparison.isCompatibleWithFallback(oEmbedComparison)
+    val visibleCompletesPage =
+        !visibleComparison.isNullOrBlank() &&
+            !pageComparison.isNullOrBlank() &&
+            visibleComparison.length > pageComparison.length &&
+            visibleComparison.isCompatibleWithFallback(pageComparison)
+
+    if (visibleShareText != null && (visibleCompletesOEmbed || visibleCompletesPage)) {
+        return visibleShareText
+    }
+
+    if (pageText == null || pageComparison == null) {
+        return oEmbedText
+    }
+
     val pageCompletesOEmbed =
         oEmbedComparison.isNotBlank() &&
             pageComparison.length > oEmbedComparison.length &&
@@ -1134,6 +1357,30 @@ internal fun selectTweetText(
         pageText
     } else {
         oEmbedText
+    }
+}
+
+private fun selectTweetTextFromPageAndVisible(
+    pageText: String?,
+    visibleShareText: String?,
+): String? {
+    if (pageText == null) {
+        return visibleShareText
+    }
+    if (visibleShareText == null) {
+        return pageText
+    }
+
+    val pageComparison = pageText.toTweetTextSelectionComparison()
+    val visibleComparison = visibleShareText.toTweetTextSelectionComparison()
+
+    return if (
+        visibleComparison.length > pageComparison.length &&
+        visibleComparison.isCompatibleWithFallback(pageComparison)
+    ) {
+        visibleShareText
+    } else {
+        pageText
     }
 }
 
@@ -1371,6 +1618,7 @@ private fun String.normalizedRemoteAssetUrl(): String {
         .replace("\\u002F", "/")
         .replace("\\u0026", "&")
         .replace("\\u003D", "=")
+        .replace("\\u0025", "%")
         .decodeHtmlEntities()
 }
 
@@ -1574,6 +1822,10 @@ private fun String.hasCollapsedTweetMarker(): Boolean {
         Regex("""(?i)\b(?:voir plus|show more|afficher plus)\b""").containsMatchIn(this)
 }
 
+private fun String.hasExplicitCollapsedTweetMarker(): Boolean {
+    return Regex("""(?i)\b(?:voir plus|show more|afficher plus)\b""").containsMatchIn(this)
+}
+
 private fun String.withBracketedTruncationMarker(): String {
     return replace(
         Regex("""(?i)\s*(?:…|\.\.\.)?\s*(?:voir plus|show more|afficher plus)\s*$"""),
@@ -1617,6 +1869,10 @@ private fun String.toTweetTextSelectionComparison(): String {
 
 private fun String.hasBracketedTruncationMarker(): Boolean {
     return Regex("""\s*\[\.\.\.\]\s*$""").containsMatchIn(this)
+}
+
+private fun String.hasTrailingEllipsisMarker(): Boolean {
+    return Regex("""\s*(?:\u2026|\.\.\.)\s*$""").containsMatchIn(this)
 }
 
 private fun String.compactForTweetComparison(): String {

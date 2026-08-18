@@ -220,6 +220,45 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun prefersTargetSchemaVideoOverPageWideRecommendedMedia() {
+        val targetVideoUrl =
+            "https://video.twimg.com/amplify_video/2089754351552049152/vid/avc1/1280x720/target.mp4?tag=14"
+        val targetPosterUrl = "https://pbs.twimg.com/media/HQBMjhfWUAAW7c8.jpg"
+        val unrelatedImageUrl = "https://pbs.twimg.com/media/HQBM2gBbgAAYYy4.jpg"
+        val unrelatedVideoPosterUrl = "https://pbs.twimg.com/tweet_video_thumb/HQBNaEDXAAEeyvi.jpg"
+        val unrelatedVideoUrl = "https://video.twimg.com/tweet_video/HQBNaEDXAAEeyvi.mp4"
+        val html =
+            """
+            <html>
+              <head>
+                <meta content="https://x.com/FCBarcelona/status/2089754425812275488" itemProp="url" />
+                <meta content="$targetVideoUrl" itemProp="contentUrl" />
+                <meta content="$targetPosterUrl" itemProp="thumbnailUrl" />
+              </head>
+              <body>
+                $targetVideoUrl
+                $targetPosterUrl
+                $unrelatedVideoUrl
+                $unrelatedVideoPosterUrl
+                $unrelatedImageUrl
+              </body>
+            </html>
+            """.trimIndent()
+
+        val media =
+            XPostPageParser.extractMedia(
+                html = html,
+                canonicalUrl = "https://x.com/FCBarcelona/status/2089754425812275488",
+            )
+
+        assertEquals(1, media.size)
+        val video = media.single() as PostMedia.Video
+        assertEquals(listOf(targetVideoUrl), video.variants)
+        assertEquals(targetVideoUrl, video.url)
+        assertEquals(targetPosterUrl, video.posterUrl)
+    }
+
+    @Test
     fun extractsAuthorAvatarNearHandleFromXPageHtml() {
         val html =
             """
@@ -283,6 +322,23 @@ class XPostPageParserTest {
     }
 
     @Test
+    fun extractsTweetTextFromMetaDescriptionWithoutTrailingMediaLink() {
+        val html =
+            """
+            <html>
+              <head>
+                <meta property="og:description" content="A club is sinking in https://t.co/UgYMum95d0" />
+              </head>
+            </html>
+            """.trimIndent()
+
+        assertEquals(
+            "A club is sinking in",
+            XPostPageParser.extractMetaTweetText(html),
+        )
+    }
+
+    @Test
     fun prefersNoteTweetTextOverTruncatedLegacyText() {
         val html =
             """
@@ -342,6 +398,39 @@ class XPostPageParserTest {
                 html = html,
                 canonicalUrl = "https://x.com/BenGeskin/status/2067553849628405831",
                 fallbackText = "A new headphone company called Daisy Sound reached out and sent me its first product, the Daisy One.\n\nHere’s a quick unboxing and first look. These are beautiful headphones with really nice build quality. I especially like this dark green color called “Kelp,” as well as the…",
+            ),
+        )
+    }
+
+    @Test
+    fun extractsNoteTweetTextWhenTargetStatusIdIsRepeatedManyTimesBeforeIt() {
+        val repeatedAnchors =
+            (1..28).joinToString("\n") { index ->
+                """rest_id:"2071962561696637060", repeated_anchor_$index:"${"x".repeat(2_000)}""""
+            }
+        val html =
+            """
+            $repeatedAnchors
+            "client:VHdlZXQ6MjA3MTk2MjU2MTY5NjYzNzA2MA==:details":${"$"}R[55]={
+              __typename:"TBirdData",
+              full_text:"Post starts and is in the process of sinking in https://t.co/UgYMum95d0"
+            },
+            "client:VHdlZXQ6MjA3MTk2MjU2MTY5NjYzNzA2MA==:note_tweet":${"$"}R[63]={
+              __typename:"NoteTweetData",
+              note_tweet_results:${"$"}R[67]={__ref:"Tm90ZVR3ZWV0OjIwNzE5NjI1NjE2Mjk1MzYyNTY="}
+            },
+            "Tm90ZVR3ZWV0OjIwNzE5NjI1NjE2Mjk1MzYyNTY=":${"$"}R[67]={
+              __typename:"NoteTweet",
+              text:"Post starts and is in the process of sinking into oblivion..."
+            }
+            """.trimIndent()
+
+        assertEquals(
+            "Post starts and is in the process of sinking into oblivion...",
+            XPostPageParser.extractTweetText(
+                html = html,
+                canonicalUrl = "https://x.com/lnstantFoot/status/2071962561696637060",
+                fallbackText = "Post starts and is in the process of sinking in...",
             ),
         )
     }

@@ -241,6 +241,103 @@ class OpenGraphPostPageParserTest {
     }
 
     @Test
+    fun preservesThreadsVideoUrlAfterUnicodeEscapedQueryValue() {
+        val escapedVideoUrl =
+            "https:\\/\\/scontent-cdg4-2.cdninstagram.com\\/o1\\/v\\/t16\\/f2\\/m84\\/clip.mp4?efg=payload\\u00253D\\u00253D&ccb=17-1&oh=video&oe=exp"
+        val expectedVideoUrl =
+            "https://scontent-cdg4-2.cdninstagram.com/o1/v/t16/f2/m84/clip.mp4?efg=payload%3D%3D&ccb=17-1&oh=video&oe=exp"
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="Ada on Threads" />
+                    <meta property="og:description" content="A video post." />
+                    <meta property="og:url" content="https://www.threads.com/@ada/post/DVideoEscaped" />
+                </head>
+                <body>
+                    <script type="application/json">
+                        {"code":"DVideoEscaped","video_versions":[{"url":"$escapedVideoUrl"}]}
+                    </script>
+                </body>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.threads.com/@ada/post/DVideoEscaped",
+                platform = SocialPlatform.Threads,
+            )
+
+        assertNotNull(enrichment)
+        val video = enrichment!!.media.single() as PostMedia.Video
+        assertEquals(expectedVideoUrl, video.url)
+    }
+
+    @Test
+    fun preservesThreadsVideoUrlWhenFallbackUrlExtractionSeesUnicodeEscapes() {
+        val escapedVideoUrl =
+            "https:\\/\\/scontent-cdg4-2.cdninstagram.com\\/o1\\/v\\/t16\\/f2\\/m84\\/clip.mp4?efg=payload\\u00253D\\u00253D&ccb=17-1&oh=video&oe=exp"
+        val expectedVideoUrl =
+            "https://scontent-cdg4-2.cdninstagram.com/o1/v/t16/f2/m84/clip.mp4?efg=payload%3D%3D&ccb=17-1&oh=video&oe=exp"
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="Ada on Threads" />
+                    <meta property="og:description" content="A video post." />
+                    <meta property="og:url" content="https://www.threads.com/@ada/post/DFallbackEscaped" />
+                </head>
+                <body>$escapedVideoUrl</body>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.threads.com/@ada/post/DFallbackEscaped",
+                platform = SocialPlatform.Threads,
+            )
+
+        assertNotNull(enrichment)
+        val video = enrichment!!.media.single() as PostMedia.Video
+        assertEquals(expectedVideoUrl, video.url)
+    }
+
+    @Test
+    fun threadsFallbackDoesNotAddUnrelatedPageImagesToVideoPost() {
+        val posterUrl = "https://scontent.example/post-poster.jpg?ccb=7-5&oh=poster&oe=exp"
+        val videoUrl = "https://scontent.example/post-video.mp4?ccb=17-1&oh=video&oe=exp"
+        val unrelatedImageUrl = "https://scontent.example/recommended-post.jpg?ccb=7-5&oh=other&oe=exp"
+        val html =
+            """
+            <html>
+                <head>
+                    <meta property="og:title" content="Ada on Threads" />
+                    <meta property="og:description" content="A video post." />
+                    <meta property="og:url" content="https://www.threads.com/@ada/post/DFallbackMedia" />
+                    <meta property="og:image" content="$posterUrl" />
+                </head>
+                <body>$videoUrl $unrelatedImageUrl</body>
+            </html>
+            """.trimIndent()
+
+        val enrichment =
+            OpenGraphPostPageParser.extract(
+                html = html,
+                sourceUrl = "https://www.threads.com/share/DFallbackMedia",
+                platform = SocialPlatform.Threads,
+            )
+
+        assertNotNull(enrichment)
+        val media = enrichment!!.media
+        assertEquals(1, media.size)
+        val video = media.single() as PostMedia.Video
+        assertEquals(videoUrl, video.url)
+        assertEquals(posterUrl, video.posterUrl)
+    }
+
+    @Test
     fun extractsLinkedInAvatarAndUpToFourPostImages() {
         val avatarUrl = "https://media.licdn.com/dms/image/v2/C4D03AQ/profile-displayphoto-shrink_200_200/profile"
         val imageUrls =

@@ -17,6 +17,28 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // CI preview builds install next to the locally built app. See preview/README.md.
+    if (providers.gradleProperty("quotiPreview").isPresent) {
+        signingConfigs {
+            create("preview") {
+                storeFile = rootProject.file("preview/preview-debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+
+        buildTypes {
+            getByName("debug") {
+                applicationIdSuffix = ".preview"
+                versionNameSuffix = "-preview"
+                signingConfig = signingConfigs.getByName("preview")
+            }
+        }
+
+        sourceSets.getByName("debug").manifest.srcFile(rootProject.file("preview/AndroidManifest.xml"))
+    }
+
     buildFeatures {
         buildConfig = true
         compose = true

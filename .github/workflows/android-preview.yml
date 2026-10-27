@@ -1,0 +1,70 @@
+name: Android preview APK
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - "mobile/quoti_android/**"
+      - ".github/workflows/android-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-preview-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/quoti_android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build preview APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug -PquotiPreview
+
+      - name: Rename APK
+        id: apk
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          apk="quoti-android-preview-${short_sha}.apk"
+          mv app/build/outputs/apk/debug/app-debug.apk "$apk"
+          echo "path=mobile/quoti_android/$apk" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quoti-android-preview
+          path: ${{ steps.apk.outputs.path }}
+
+      - name: Publish pre-release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          tag="android-preview-${BRANCH//\//-}"
+          gh release delete "$tag" --cleanup-tag --yes || true
+          gh release create "$tag" "$APK" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Android preview (${BRANCH})" \
+            --notes "Preview APK built from \`${BRANCH}\` at ${GITHUB_SHA}.
+
+          Installs as **Quoti Preview** next to the regular app. See \`mobile/quoti_android/preview/README.md\`."

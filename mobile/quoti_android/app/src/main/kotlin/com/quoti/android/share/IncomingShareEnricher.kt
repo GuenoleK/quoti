@@ -723,7 +723,10 @@ class XPostEnrichmentAdapter {
             } else {
                 null
             }
-        val media = pageMedia.withoutMediaAlreadyOwnedBy(relatedPost?.media.orEmpty())
+        // Logged-out X pages do not always carry the post media (sensitive posts, partial
+        // server rendering). The public syndication payload used by X embeds still lists it.
+        val postMedia = pageMedia.ifEmpty { fetchSyndicationMedia(canonicalUrl ?: sourceUrl) }
+        val media = postMedia.withoutMediaAlreadyOwnedBy(relatedPost?.media.orEmpty())
 
         return XPostEnrichment(
             canonicalUrl = canonicalUrl,
@@ -741,6 +744,16 @@ class XPostEnrichmentAdapter {
         val endpoint = "https://publish.twitter.com/oembed?omit_script=true&dnt=true&url=$encodedUrl"
         val body = fetchText(endpoint) ?: return null
         return JSONObject(body)
+    }
+
+    private fun fetchSyndicationMedia(statusUrl: String): List<PostMedia> {
+        val statusId = statusUrl.statusId() ?: return emptyList()
+        val token = XSyndicationToken.forStatusId(statusId) ?: return emptyList()
+        val endpoint = "https://cdn.syndication.twimg.com/tweet-result?id=$statusId&lang=en&token=$token"
+
+        return runCatching {
+            fetchText(endpoint)?.let(XSyndicationParser::extractMedia)
+        }.getOrNull().orEmpty()
     }
 
     private fun fetchText(url: String): String? {
@@ -794,6 +807,110 @@ internal object XPostOEmbedParser {
                 ?: return null
 
         return paragraph.cleanTweetText(markCollapsedText = paragraph.hasExplicitCollapsedTweetMarker())
+    }
+}
+
+internal object XSyndicationParser {
+    fun extractMedia(json: String): List<PostMedia> {
+        val root = JSONObject(json)
+        if (root.optString("__typename") == "TweetTombstone") {
+            return emptyList()
+        }
+
+        val mediaDetails = root.optJSONArray("mediaDetails") ?: return emptyList()
+        return (0 until mediaDetails.length())
+            .mapNotNull { index -> mediaDetails.optJSONObject(index)?.toPostMedia() }
+            .take(4)
+    }
+
+    private fun JSONObject.toPostMedia(): PostMedia? {
+        val imageUrl =
+            optString("media_url_https")
+                .normalizedMediaUrl()
+                .takeIf { url -> url.startsWith("https://pbs.twimg.com/") && "/profile_images/" !in url }
+        val alt = if (isNull("ext_alt_text")) null else optString("ext_alt_text").displayTextOrNull()
+
+        return when (optString("type")) {
+            "video", "animated_gif" -> {
+                val videoInfo = optJSONObject("video_info") ?: return null
+                val variantObjects = videoInfo.optJSONArray("variants") ?: return null
+                val variants =
+                    (0 until variantObjects.length())
+                        .mapNotNull { index -> variantObjects.optJSONObject(index)?.optString("url") }
+                        .map { url -> url.normalizedMediaUrl() }
+                        .filter { url -> url.startsWith("https://video.twimg.com/") && (".mp4" in url || ".m3u8" in url) }
+                        .distinct()
+                        .sortedWith(compareByDescending<String> { url -> url.videoVariantScore() })
+                        .take(6)
+
+                if (variants.isEmpty()) {
+                    return null
+                }
+
+                PostMedia.Video(
+                    variants = variants,
+                    url = variants.firstOrNull { url -> ".mp4" in url } ?: variants.firstOrNull(),
+                    posterUrl = imageUrl,
+                    duration = videoInfo.optLong("duration_millis", 0L).takeIf { it > 0 }?.let { it / 1_000.0 },
+                    alt = alt,
+                )
+            }
+
+            else -> imageUrl?.let { url -> PostMedia.Image(url = url, alt = alt) }
+        }
+    }
+}
+
+/**
+ * Mirrors the token X's embed widget sends to the syndication endpoint:
+ * `((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, "")`.
+ */
+internal object XSyndicationToken {
+    private const val Digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+    fun forStatusId(statusId: String): String? {
+        val id = statusId.toDoubleOrNull()?.takeIf { it > 0 } ?: return null
+        return (id / 1e15 * Math.PI)
+            .toJavaScriptRadixString(36)
+            .replace(Regex("""(0+|\.)"""), "")
+            .takeIf { it.isNotBlank() }
+    }
+
+    // Port of V8's DoubleToRadixCString so fractional digits match Number.prototype.toString(radix).
+    private fun Double.toJavaScriptRadixString(radix: Int): String {
+        var integer = Math.floor(this)
+        var fraction = this - integer
+        var delta = maxOf(0.5 * (Math.nextUp(this) - this), Math.nextUp(0.0))
+        val fractionDigits = StringBuilder()
+
+        if (fraction >= delta) {
+            do {
+                fraction *= radix
+                delta *= radix
+                val digit = fraction.toInt()
+                fractionDigits.append(Digits[digit])
+                fraction -= digit
+
+                if ((fraction > 0.5 || (fraction == 0.5 && digit and 1 == 1)) && fraction + delta > 1) {
+                    while (true) {
+                        if (fractionDigits.isEmpty()) {
+                            integer += 1
+                            break
+                        }
+                        val last = Digits.indexOf(fractionDigits.last())
+                        fractionDigits.setLength(fractionDigits.length - 1)
+                        if (last + 1 < radix) {
+                            fractionDigits.append(Digits[last + 1])
+                            break
+                        }
+                    }
+                    break
+                }
+            } while (fraction >= delta)
+        }
+
+        val integerDigits = integer.toLong().toString(radix)
+        return if (fractionDigits.isEmpty()) integerDigits else "$integerDigits.$fractionDigits"
     }
 }
 
